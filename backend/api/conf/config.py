@@ -49,7 +49,7 @@ class Config(BaseConfig[ConfigModel]):
         log: LogSetting = LogSetting()
 
     def __init__(self):
-        super().__init__(ConfigModel, "config.yaml")
+        super().__init__(ConfigModel, "config.yml")
 
 
 settings = Config()
