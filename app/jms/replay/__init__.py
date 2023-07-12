@@ -62,7 +62,7 @@ class ReplayHandler(BaseWisp):
         # TODO 后续时间处理要统一
         current_time = datetime.now()
         formatted_time = current_time.strftime("%Y-%m-%d %H:%M:%S")
-        input_str = f"[{formatted_time}]#: \r\n {input_str}"
+        input_str = f"[{formatted_time}]#: {input_str}"
         self.write_row(input_str)
 
     async def write_output(self, output_str):
