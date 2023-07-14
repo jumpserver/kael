@@ -12,6 +12,10 @@ export default defineConfig({
       '@': resolve('src')
     }
   },
+  build: {
+    outDir:'../app/ui',
+    emptyOutDir: true
+  },
   define: {
     'process.env': {
       VITE_APP_API_BASE_URL: 'http://127.0.0.1:8083',

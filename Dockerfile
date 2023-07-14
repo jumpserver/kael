@@ -73,7 +73,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 WORKDIR /opt/kael
 
 COPY app .
-COPY --from=ui-build /opt/kael/ui/dist ./ui
 COPY --from=stage-wisp-build /go/bin/wisp /usr/local/bin/wisp
 
 RUN chmod +x ./entrypoint.sh
