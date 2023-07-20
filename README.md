@@ -1,5 +1,5 @@
 
-# Kael
+$ Kael
 
 Kael 是 JumpServer 连接 GPT 的组件，计划支持多种 GPT, 
 
@@ -14,6 +14,11 @@ Kael 前端 vue3，后端使用 Fastapi 实现， 名字来源 [Kael](https://ww
 - [ ] Bard
 
 
+## UI 展示
+
+![UI展示](https://download.jumpserver.org/images/kael.png)
+
+
 ## 开发环境
 
 1.下载项目
@@ -23,7 +28,7 @@ $ git clone https://github.com/jumpserver/kael.git
 ```
 
 2.安装依赖
-```agsl
+```shell
 $ cd app
 $ pip install -r requirements.txt
 $ cd ../ui
@@ -31,18 +36,18 @@ $ npm install
 ```
 3.运行 API
 
-```agsl
+```shell
 $ cd app
 $ cp config_example.yml config.yml
-$ vim config.yml # 修改配置文件中的各个 key
+$ vim config.yml $ 修改配置文件中的各个 key
 $ python main.py
 ```
 
 4.运行 UI
 
-```agsl
+```shell
 $ cd ui
 $ cp .env.development .env
-$ vim .env # 修改 VITE_APP_BASE_URL
+$ vim .env $ 修改 VITE_APP_BASE_URL
 $ npm run serve
 ```
