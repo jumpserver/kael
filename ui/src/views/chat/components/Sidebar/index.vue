@@ -40,7 +40,7 @@ const onDelete = (id) => {
         :disabled="loading"
         @click="onNewChat"
       >
-        <SvgIcon name="add" class="mr-12px" />
+        <SvgIcon name="add" class="mr-44px" />
         New chat
       </n-button>
       <div 
@@ -84,5 +84,8 @@ const onDelete = (id) => {
 }
 .active-tab {
   background-color: #343540;
+}
+::v-deep(.n-button) {
+  justify-content: left;
 }
 </style>
