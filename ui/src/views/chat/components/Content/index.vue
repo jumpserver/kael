@@ -20,24 +20,8 @@ const onWebSocketMessage = (data) => {
   currentConversationId.value = data?.conversation_id
   const types = ['waiting', 'reject', 'error', 'finish']
   if (types.includes(data.type)) {
-    data = {
-      ...data,
-      error: 'error',
-      message: {
-        content: data.system_message,
-        role: 'assistant',
-        create_time: new Date()
-      }
-    }
-    chatStore.removeLastChat()
-    addChatConversationById(data)
-    setLoading(false)
-    nextTick(() => {
-      getInputFocus()
-    })
-    if (data.type === 'finish') {
-      chatStore.setFilterChatDisabled(true)
-    }
+    onSystemMessage(data)
+    return
   }
   if (data.type === 'message') {
     currentConversationId.value = data.conversation_id
@@ -49,10 +33,39 @@ const onWebSocketMessage = (data) => {
     }
     if (data.message?.type === 'finish') {
       setLoading(false)
-      nextTick(() => {
-        getInputFocus()
-      })
+      nextTick(() => getInputFocus())
     }
+  }
+}
+
+const onSystemMessage = (data) => {
+  data = {
+    ...data,
+    error: 'error',
+    message: {
+      content: data.system_message,
+      role: 'assistant',
+      create_time: new Date()
+    }
+  }
+  chatStore.removeLastChat()
+  addChatConversationById(data)
+  setLoading(false)
+  nextTick(() => getInputFocus())
+
+  if (data.type === 'waiting') {
+    const sessionState = data?.meta?.session_state || ''
+    if (sessionState === 'lock') {
+      chatStore.setFilterChatDisabled(true)
+      return
+    }
+    if (sessionState === 'unlock') {
+      chatStore.setFilterChatDisabled(false)
+      return
+    }
+  }
+  if (data.type === 'finish') {
+    chatStore.setFilterChatDisabled(true)
   }
 }
 

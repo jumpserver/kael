@@ -67,10 +67,10 @@ onMounted(() => {
       </span>
       <template #footer>
         <div class="footer text-center">
-          <n-button secondary @click="onClick('yes')">
+          <n-button secondary @click="onClick(1)">
             是
           </n-button>
-          <n-button secondary class="ml-10px" @click="onClick('no')">
+          <n-button secondary class="ml-10px" @click="onClick(0)">
             否
           </n-button>
         </div>

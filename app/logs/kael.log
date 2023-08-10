@@ -1,0 +1,5 @@
+2023/07/12 12:16:19.906     INFO: [uvicorn.error]	Started server process [90038]
+2023/07/12 12:16:19.906     INFO: [uvicorn.error]	Waiting for application startup.
+2023/07/12 12:16:19.907     INFO: [kael.__main__]	应用程序启动，执行初始化操作
+2023/07/12 12:16:19.907     INFO: [uvicorn.error]	Application startup complete.
+2023/07/12 12:16:19.908     INFO: [uvicorn.error]	Uvicorn running on http://127.0.0.1:8083 (Press CTRL+C to quit)
