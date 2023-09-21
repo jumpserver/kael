@@ -75,10 +75,15 @@ func (rh *ReplayHandler) WriteOutput(outputStr string) {
 func (rh *ReplayHandler) Upload() {
 	defer rh.FileWriter.Close()
 
+	replayFilePath := rh.File.Name()
+	if _, err := os.Stat(replayFilePath); os.IsNotExist(err) {
+		return
+	}
+
 	ctx := context.Background()
 	replayRequest := &protobuf.ReplayRequest{
 		SessionId:      rh.Session.Id,
-		ReplayFilePath: rh.File.Name(),
+		ReplayFilePath: replayFilePath,
 	}
 	resp, _ := grpc.GlobalGrpcClient.Client.UploadReplayFile(ctx, replayRequest)
 	if !resp.Status.Ok {

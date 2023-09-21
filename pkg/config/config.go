@@ -5,11 +5,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Config struct {
 	Host             string `mapstructure:"Host"`
 	Port             string `mapstructure:"Port"`
+	WispPort         string `mapstructure:"WISP_PORT"`
 	LogLevel         string `mapstructure:"LOG_LEVEL"`
 	LogDirPath       string
 	DataFolderPath   string
@@ -40,12 +42,12 @@ func getDefaultConfig() Config {
 	return Config{
 		Host:             "0.0.0.0",
 		Port:             "8083",
+		WispPort:         "9090",
 		LogLevel:         "INFO",
 		LogDirPath:       logDirPath,
 		DataFolderPath:   dataFolderPath,
 		ReplayFolderPath: replayFolderPath,
 	}
-
 }
 
 func EnsureDirExist(path string) error {
@@ -76,7 +78,14 @@ func getPwdDirPath() string {
 
 func loadConfigFromEnv(conf *Config) {
 	viper.AutomaticEnv()
-	if err := viper.Unmarshal(conf); err == nil {
+	envViper := viper.New()
+	for _, item := range os.Environ() {
+		envItem := strings.SplitN(item, "=", 2)
+		if len(envItem) == 2 {
+			envViper.Set(envItem[0], viper.Get(envItem[0]))
+		}
+	}
+	if err := envViper.Unmarshal(conf); err == nil {
 		log.Println("Load config from env")
 	}
 }

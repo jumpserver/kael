@@ -11,7 +11,6 @@ import (
 	"github.com/jumpserver/kael/pkg/schemas"
 	"github.com/jumpserver/wisp/protobuf-go/protobuf"
 	"go.uber.org/zap"
-	"io"
 )
 
 type PollJMSEvent struct{}
@@ -29,8 +28,6 @@ func (p *PollJMSEvent) clearZombieSession() {
 	resp, err := grpc.GlobalGrpcClient.Client.ScanRemainReplays(ctx, req)
 	if err != nil || !resp.Status.Ok {
 		logger.GlobalLogger.Error("Failed to scan remain replay")
-	} else {
-		logger.GlobalLogger.Info("Scan remain replay success")
 	}
 }
 
@@ -40,17 +37,16 @@ func (p *PollJMSEvent) waitForKillSessionMessage() {
 		logger.GlobalLogger.Error("dispatch task err", zap.Error(err))
 		return
 	}
-	waitChan := make(chan struct{})
+	logger.GlobalLogger.Info("start dispatch task success")
+
+	closeStreamChan := make(chan struct{})
 	for {
 		taskResponse, err := stream.Recv()
-		if err == io.EOF {
-			_ = stream.CloseSend()
-			close(waitChan)
-			break
-		}
+
 		if err != nil {
-			logger.GlobalLogger.Error("Failed to receive a note", zap.Error(err))
-			continue
+			_ = stream.CloseSend()
+			close(closeStreamChan)
+			break
 		}
 
 		task := taskResponse.Task
@@ -75,7 +71,8 @@ func (p *PollJMSEvent) waitForKillSessionMessage() {
 			}
 		}
 	}
-	<-waitChan
+	<-closeStreamChan
+	p.waitForKillSessionMessage()
 }
 func (p *PollJMSEvent) sendFinishTask(stream protobuf.Service_DispatchTaskClient, TaskId string) {
 	req := &protobuf.FinishedTaskRequest{
@@ -101,7 +98,7 @@ func (p *PollJMSEvent) sendSessionState(jmss *JMSSession, state schemas.SessionS
 	response := &schemas.AskResponse{
 		Type:           schemas.Waiting,
 		ConversationID: jmss.Session.Id,
-		SystemMessage: msg,
+		SystemMessage:  msg,
 		Meta:           schemas.ResponseMeta{SessionState: state},
 	}
 

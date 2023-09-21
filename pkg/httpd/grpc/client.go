@@ -1,6 +1,8 @@
 package grpc
 
 import (
+	"fmt"
+	"github.com/jumpserver/kael/pkg/config"
 	"github.com/jumpserver/kael/pkg/logger"
 	pb "github.com/jumpserver/wisp/protobuf-go/protobuf"
 	"go.uber.org/zap"
@@ -17,7 +19,7 @@ type Client struct {
 
 func (c *Client) Start() {
 	conn, err := grpc.Dial(
-		"localhost:9090",
+		fmt.Sprintf("localhost:%s", config.GlobalConfig.WispPort),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
