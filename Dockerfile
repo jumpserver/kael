@@ -16,7 +16,7 @@ ADD ui .
 RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,sharing=locked,id=kael \
     yarn build
 
-FROM golang:1.21-buster as kael-build
+FROM golang:1.21-bullseye as kael-build
 ARG TARGETARCH
 
 WORKDIR /opt/kael
