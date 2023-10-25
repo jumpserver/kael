@@ -56,6 +56,7 @@ ARG TARGETARCH
 ENV LANG=zh_CN.UTF-8
 
 ARG DEPENDENCIES="                    \
+        ca-certificates               \
         curl                          \
         git                           \
         net-tools                     \
