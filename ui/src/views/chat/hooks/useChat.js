@@ -41,6 +41,8 @@ export function useChat() {
       const chatsStore = chatStore.chatsStore.filter(item => item.conversation_id === data.conversation_id)
       if (chatsStore.length > 0) {
         chatsStore[0].chats?.push(data)
+      } else {
+        chatStore.chatsStore[0].chats?.push(data)
       }
     }
     pageScroll('scrollRef')
