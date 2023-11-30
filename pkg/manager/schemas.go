@@ -9,3 +9,10 @@ type AskChatGPT struct {
 	AnswerCh chan string
 	DoneCh   chan string
 }
+
+type ChatGPTParam struct {
+	AuthToken string
+	BaseURL   string
+	Proxy     string
+	Model     string
+}

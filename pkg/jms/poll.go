@@ -21,13 +21,14 @@ func NewPollJMSEvent() *PollJMSEvent {
 
 func (p *PollJMSEvent) clearZombieSession() {
 	ctx := context.Background()
+
 	req := &protobuf.RemainReplayRequest{
 		ReplayDir: config.GlobalConfig.ReplayFolderPath,
 	}
 
 	resp, err := grpc.GlobalGrpcClient.Client.ScanRemainReplays(ctx, req)
 	if err != nil || !resp.Status.Ok {
-		logger.GlobalLogger.Error("Failed to scan remain replay")
+		logger.GlobalLogger.Error("Failed to scan remain replay", zap.Error(err))
 	}
 }
 
@@ -37,7 +38,6 @@ func (p *PollJMSEvent) waitForKillSessionMessage() {
 		logger.GlobalLogger.Error("dispatch task err", zap.Error(err))
 		return
 	}
-	logger.GlobalLogger.Info("start dispatch task success")
 
 	closeStreamChan := make(chan struct{})
 	for {
@@ -52,7 +52,7 @@ func (p *PollJMSEvent) waitForKillSessionMessage() {
 		task := taskResponse.Task
 		sessionId := task.SessionId
 		taskAction := task.Action
-		targetSession := GlobalSessionManager.GetJMSSession(sessionId)
+		targetSession, _ := GlobalSessionManager.GetSession(sessionId)
 		if targetSession != nil {
 			switch taskAction {
 			case protobuf.TaskAction_KillSession:

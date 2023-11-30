@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"github.com/jumpserver/kael/pkg/jms"
 	"github.com/jumpserver/kael/pkg/logger"
 	"github.com/sashabaranov/go-openai"
 	"go.uber.org/zap"
@@ -61,7 +60,9 @@ func NewCustomTransport(options ...TransportOption) *http.Transport {
 
 func NewClient(authToken, baseURL, proxy string) *openai.Client {
 	config := openai.DefaultConfig(authToken)
-	config.BaseURL = strings.TrimRight(baseURL, "/")
+	if baseURL != "" {
+		config.BaseURL = strings.TrimRight(baseURL, "/")
+	}
 	transport := NewCustomTransport(
 		WithProxy(proxy), WithSkipCertificate(true),
 	)
@@ -71,7 +72,7 @@ func NewClient(authToken, baseURL, proxy string) *openai.Client {
 	return openai.NewClientWithConfig(config)
 }
 
-func ChatGPT(ask *AskChatGPT, jmss *jms.JMSSession) {
+func ChatGPT(ask *AskChatGPT) {
 	// TODO 做超时处理
 	ctx := context.Background()
 	messages := make([]openai.ChatCompletionMessage, 0)
@@ -99,8 +100,7 @@ func ChatGPT(ask *AskChatGPT, jmss *jms.JMSSession) {
 	for {
 		response, err := stream.Recv()
 
-		if errors.Is(err, io.EOF) || jmss.CurrentAskInterrupt {
-			jmss.CurrentAskInterrupt = false
+		if errors.Is(err, io.EOF) {
 			ask.DoneCh <- content
 			return
 		}
