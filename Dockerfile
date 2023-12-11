@@ -1,15 +1,4 @@
-FROM golang:1.19-buster as stage-wisp-build
-ARG TARGETARCH
-ARG GOPROXY=https://goproxy.io
-ARG WISP_VERSION=v0.1.17
-ENV GO111MODULE=on
-ENV CGO_ENABLED=0
-
-RUN --mount=type=cache,target=/root/.cache \
-    --mount=type=cache,target=/go/pkg/mod \
-    go install github.com/jumpserver/wisp@${WISP_VERSION}
-
-FROM jumpserver/node:18.13 as ui-build
+FROM node:16.20-bullseye-slim as ui-build
 ARG TARGETARCH
 ARG NPM_REGISTRY="https://registry.npmmirror.com"
 ENV NPM_REGISTY=$NPM_REGISTRY
@@ -27,7 +16,7 @@ ADD ui .
 RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,sharing=locked,id=kael \
     yarn build
 
-FROM golang:1.20-buster as kael-build
+FROM golang:1.21-bullseye as kael-build
 ARG TARGETARCH
 
 WORKDIR /opt/kael
@@ -59,13 +48,15 @@ RUN --mount=type=cache,target=/root/.cache \
     && set -x && ls -al .
 
 RUN mkdir /opt/kael/release \
+    && chmod +x /opt/kael/entrypoint.sh \
     && mv /opt/kael/entrypoint.sh /opt/kael/release
-
 
 FROM debian:bullseye-slim
 ARG TARGETARCH
+ENV LANG=zh_CN.UTF-8
 
 ARG DEPENDENCIES="                    \
+        ca-certificates               \
         curl                          \
         git                           \
         net-tools                     \
@@ -75,7 +66,6 @@ ARG DEPENDENCIES="                    \
         wget"
 
 ARG APT_MIRROR=http://mirrors.ustc.edu.cn
-
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=kael \
     sed -i "s@http://.*.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list \
     && rm -f /etc/apt/apt.conf.d/docker-clean \
@@ -89,18 +79,25 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=kael \
     && sed -i "s@# alias @alias @g" ~/.bashrc \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /opt/kael/
+WORKDIR /opt
+
+ARG WISP_VERSION=v0.1.17
+RUN set -ex \
+    && wget https://github.com/jumpserver/wisp/releases/download/${WISP_VERSION}/wisp-${WISP_VERSION}-linux-${TARGETARCH}.tar.gz \
+    && tar -xf wisp-${WISP_VERSION}-linux-${TARGETARCH}.tar.gz -C /usr/local/bin/ --strip-components=1 \
+    && chown root:root /usr/local/bin/wisp \
+    && chmod 755 /usr/local/bin/wisp \
+    && rm -f /opt/*.tar.gz
+
+WORKDIR /opt/kael
 
 COPY --from=ui-build /opt/kael/ui/dist ./ui/dist
-COPY --from=stage-wisp-build /go/bin/wisp /usr/local/bin/wisp
 COPY --from=kael-build /opt/kael/kael .
 COPY --from=kael-build /opt/kael/release .
 
-RUN chmod +x ./entrypoint.sh
-
-ENV LANG=zh_CN.UTF-8
-ENV COMPONENT_NAME=kael
-ENV EXECUTE_PROGRAM="/opt/kael/kael"
+ARG VERSION
+ENV VERSION=$VERSION
 
 EXPOSE 8083
+
 CMD ["./entrypoint.sh"]
