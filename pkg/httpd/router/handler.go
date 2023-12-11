@@ -12,8 +12,8 @@ var HandlerApi = new(_HandlerApi)
 
 type _HandlerApi struct{}
 
-func getJmsSession(sessionID string) (*jms.JMSSession, error) {
-	jmsSession := jms.GlobalSessionManager.GetJMSSession(sessionID)
+func GetSession(sessionID string) (*jms.JMSSession, error) {
+	jmsSession, _ := jms.GlobalSessionManager.GetSession(sessionID)
 	if jmsSession != nil {
 		return jmsSession, nil
 	}
@@ -27,7 +27,7 @@ func (s *_HandlerApi) InterruptCurrentAskHandler(ctx *gin.Context) {
 		return
 	}
 
-	jmsSession, err := getJmsSession(conversation.ID)
+	jmsSession, err := GetSession(conversation.ID)
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
 		return
@@ -42,7 +42,7 @@ func (s *_HandlerApi) JmsStateHandler(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid data"})
 		return
 	}
-	jmsSession, err := getJmsSession(jmsState.ID)
+	jmsSession, err := GetSession(jmsState.ID)
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, gin.H{"message": err.Error()})
 		return

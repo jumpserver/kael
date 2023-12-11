@@ -7,12 +7,9 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/jumpserver/kael/pkg/httpd/ws"
 	"github.com/jumpserver/kael/pkg/jms"
-	"github.com/jumpserver/kael/pkg/logger"
 	"github.com/jumpserver/kael/pkg/manager"
 	"github.com/jumpserver/kael/pkg/schemas"
-	"github.com/jumpserver/wisp/protobuf-go/protobuf"
 	"github.com/sashabaranov/go-openai"
-	"go.uber.org/zap"
 	"net/http"
 	"time"
 )
@@ -24,13 +21,15 @@ type _ChatApi struct{}
 func (s *_ChatApi) ChatHandler(ctx *gin.Context) {
 	conn, err := ws.UpgradeWsConn(ctx)
 	if err != nil {
-		logger.GlobalLogger.Error("Websocket upgrade err", zap.Error(err))
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "websocket upgrade failed"})
 		return
 	}
 
+	defer conn.Close()
+
 	token, ok := ctx.GetQuery("token")
 	if !ok {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "token"})
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "token required"})
 		return
 	}
 
@@ -39,115 +38,146 @@ func (s *_ChatApi) ChatHandler(ctx *gin.Context) {
 	sessionHandler := jms.NewSessionHandler(conn)
 	authInfo, err := tokenHandler.GetTokenAuthInfo(token)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "auth fail"})
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	defer conn.Close()
-
 	for {
-		_, msg, err := conn.ReadMessage()
+		messageType, msg, err := conn.ReadMessage()
 		if err != nil {
-			logger.GlobalLogger.Info("Accept message error or connect closed")
 			if len(currentJMSS) != 0 {
 				for _, jmss := range currentJMSS {
-					reason := "Websocket已关闭, 会话中断"
-					jmss.Close(reason)
+					jmss.Close("Websocket已关闭, 会话中断")
 				}
 			}
 			return
 		}
 
-		if string(msg) == "ping" {
-			_ = conn.WriteMessage(websocket.TextMessage, []byte("pong"))
-			continue
-		}
-
-		var askRequest schemas.AskRequest
-		_ = json.Unmarshal(msg, &askRequest)
-		jmss := &jms.JMSSession{}
-		if askRequest.ConversationID == "" {
-			jmss = sessionHandler.CreateNewSession(authInfo)
-			jmss.ActiveSession()
-			currentJMSS = append(currentJMSS, jmss)
-		} else {
-			conversationID := askRequest.ConversationID
-			jmss = jms.GlobalSessionManager.GetJMSSession(conversationID)
-			if jmss == nil {
-				response := schemas.AskResponse{
-					Type:           schemas.Error,
-					ConversationID: askRequest.ConversationID,
-					SystemMessage:  "current session not found",
-				}
-				jsonResponse, _ := json.Marshal(response)
-				_ = conn.WriteMessage(websocket.TextMessage, jsonResponse)
+		if messageType == websocket.TextMessage {
+			if string(msg) == "ping" {
+				_ = conn.WriteMessage(websocket.TextMessage, []byte("pong"))
 				continue
-			} else {
-				jmss.JMSState.NewDialogue = true
 			}
+
+			var askRequest schemas.AskRequest
+			_ = json.Unmarshal(msg, &askRequest)
+
+			jmss := &jms.JMSSession{}
+			conversationID := askRequest.ConversationID
+			if conversationID == "" {
+				jmss = sessionHandler.CreateNewSession(authInfo)
+				jmss.ActiveSession()
+				currentJMSS = append(currentJMSS, jmss)
+			} else {
+				jmss, err = jms.GlobalSessionManager.GetSession(conversationID)
+				if err != nil {
+					sendErrorMessage(conn, "current session not found", conversationID)
+					return
+				} else {
+					jmss.JMSState.NewDialogue = true
+				}
+			}
+
+			chatGPTParam := &manager.ChatGPTParam{
+				AuthToken: authInfo.Account.Secret,
+				BaseURL:   authInfo.Asset.Address,
+				Proxy:     authInfo.Asset.Specific.HttpProxy,
+				Model:     authInfo.Platform.Protocols[0].Settings["api_mode"],
+			}
+
+			id := jmss.GetID()
+			wsConn := jmss.Websocket
+			currentAskInterrupt := &jmss.CurrentAskInterrupt
+			jmss.HistoryAsks = append(jmss.HistoryAsks, askRequest.Content)
+			go jmss.WithAudit(
+				askRequest.Content,
+				chatFunc(
+					chatGPTParam, jmss.HistoryAsks,
+					id, wsConn, currentAskInterrupt,
+				),
+			)
 		}
-		go jmss.WithAudit(askRequest.Content, chatFunc(authInfo, askRequest))
 	}
 }
 
-func chatFunc(authInfo *protobuf.TokenAuthInfo, askRequest schemas.AskRequest) func(jmss *jms.JMSSession) string {
-	return func(jmss *jms.JMSSession) string {
+func chatFunc(
+	chatGPTParam *manager.ChatGPTParam, historyAsks []string,
+	id string, wsConn *websocket.Conn, currentAskInterrupt *bool,
+) func() string {
+	return func() string {
 		doneCh := make(chan string)
 		answerCh := make(chan string)
-
-		model := authInfo.Platform.Protocols[0].Settings["api_mode"]
-		jmss.HistoryAsks = append(jmss.HistoryAsks, askRequest.Content)
+		defer close(doneCh)
+		defer close(answerCh)
 
 		c := manager.NewClient(
-			authInfo.Account.Secret,
-			authInfo.Asset.Address,
-			authInfo.Asset.Specific.HttpProxy,
+			chatGPTParam.AuthToken,
+			chatGPTParam.BaseURL,
+			chatGPTParam.Proxy,
 		)
 
 		askChatGPT := &manager.AskChatGPT{
 			Client:   c,
-			Model:    model,
-			Contents: jmss.HistoryAsks,
+			Model:    chatGPTParam.Model,
+			Contents: historyAsks,
 			AnswerCh: answerCh,
 			DoneCh:   doneCh,
 		}
 
-		go manager.ChatGPT(askChatGPT, jmss)
-		messageID := uuid.New()
-		for {
-			select {
-			case answer := <-answerCh:
-				response := schemas.AskResponse{
-					Type:           schemas.Message,
-					ConversationID: jmss.Session.Id,
-					Message: &schemas.ChatGPTMessage{
-						Content:    answer,
-						ID:         messageID,
-						CreateTime: time.Now(),
-						Type:       schemas.Message,
-						Role:       openai.ChatMessageRoleAssistant,
-					},
-				}
-				jsonResponse, _ := json.Marshal(response)
-				_ = jmss.Websocket.WriteMessage(websocket.TextMessage, jsonResponse)
-			case answer := <-doneCh:
-				response := schemas.AskResponse{
-					Type:           schemas.Message,
-					ConversationID: jmss.Session.Id,
-					Message: &schemas.ChatGPTMessage{
-						Content:    answer,
-						ID:         messageID,
-						CreateTime: time.Now(),
-						Type:       schemas.Finish,
-						Role:       openai.ChatMessageRoleAssistant,
-					},
-				}
-				jsonResponse, _ := json.Marshal(response)
-				_ = jmss.Websocket.WriteMessage(websocket.TextMessage, jsonResponse)
-				close(doneCh)
-				close(answerCh)
-				return answer
-			}
+		go manager.ChatGPT(askChatGPT)
+		return processChatMessages(currentAskInterrupt, id, answerCh, doneCh, wsConn)
+	}
+}
+
+func processChatMessages(
+	currentAskInterrupt *bool, id string,
+	answerCh <-chan string, doneCh <-chan string, wsConn *websocket.Conn,
+) string {
+	content := ""
+	messageID := uuid.New()
+
+	for {
+		select {
+		case answer := <-answerCh:
+			content = answer
+			sendChatResponse(id, wsConn, answer, messageID, schemas.Message)
+		case answer := <-doneCh:
+			content = answer
+			sendChatResponse(id, wsConn, answer, messageID, schemas.Finish)
+			return answer
+		}
+
+		if *currentAskInterrupt {
+			*currentAskInterrupt = false
+			return content
 		}
 	}
+}
+
+func sendErrorMessage(conn *websocket.Conn, message, conversationID string) {
+	response := schemas.AskResponse{
+		Type:           schemas.Error,
+		ConversationID: conversationID,
+		SystemMessage:  message,
+	}
+	jsonResponse, _ := json.Marshal(response)
+	_ = conn.WriteMessage(websocket.TextMessage, jsonResponse)
+}
+
+func sendChatResponse(
+	id string, ws *websocket.Conn, chatContent string,
+	messageID uuid.UUID, messageType schemas.AskResponseType) {
+	response := schemas.AskResponse{
+		Type:           schemas.Message,
+		ConversationID: id,
+		Message: &schemas.ChatGPTMessage{
+			Content:    chatContent,
+			ID:         messageID,
+			CreateTime: time.Now(),
+			Type:       messageType,
+			Role:       openai.ChatMessageRoleAssistant,
+		},
+	}
+	jsonResponse, _ := json.Marshal(response)
+	_ = ws.WriteMessage(websocket.TextMessage, jsonResponse)
 }
