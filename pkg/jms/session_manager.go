@@ -8,7 +8,6 @@ import (
 type Session interface {
 	GetID() string
 }
-
 type SessionManager struct {
 	store sync.Map
 }
