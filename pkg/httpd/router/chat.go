@@ -65,7 +65,7 @@ func (s *_ChatApi) ChatHandler(ctx *gin.Context) {
 			jmss := &jms.JMSSession{}
 			conversationID := askRequest.ConversationID
 			if conversationID == "" {
-				jmss = sessionHandler.CreateNewSession(authInfo)
+				jmss = sessionHandler.CreateNewSession(authInfo, askRequest.Prompt)
 				jmss.ActiveSession()
 				currentJMSS = append(currentJMSS, jmss)
 			} else {
@@ -83,6 +83,7 @@ func (s *_ChatApi) ChatHandler(ctx *gin.Context) {
 				BaseURL:   authInfo.Asset.Address,
 				Proxy:     authInfo.Asset.Specific.HttpProxy,
 				Model:     authInfo.Platform.Protocols[0].Settings["api_mode"],
+				Prompt:    jmss.Prompt,
 			}
 
 			id := jmss.GetID()
@@ -124,7 +125,7 @@ func chatFunc(
 			DoneCh:   doneCh,
 		}
 
-		go manager.ChatGPT(askChatGPT)
+		go manager.ChatGPT(askChatGPT, chatGPTParam.Prompt)
 		return processChatMessages(currentAskInterrupt, id, answerCh, doneCh, wsConn)
 	}
 }

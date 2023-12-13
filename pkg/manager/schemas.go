@@ -15,4 +15,5 @@ type ChatGPTParam struct {
 	BaseURL   string
 	Proxy     string
 	Model     string
+	Prompt     string
 }

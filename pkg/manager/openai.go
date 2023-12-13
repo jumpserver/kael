@@ -72,7 +72,7 @@ func NewClient(authToken, baseURL, proxy string) *openai.Client {
 	return openai.NewClientWithConfig(config)
 }
 
-func ChatGPT(ask *AskChatGPT) {
+func ChatGPT(ask *AskChatGPT, prompt string) {
 	// TODO 做超时处理
 	ctx := context.Background()
 	messages := make([]openai.ChatCompletionMessage, 0)
@@ -82,6 +82,15 @@ func ChatGPT(ask *AskChatGPT) {
 			Role:    openai.ChatMessageRoleUser,
 			Content: content,
 		})
+	}
+
+	if prompt != "" {
+		messages = append([]openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: prompt,
+			},
+		}, messages...)
 	}
 
 	req := openai.ChatCompletionRequest{

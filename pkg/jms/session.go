@@ -27,11 +27,12 @@ func getRemoteAddress(websocket *websocket.Conn) string {
 	return websocket.RemoteAddr().String()
 }
 
-func (sh *SessionHandler) CreateNewSession(authInfo *protobuf.TokenAuthInfo) *JMSSession {
+func (sh *SessionHandler) CreateNewSession(authInfo *protobuf.TokenAuthInfo, prompt string) *JMSSession {
 	session := sh.createSession(authInfo)
 	return &JMSSession{
 		Session:             session,
 		Websocket:           sh.Websocket,
+		Prompt:              prompt,
 		HistoryAsks:         make([]string, 0),
 		CurrentAskInterrupt: false,
 		CommandACLs:         authInfo.FilterRules,

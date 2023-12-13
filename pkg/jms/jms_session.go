@@ -13,6 +13,7 @@ import (
 type JMSSession struct {
 	Session             *protobuf.Session
 	Websocket           *websocket.Conn
+	Prompt              string
 	HistoryAsks         []string
 	CurrentAskInterrupt bool
 	CommandACLs         []*protobuf.CommandACL
@@ -113,6 +114,7 @@ func (jmss *JMSSession) WithAudit(command string, chatFunc func() string) (resul
 
 type JMSSystemSession struct {
 	Id                  string
+	Prompt              string
 	HistoryAsks         []string
 	CurrentAskInterrupt bool
 	Websocket           *websocket.Conn
@@ -123,12 +125,13 @@ func (sh *JMSSystemSession) GetID() string {
 	return sh.Id
 }
 
-func (sh *JMSSystemSession) CreateNewSession(conn *websocket.Conn) *JMSSystemSession {
+func (sh *JMSSystemSession) CreateNewSession(conn *websocket.Conn, prompt string) *JMSSystemSession {
 	id := uuid.New().String()
 	return &JMSSystemSession{
 		Id:                  id,
 		Websocket:           conn,
 		CurrentAskInterrupt: false,
+		Prompt:              prompt,
 		HistoryAsks:         make([]string, 0),
 		JMSState: &schemas.JMSState{
 			ID: id, ActivateReview: schemas.Wait,
