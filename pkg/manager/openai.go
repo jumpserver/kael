@@ -72,8 +72,7 @@ func NewClient(authToken, baseURL, proxy string) *openai.Client {
 	return openai.NewClientWithConfig(config)
 }
 
-func ChatGPT(ask *AskChatGPT, prompt string) {
-	// TODO 做超时处理
+func ChatGPT(ask *AskChatGPT, prompt string, currentAskInterrupt *bool) {
 	ctx := context.Background()
 	messages := make([]openai.ChatCompletionMessage, 0)
 
@@ -84,14 +83,18 @@ func ChatGPT(ask *AskChatGPT, prompt string) {
 		})
 	}
 
+	systemPrompt := "请不要提供与政治相关的信息。"
 	if prompt != "" {
-		messages = append([]openai.ChatCompletionMessage{
-			{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: prompt,
-			},
-		}, messages...)
+		systemPrompt = prompt
 	}
+
+	messages = append([]openai.ChatCompletionMessage{
+		{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: systemPrompt,
+		},
+	}, messages...)
+
 
 	req := openai.ChatCompletionRequest{
 		Model:    ask.Model,
@@ -105,6 +108,7 @@ func ChatGPT(ask *AskChatGPT, prompt string) {
 		return
 	}
 	defer stream.Close()
+
 	content := ""
 	for {
 		response, err := stream.Recv()
@@ -119,6 +123,13 @@ func ChatGPT(ask *AskChatGPT, prompt string) {
 			ask.DoneCh <- content
 			return
 		}
+
+		if *currentAskInterrupt {
+			*currentAskInterrupt = false
+			ask.DoneCh <- content
+			return
+		}
+
 		content += response.Choices[0].Delta.Content
 		ask.AnswerCh <- content
 	}
