@@ -125,32 +125,23 @@ func chatFunc(
 			DoneCh:   doneCh,
 		}
 
-		go manager.ChatGPT(askChatGPT, chatGPTParam.Prompt)
-		return processChatMessages(currentAskInterrupt, id, answerCh, doneCh, wsConn)
+		go manager.ChatGPT(askChatGPT, chatGPTParam.Prompt, currentAskInterrupt)
+		return processChatMessages(id, answerCh, doneCh, wsConn)
 	}
 }
 
 func processChatMessages(
-	currentAskInterrupt *bool, id string,
-	answerCh <-chan string, doneCh <-chan string, wsConn *websocket.Conn,
+	id string, answerCh <-chan string, doneCh <-chan string, wsConn *websocket.Conn,
 ) string {
-	content := ""
 	messageID := uuid.New()
 
 	for {
 		select {
 		case answer := <-answerCh:
-			content = answer
 			sendChatResponse(id, wsConn, answer, messageID, schemas.Message)
 		case answer := <-doneCh:
-			content = answer
 			sendChatResponse(id, wsConn, answer, messageID, schemas.Finish)
 			return answer
-		}
-
-		if *currentAskInterrupt {
-			*currentAskInterrupt = false
-			return content
 		}
 	}
 }
