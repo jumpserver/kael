@@ -55,7 +55,7 @@ func (s *_SystemChatApi) ChatHandler(ctx *gin.Context) {
 			jmss := &jms.JMSSystemSession{}
 			conversationID := askRequest.ConversationID
 			if conversationID == "" {
-				jmss = jmss.CreateNewSession(conn)
+				jmss = jmss.CreateNewSession(conn, askRequest.Prompt)
 				jmss.ActiveSession()
 				currentJMSS = append(currentJMSS, jmss)
 			} else {
@@ -71,6 +71,7 @@ func (s *_SystemChatApi) ChatHandler(ctx *gin.Context) {
 				BaseURL:   publicSetting.GptBaseUrl,
 				Proxy:     publicSetting.GptProxy,
 				Model:     publicSetting.GptModel,
+				Prompt:    jmss.Prompt,
 			}
 			id := jmss.GetID()
 			wsConn := jmss.Websocket
