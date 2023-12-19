@@ -83,11 +83,8 @@ func ChatGPT(ask *AskChatGPT, prompt string, currentAskInterrupt *bool) {
 		})
 	}
 
-	systemPrompt := "请不要提供与政治相关的信息。"
-	if prompt != "" {
-		systemPrompt = prompt
-	}
-
+	systemPrompt := " 请不要提供与政治相关的信息。"
+	systemPrompt = prompt + systemPrompt
 	messages = append([]openai.ChatCompletionMessage{
 		{
 			Role:    openai.ChatMessageRoleSystem,
