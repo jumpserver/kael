@@ -3,6 +3,7 @@ package schemas
 type AskRequest struct {
 	ConversationID string `json:"conversation_id,omitempty"`
 	Content        string `json:"content"`
+	Prompt         string `json:"prompt"`
 }
 
 type AskResponseType string

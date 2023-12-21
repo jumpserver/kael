@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"github.com/jumpserver/kael/pkg/jms"
 	"github.com/jumpserver/kael/pkg/logger"
 	"github.com/sashabaranov/go-openai"
 	"go.uber.org/zap"
@@ -61,7 +60,9 @@ func NewCustomTransport(options ...TransportOption) *http.Transport {
 
 func NewClient(authToken, baseURL, proxy string) *openai.Client {
 	config := openai.DefaultConfig(authToken)
-	config.BaseURL = strings.TrimRight(baseURL, "/")
+	if baseURL != "" {
+		config.BaseURL = strings.TrimRight(baseURL, "/")
+	}
 	transport := NewCustomTransport(
 		WithProxy(proxy), WithSkipCertificate(true),
 	)
@@ -71,8 +72,7 @@ func NewClient(authToken, baseURL, proxy string) *openai.Client {
 	return openai.NewClientWithConfig(config)
 }
 
-func ChatGPT(ask *AskChatGPT, jmss *jms.JMSSession) {
-	// TODO 做超时处理
+func ChatGPT(ask *AskChatGPT, prompt string, currentAskInterrupt *bool) {
 	ctx := context.Background()
 	messages := make([]openai.ChatCompletionMessage, 0)
 
@@ -82,6 +82,16 @@ func ChatGPT(ask *AskChatGPT, jmss *jms.JMSSession) {
 			Content: content,
 		})
 	}
+
+	systemPrompt := " 请不要提供与政治相关的信息。"
+	systemPrompt = prompt + systemPrompt
+	messages = append([]openai.ChatCompletionMessage{
+		{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: systemPrompt,
+		},
+	}, messages...)
+
 
 	req := openai.ChatCompletionRequest{
 		Model:    ask.Model,
@@ -95,12 +105,12 @@ func ChatGPT(ask *AskChatGPT, jmss *jms.JMSSession) {
 		return
 	}
 	defer stream.Close()
+
 	content := ""
 	for {
 		response, err := stream.Recv()
 
-		if errors.Is(err, io.EOF) || jmss.CurrentAskInterrupt {
-			jmss.CurrentAskInterrupt = false
+		if errors.Is(err, io.EOF) {
 			ask.DoneCh <- content
 			return
 		}
@@ -110,6 +120,13 @@ func ChatGPT(ask *AskChatGPT, jmss *jms.JMSSession) {
 			ask.DoneCh <- content
 			return
 		}
+
+		if *currentAskInterrupt {
+			*currentAskInterrupt = false
+			ask.DoneCh <- content
+			return
+		}
+
 		content += response.Choices[0].Delta.Content
 		ask.AnswerCh <- content
 	}

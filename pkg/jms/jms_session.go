@@ -3,6 +3,7 @@ package jms
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/jumpserver/kael/pkg/schemas"
 	"github.com/jumpserver/wisp/protobuf-go/protobuf"
@@ -12,6 +13,7 @@ import (
 type JMSSession struct {
 	Session             *protobuf.Session
 	Websocket           *websocket.Conn
+	Prompt              string
 	HistoryAsks         []string
 	CurrentAskInterrupt bool
 	CommandACLs         []*protobuf.CommandACL
@@ -24,8 +26,12 @@ type JMSSession struct {
 	JMSState            *schemas.JMSState
 }
 
+func (sh *JMSSession) GetID() string {
+	return sh.Session.Id
+}
+
 func (jmss *JMSSession) ActiveSession() {
-	GlobalSessionManager.RegisterJMSSession(jmss)
+	GlobalSessionManager.RegisterSession(jmss)
 	jmss.ReplayHandler = NewReplayHandler(jmss.Session)
 	jmss.CommandHandler = NewCommandHandler(
 		jmss.Websocket, jmss.Session, jmss.CommandACLs, jmss.JMSState,
@@ -76,7 +82,7 @@ func (jmss *JMSSession) Close(reason string) {
 	time.Sleep(1 * time.Second)
 	jmss.ReplayHandler.Upload()
 	jmss.SessionHandler.closeSession(jmss.Session)
-	GlobalSessionManager.UnregisterJMSSession(jmss)
+	GlobalSessionManager.UnregisterSession(jmss)
 	jmss.NotifyToClose(reason)
 }
 
@@ -91,7 +97,7 @@ func (jmss *JMSSession) NotifyToClose(reason string) {
 	_ = jmss.Websocket.WriteMessage(websocket.TextMessage, jsonResponse)
 }
 
-func (jmss *JMSSession) WithAudit(command string, chatFunc func(*JMSSession) string) (result string) {
+func (jmss *JMSSession) WithAudit(command string, chatFunc func() string) (result string) {
 	commandRecord := &schemas.CommandRecord{Input: command}
 	jmss.CommandHandler.CommandRecord = commandRecord
 	isContinue := jmss.CommandHandler.CommandACLFilter()
@@ -99,9 +105,57 @@ func (jmss *JMSSession) WithAudit(command string, chatFunc func(*JMSSession) str
 	if !isContinue {
 		return
 	}
-	result = chatFunc(jmss)
+	result = chatFunc()
 	commandRecord.Output = result
 	go jmss.ReplayHandler.WriteOutput(commandRecord.Output)
 	go jmss.CommandHandler.RecordCommand()
 	return result
+}
+
+type JMSSystemSession struct {
+	Id                  string
+	Prompt              string
+	HistoryAsks         []string
+	CurrentAskInterrupt bool
+	Websocket           *websocket.Conn
+	JMSState            *schemas.JMSState
+}
+
+func (sh *JMSSystemSession) GetID() string {
+	return sh.Id
+}
+
+func (sh *JMSSystemSession) CreateNewSession(conn *websocket.Conn, prompt string) *JMSSystemSession {
+	id := uuid.New().String()
+	return &JMSSystemSession{
+		Id:                  id,
+		Websocket:           conn,
+		CurrentAskInterrupt: false,
+		Prompt:              prompt,
+		HistoryAsks:         make([]string, 0),
+		JMSState: &schemas.JMSState{
+			ID: id, ActivateReview: schemas.Wait,
+		},
+	}
+}
+
+func (jmss *JMSSystemSession) ActiveSession() {
+	GlobalSystemSessionManager.RegisterSession(jmss)
+}
+
+func (jmss *JMSSystemSession) Close(reason string) {
+	jmss.CurrentAskInterrupt = true
+	GlobalSystemSessionManager.UnregisterSession(jmss)
+	jmss.NotifyToClose(reason)
+}
+
+func (jmss *JMSSystemSession) NotifyToClose(reason string) {
+	response := &schemas.AskResponse{
+		Type:           schemas.Finish,
+		ConversationID: jmss.Id,
+		SystemMessage:  reason,
+	}
+
+	jsonResponse, _ := json.Marshal(response)
+	_ = jmss.Websocket.WriteMessage(websocket.TextMessage, jsonResponse)
 }
