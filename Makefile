@@ -10,7 +10,9 @@ VERSION ?= $(BRANCH)-$(BUILD)
 BuildTime:= $(shell date -u '+%Y-%m-%d %I:%M:%S%p')
 COMMIT:= $(shell git rev-parse HEAD)
 GOVERSION:= $(shell go version)
-TARGETARCH ?= amd64
+
+GOOS:=$(shell go env GOOS)
+GOARCH:=$(shell go env GOARCH)
 
 UIDIR=ui
 YARNINSTALL=yarn install
@@ -24,48 +26,54 @@ KAELLDFLAGS+=-X 'main.Goversion=$(GOVERSION)'
 
 KAELBUILD=CGO_ENABLED=0 go build -trimpath -ldflags "$(KAELLDFLAGS) ${LDFLAGS}"
 
-PLATFORM_LIST = \
-	darwin-amd64 \
-	darwin-arm64 \
-	linux-amd64 \
-	linux-arm64
+define make_artifact_full
+	GOOS=$(1) GOARCH=$(2) $(KAELBUILD) -o $(BUILDDIR)/$(NAME)-$(1)-$(2) $(KAELSRCFILE)
+	mkdir -p $(BUILDDIR)/$(NAME)-$(VERSION)-$(1)-$(2)
 
-all-arch: $(PLATFORM_LIST)
+	cp $(BUILDDIR)/$(NAME)-$(1)-$(2) $(BUILDDIR)/$(NAME)-$(VERSION)-$(1)-$(2)/$(NAME)
+	cd $(BUILDDIR) && tar -czvf $(NAME)-$(VERSION)-$(1)-$(2).tar.gz $(NAME)-$(VERSION)-$(1)-$(2)
+	rm -rf $(BUILDDIR)/$(NAME)-$(VERSION)-$(1)-$(2) $(BUILDDIR)/$(NAME)-$(1)-$(2)
+endef
 
-darwin-amd64:kael-ui
-	GOARCH=amd64 GOOS=darwin $(KAELBUILD) -o $(BUILDDIR)/$(NAME)-$@ $(KAELSRCFILE)
-	mkdir -p $(BUILDDIR)/$(NAME)-$(VERSION)-$@
+build:
+	@echo "build kael"
+	GOARCH=$(GOARCH) GOOS=$(GOOS) $(KAELBUILD) -o $(BUILDDIR)/$(NAME) $(KAELSRCFILE)
 
-	cp $(BUILDDIR)/$(NAME)-$@ $(BUILDDIR)/$(NAME)-$(VERSION)-$@/$(NAME)
-	cd $(BUILDDIR) && tar -czvf $(NAME)-$(VERSION)-$@.tar.gz $(NAME)-$(VERSION)-$@
+all: kael-ui
+	$(call make_artifact_full,darwin,amd64)
+	$(call make_artifact_full,darwin,arm64)
+	$(call make_artifact_full,linux,amd64)
+	$(call make_artifact_full,linux,arm64)
+	$(call make_artifact_full,linux,ppc64le)
+	$(call make_artifact_full,linux,s390x)
+	$(call make_artifact_full,linux,riscv64)
 
-darwin-arm64:kael-ui
-	GOARCH=arm64 GOOS=darwin $(KAELBUILD) -o $(BUILDDIR)/$(NAME)-$@ $(KAELSRCFILE)
-	mkdir -p $(BUILDDIR)/$(NAME)-$(VERSION)-$@
+local: kael-ui
+	$(call make_artifact_full,$(shell go env GOOS),$(shell go env GOARCH))
 
-	cp $(BUILDDIR)/$(NAME)-$@ $(BUILDDIR)/$(NAME)-$(VERSION)-$@/$(NAME)
-	cd $(BUILDDIR) && tar -czvf $(NAME)-$(VERSION)-$@.tar.gz $(NAME)-$(VERSION)-$@
+darwin-amd64: kael-ui
+	$(call make_artifact_full,darwin,amd64)
 
-linux-amd64:kael-ui
-	GOARCH=amd64 GOOS=linux $(KAELBUILD) -o $(BUILDDIR)/$(NAME)-$@ $(KAELSRCFILE)
-	mkdir -p $(BUILDDIR)/$(NAME)-$(VERSION)-$@
+darwin-arm64: kael-ui
+	$(call make_artifact_full,darwin,arm64)
 
-	cp $(BUILDDIR)/$(NAME)-$@ $(BUILDDIR)/$(NAME)-$(VERSION)-$@/$(NAME)
-	cd $(BUILDDIR) && tar -czvf $(NAME)-$(VERSION)-$@.tar.gz $(NAME)-$(VERSION)-$@
+linux-amd64: kael-ui
+	$(call make_artifact_full,linux,amd64)
 
-linux-arm64:kael-ui
-	GOARCH=arm64 GOOS=linux $(KAELBUILD) -o $(BUILDDIR)/$(NAME)-$@ $(KAELSRCFILE)
-	mkdir -p $(BUILDDIR)/$(NAME)-$(VERSION)-$@
+linux-arm64: kael-ui
+	$(call make_artifact_full,linux,arm64)
 
-	cp $(BUILDDIR)/$(NAME)-$@ $(BUILDDIR)/$(NAME)-$(VERSION)-$@/$(NAME)
-	cd $(BUILDDIR) && tar -czvf $(NAME)-$(VERSION)-$@.tar.gz $(NAME)-$(VERSION)-$@
+linux-loong64: kael-ui
+	$(call make_artifact_full,linux,loong64)
 
-linux-loong64:kael-ui
-	GOARCH=loong64 GOOS=linux $(KAELBUILD) -o $(BUILDDIR)/$(NAME)-$@ $(KAELSRCFILE)
-	mkdir -p $(BUILDDIR)/$(NAME)-$(VERSION)-$@
+linux-ppc64le: kael-ui
+	$(call make_artifact_full,linux,ppc64le)
 
-	cp $(BUILDDIR)/$(NAME)-$@ $(BUILDDIR)/$(NAME)-$(VERSION)-$@/$(NAME)
-	cd $(BUILDDIR) && tar -czvf $(NAME)-$(VERSION)-$@.tar.gz $(NAME)-$(VERSION)-$@
+linux-s390x: kael-ui
+	$(call make_artifact_full,linux,s390x)
+
+linux-riscv64: kael-ui
+	$(call make_artifact_full,linux,riscv64)
 
 kael-ui:
 	@echo "build ui"
