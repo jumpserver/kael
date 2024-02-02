@@ -50,6 +50,7 @@ export function createWebSocket(uri = globalUri, callback = globalCallback) {
 // 发送消息
 export function onSend(message){
   console.log(`发送消息`)
+  lunaEvent.sendEventToLuna(MESSAGES.RENEWAL)
   if (typeof message !== 'string') {
     message = JSON.stringify(message)
   }
