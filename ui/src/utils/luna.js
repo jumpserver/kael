@@ -3,7 +3,7 @@ export const MESSAGES = {
   PING: 'PING',
   CLOSE: 'CLOSE',
   CONNECTED: 'CONNECTED',
-  RENEWAL: 'RENEWAL'
+  KEYBOARDEVENT: 'KEYBOARDEVENT'
 }
 
 export class LunaEvent {
