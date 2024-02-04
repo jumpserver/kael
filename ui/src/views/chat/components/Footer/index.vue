@@ -2,7 +2,9 @@
 import { ref, computed, nextTick } from 'vue'
 import { useChatStore } from '@/store'
 import { useChat } from '../../hooks/useChat.js'
+import { LunaEvent, MESSAGES } from '@/utils/luna'
 
+const lunaEvent = new LunaEvent()
 const chatStore = useChatStore()
 const { setLoading, getInputFocus } = useChat()
 
@@ -29,6 +31,7 @@ const onStopHandle = () => {
 }
 
 const onKeyEnter = (event) => {
+  lunaEvent.sendEventToLuna(MESSAGES.KEYBOARDEVENT)
   if (!isIM.value) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
