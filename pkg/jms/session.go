@@ -88,3 +88,22 @@ func (sh *SessionHandler) closeSession(session *protobuf.Session) {
 		logger.GlobalLogger.Error(errorMessage)
 	}
 }
+
+func (sh *SessionHandler) recordSessionLife(
+	session *protobuf.Session,
+	event protobuf.SessionLifecycleLogRequest_EventType,
+	reason string,
+) {
+	ctx := context.Background()
+	req := &protobuf.SessionLifecycleLogRequest{
+		SessionId: session.Id,
+		Event:     event,
+		Reason:    reason,
+	}
+
+	resp, _ := grpc.GlobalGrpcClient.Client.RecordSessionLifecycleLog(ctx, req)
+	if !resp.Status.Ok {
+		errorMessage := fmt.Sprintf("Failed to record session: %s", resp.Status.Err)
+		logger.GlobalLogger.Error(errorMessage)
+	}
+}
