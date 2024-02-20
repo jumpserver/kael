@@ -7,7 +7,7 @@ require (
 	github.com/gin-gonic/gin v1.9.1
 	github.com/google/uuid v1.4.0
 	github.com/gorilla/websocket v1.5.1
-	github.com/jumpserver/wisp v0.1.17
+	github.com/jumpserver/wisp v0.1.19
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
 	github.com/sashabaranov/go-openai v1.17.9
 	github.com/spf13/viper v1.17.0
