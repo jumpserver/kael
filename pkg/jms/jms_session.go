@@ -36,6 +36,11 @@ func (jmss *JMSSession) ActiveSession() {
 	jmss.CommandHandler = NewCommandHandler(
 		jmss.Websocket, jmss.Session, jmss.CommandACLs, jmss.JMSState,
 	)
+	go jmss.SessionHandler.recordSessionLife(
+		jmss.Session,
+		protobuf.SessionLifecycleLogRequest_AssetConnectSuccess,
+		"",
+	)
 	go jmss.MaximumIdleTimeDetection()
 	go jmss.MaxSessionTimeDetection()
 }
@@ -79,11 +84,17 @@ func (jmss *JMSSession) MaxSessionTimeDetection() {
 
 func (jmss *JMSSession) Close(reason string) {
 	jmss.CurrentAskInterrupt = true
+	go jmss.SessionHandler.recordSessionLife(
+		jmss.Session,
+		protobuf.SessionLifecycleLogRequest_AssetConnectFinished,
+		"",
+	)
 	time.Sleep(1 * time.Second)
 	jmss.ReplayHandler.Upload()
 	jmss.SessionHandler.closeSession(jmss.Session)
 	GlobalSessionManager.UnregisterSession(jmss)
 	jmss.NotifyToClose(reason)
+
 }
 
 func (jmss *JMSSession) NotifyToClose(reason string) {
