@@ -44,6 +44,7 @@ all: kael-ui
 	$(call make_artifact_full,darwin,arm64)
 	$(call make_artifact_full,linux,amd64)
 	$(call make_artifact_full,linux,arm64)
+	$(call make_artifact_full,linux,mips64le)
 	$(call make_artifact_full,linux,ppc64le)
 	$(call make_artifact_full,linux,s390x)
 	$(call make_artifact_full,linux,riscv64)
@@ -65,6 +66,9 @@ linux-arm64: kael-ui
 
 linux-loong64: kael-ui
 	$(call make_artifact_full,linux,loong64)
+
+linux-mips64le: kael-ui
+	$(call make_artifact_full,linux,mips64le)
 
 linux-ppc64le: kael-ui
 	$(call make_artifact_full,linux,ppc64le)

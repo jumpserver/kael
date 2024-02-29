@@ -15,7 +15,6 @@ const onSwitchSidebar = () => {
 }
 
 onMounted(() => {
-  lunaEvent.init()
   if (isMobile()) {
     isShowMobile.value = true
   }

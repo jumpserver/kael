@@ -2,10 +2,15 @@ export const MESSAGES = {
   PONG: 'PONG',
   PING: 'PING',
   CLOSE: 'CLOSE',
-  CONNECTED: 'CONNECTED'
+  CONNECTED: 'CONNECTED',
+  KEYBOARDEVENT: 'KEYBOARDEVENT'
 }
 
 export class LunaEvent {
+  constructor() {
+    this.init()
+  }
+
   init() {
     window.addEventListener('message',
       this.handleEventFromLuna.bind(this),
