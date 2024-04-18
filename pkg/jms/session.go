@@ -16,15 +16,11 @@ type SessionHandler struct {
 	RemoteAddress string
 }
 
-func NewSessionHandler(websocket *websocket.Conn) *SessionHandler {
+func NewSessionHandler(websocket *websocket.Conn, remoteIP string) *SessionHandler {
 	return &SessionHandler{
 		Websocket:     websocket,
-		RemoteAddress: getRemoteAddress(websocket),
+		RemoteAddress: remoteIP,
 	}
-}
-
-func getRemoteAddress(websocket *websocket.Conn) string {
-	return websocket.RemoteAddr().String()
 }
 
 func (sh *SessionHandler) CreateNewSession(authInfo *protobuf.TokenAuthInfo, prompt string) *JMSSession {

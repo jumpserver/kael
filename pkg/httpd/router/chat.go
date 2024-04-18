@@ -19,6 +19,7 @@ var ChatApi = new(_ChatApi)
 type _ChatApi struct{}
 
 func (s *_ChatApi) ChatHandler(ctx *gin.Context) {
+	remoteIP := ctx.ClientIP()
 	conn, err := ws.UpgradeWsConn(ctx)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "websocket upgrade failed"})
@@ -35,7 +36,7 @@ func (s *_ChatApi) ChatHandler(ctx *gin.Context) {
 
 	currentJMSS := make([]*jms.JMSSession, 0)
 	tokenHandler := jms.NewTokenHandler()
-	sessionHandler := jms.NewSessionHandler(conn)
+	sessionHandler := jms.NewSessionHandler(conn, remoteIP)
 	authInfo, err := tokenHandler.GetTokenAuthInfo(token)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
