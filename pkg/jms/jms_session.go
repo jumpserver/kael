@@ -53,7 +53,7 @@ func (jmss *JMSSession) MaximumIdleTimeDetection() {
 		idleTime := currentTime.Sub(lastActiveTime)
 
 		if idleTime.Seconds() >= float64(jmss.MaxIdleTime*60) {
-			reason := fmt.Sprintf("超过当前会话最大空闲时间 %d (分), 会话中断", jmss.MaxIdleTime)
+			reason := fmt.Sprintf("超过当前会话最大空闲时间 %d (分) 会话中断", jmss.MaxIdleTime)
 			jmss.Close(reason)
 			break
 		}
@@ -74,7 +74,7 @@ func (jmss *JMSSession) MaxSessionTimeDetection() {
 		idleTime := currentTime.Sub(lastActiveTime)
 
 		if idleTime.Seconds() >= float64(jmss.MaxSessionTime*60*60) {
-			reason := fmt.Sprintf("超过当前会话最大时间 %d (时), 会话中断", jmss.MaxSessionTime)
+			reason := fmt.Sprintf("超过当前会话最大时间 %d (时) 会话中断", jmss.MaxSessionTime)
 			jmss.Close(reason)
 			break
 		}
@@ -87,7 +87,7 @@ func (jmss *JMSSession) Close(reason string) {
 	go jmss.SessionHandler.recordSessionLife(
 		jmss.Session,
 		protobuf.SessionLifecycleLogRequest_AssetConnectFinished,
-		"",
+		reason,
 	)
 	time.Sleep(1 * time.Second)
 	jmss.ReplayHandler.Upload()
