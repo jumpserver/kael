@@ -37,7 +37,7 @@ func (s *_SystemChatApi) ChatHandler(ctx *gin.Context) {
 		if err != nil {
 			if len(currentJMSS) != 0 {
 				for _, jmss := range currentJMSS {
-					jmss.Close("Websocket已关闭, 会话中断")
+					jmss.Close("Websocket已关闭 会话中断")
 				}
 			}
 			return
