@@ -28,9 +28,10 @@ KAELBUILD=CGO_ENABLED=0 go build -trimpath -ldflags "$(KAELLDFLAGS) ${LDFLAGS}"
 
 define make_artifact_full
 	GOOS=$(1) GOARCH=$(2) $(KAELBUILD) -o $(BUILDDIR)/$(NAME)-$(1)-$(2) $(KAELSRCFILE)
-	mkdir -p $(BUILDDIR)/$(NAME)-$(VERSION)-$(1)-$(2)
-
+	mkdir -p $(BUILDDIR)/$(NAME)-$(VERSION)-$(1)-$(2)/$(UIDIR)/dist/
 	cp $(BUILDDIR)/$(NAME)-$(1)-$(2) $(BUILDDIR)/$(NAME)-$(VERSION)-$(1)-$(2)/$(NAME)
+	-cp config_example.yml $(BUILDDIR)/$(NAME)-$(VERSION)-$(1)-$(2)/config_example.yml
+	cp -r $(UIDIR)/dist/* $(BUILDDIR)/$(NAME)-$(VERSION)-$(1)-$(2)/$(UIDIR)/dist/
 	cd $(BUILDDIR) && tar -czvf $(NAME)-$(VERSION)-$(1)-$(2).tar.gz $(NAME)-$(VERSION)-$(1)-$(2)
 	rm -rf $(BUILDDIR)/$(NAME)-$(VERSION)-$(1)-$(2) $(BUILDDIR)/$(NAME)-$(1)-$(2)
 endef
