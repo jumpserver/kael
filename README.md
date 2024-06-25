@@ -1,4 +1,7 @@
 
+## 项目已迁移到 https://github.com/jumpserver/koko 组织项目中，本仓库从今天起不再更新
+
+
 # Kael
 
 Kael 是 JumpServer 连接 GPT 的组件，计划支持多种 GPT, 
