@@ -103,13 +103,13 @@ onUnmounted(() => {
 
 <template>
   <div :class="wrapClass">
-    <div ref="textRef" class="leading-relaxed break-words">
+    <div ref="textRef" class="leading-relaxed">
       <span v-if="props.message?.content === 'loading' && !role" class="loading-box">
         <span></span>
         <span></span>
         <span></span>
       </span>
-      <div v-else class="inline-block markdown-body" v-html="text" />
+      <div v-else class="markdown-body flex flex-col" v-html="text" />
     </div>
   </div>
 </template>
@@ -157,5 +157,5 @@ onUnmounted(() => {
 }
 .loading-box span:nth-child(3){
   animation-delay: 0.39s;
-}            
+}
 </style>
