@@ -36,6 +36,9 @@ const config = {
 				}
 			})(),
 			pollInterval: 60000
+		},
+		paths: {
+			base: '/kael'
 		}
 	},
 	vitePlugin: {

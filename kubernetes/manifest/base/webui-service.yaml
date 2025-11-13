@@ -9,7 +9,7 @@ spec:
     app: open-webui
   ports:
     - protocol: TCP
-      port: 8080
-      targetPort: 8080
+      port: 8083
+      targetPort: 8083
       # If using NodePort, you can optionally specify the nodePort:
       # nodePort: 30000

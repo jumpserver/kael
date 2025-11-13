@@ -5,10 +5,10 @@ import socketio
 import logging
 import sys
 import time
-from typing import Dict, Set
-from redis import asyncio as aioredis
 import pycrdt as Y
 
+from open_webui.jms import chat_manager, JMSSession
+from open_webui.jms import check_user
 from open_webui.models.users import Users, UserNameResponse
 from open_webui.models.channels import Channels
 from open_webui.models.chats import Chats
@@ -39,17 +39,20 @@ from open_webui.tasks import create_task, stop_item_tasks
 from open_webui.utils.redis import get_redis_connection
 from open_webui.utils.access_control import has_access, get_users_with_access
 
-
 from open_webui.env import (
     GLOBAL_LOG_LEVEL,
     SRC_LOG_LEVELS,
 )
 
-
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["SOCKET"])
 
+# Import BASE_PATH from main module
+try:
+    from open_webui.main import BASE_PATH
+except ImportError:
+    BASE_PATH = "/kael"
 
 REDIS = None
 
@@ -81,7 +84,6 @@ else:
         allow_upgrades=ENABLE_WEBSOCKET_SUPPORT,
         always_connect=True,
     )
-
 
 # Timeout duration in seconds
 TIMEOUT_DURATION = 3
@@ -137,7 +139,6 @@ else:
     USAGE_POOL = {}
 
     aquire_func = release_func = renew_func = lambda: True
-
 
 YDOC_MANAGER = YdocManager(
     redis=REDIS,
@@ -199,7 +200,7 @@ async def periodic_usage_pool_cleanup():
 
 app = socketio.ASGIApp(
     sio,
-    socketio_path="/ws/socket.io",
+    socketio_path=f"{BASE_PATH}/ws/socket.io",
 )
 
 
@@ -266,26 +267,52 @@ async def usage(sid, data):
 
 @sio.event
 async def connect(sid, environ, auth):
-    user = None
-    if auth and "token" in auth:
-        data = decode_token(auth["token"])
+    scope = environ.get("asgi.scope", {})
+    handler = check_user.CheckUserHandler()
 
-        if data is not None and "id" in data:
-            user = Users.get_user_by_id(data["id"])
+    cookie_header = ""
+    if scope and "headers" in scope:
+        for k, v in scope["headers"]:
+            if k == b"cookie":
+                cookie_header = v.decode("latin1")
+                break
 
-        if user:
-            SESSION_POOL[sid] = user.model_dump(
-                exclude=["date_of_birth", "bio", "gender"]
-            )
-            if user.id in USER_POOL:
-                USER_POOL[user.id] = USER_POOL[user.id] + [sid]
-            else:
-                USER_POOL[user.id] = [sid]
+    if not cookie_header and "HTTP_COOKIE" in environ:
+        cookie_header = environ["HTTP_COOKIE"]
+
+    user = handler.check_user_by_cookie_header(cookie_header)
+
+    if user:
+        SESSION_POOL[sid] = {
+            "id": user.id,
+            "name": user.name,
+            "username": user.username,
+            "role": 'admin',
+        }
+        if user.id in USER_POOL:
+            USER_POOL[user.id] = USER_POOL[user.id] + [sid]
+        else:
+            USER_POOL[user.id] = [sid]
+
+    # user = None
+    # if auth and "token" in auth:
+    #     data = decode_token(auth["token"])
+    #
+    #     if data is not None and "id" in data:
+    #         user = Users.get_user_by_id(data["id"])
+    #
+    #     if user:
+    #         SESSION_POOL[sid] = user.model_dump(
+    #             exclude=["date_of_birth", "bio", "gender"]
+    #         )
+    #         if user.id in USER_POOL:
+    #             USER_POOL[user.id] = USER_POOL[user.id] + [sid]
+    #         else:
+    #             USER_POOL[user.id] = [sid]
 
 
 @sio.on("user-join")
 async def user_join(sid, data):
-
     auth = data["auth"] if "auth" in data else None
     if not auth or "token" not in auth:
         return
@@ -353,9 +380,9 @@ async def join_note(sid, data):
         return
 
     if (
-        user.role != "admin"
-        and user.id != note.user_id
-        and not has_access(user.id, type="read", access_control=note.access_control)
+            user.role != "admin"
+            and user.id != note.user_id
+            and not has_access(user.id, type="read", access_control=note.access_control)
     ):
         log.error(f"User {user.id} does not have access to note {data['note_id']}")
         return
@@ -408,11 +435,11 @@ async def ydoc_document_join(sid, data):
                 return
 
             if (
-                user.get("role") != "admin"
-                and user.get("id") != note.user_id
-                and not has_access(
-                    user.get("id"), type="read", access_control=note.access_control
-                )
+                    user.get("role") != "admin"
+                    and user.get("id") != note.user_id
+                    and not has_access(
+                user.get("id"), type="read", access_control=note.access_control
+            )
             ):
                 log.error(
                     f"User {user.get('id')} does not have access to note {note_id}"
@@ -478,11 +505,11 @@ async def document_save_handler(document_id, data, user):
             return
 
         if (
-            user.get("role") != "admin"
-            and user.get("id") != note.user_id
-            and not has_access(
-                user.get("id"), type="read", access_control=note.access_control
-            )
+                user.get("role") != "admin"
+                and user.get("id") != note.user_id
+                and not has_access(
+            user.get("id"), type="read", access_control=note.access_control
+        )
         ):
             log.error(f"User {user.get('id')} does not have access to note {note_id}")
             return
@@ -598,8 +625,8 @@ async def yjs_document_leave(sid, data):
         )
 
         if (
-            await YDOC_MANAGER.document_exists(document_id)
-            and len(await YDOC_MANAGER.get_users(document_id)) == 0
+                await YDOC_MANAGER.document_exists(document_id)
+                and len(await YDOC_MANAGER.get_users(document_id)) == 0
         ):
             log.info(f"Cleaning up document {document_id} as no users are left")
             await YDOC_MANAGER.clear_document(document_id)
@@ -641,6 +668,12 @@ async def disconnect(sid):
             del USER_POOL[user_id]
 
         await YDOC_MANAGER.remove_user_from_all_documents(sid)
+
+        chats = chat_manager.list(query={'socket_id': sid})
+
+        for chat in chats:
+            jms_session = JMSSession(chat)
+            await jms_session.close()
     else:
         pass
         # print(f"Unknown session ID {sid} disconnected")
@@ -679,9 +712,9 @@ def get_event_emitter(request_info, update_db=True):
 
         await asyncio.gather(*emit_tasks)
         if (
-            update_db
-            and message_id
-            and not request_info.get("chat_id", "").startswith("local:")
+                update_db
+                and message_id
+                and not request_info.get("chat_id", "").startswith("local:")
         ):
             if "type" in event_data and event_data["type"] == "status":
                 Chats.add_message_status_to_chat_by_id_and_message_id(

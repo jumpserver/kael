@@ -207,7 +207,7 @@
 										)
 									);
 								} else {
-									goto(`/workspace/knowledge/${item.id}`);
+									goto(`/kael/workspace/knowledge/${item.id}`);
 								}
 							}}
 						>

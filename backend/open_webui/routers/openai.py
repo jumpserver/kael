@@ -74,8 +74,8 @@ async def send_get_request(url, key=None, user: UserModel = None):
                         {
                             "X-OpenWebUI-User-Name": quote(user.name, safe=" "),
                             "X-OpenWebUI-User-Id": user.id,
-                            "X-OpenWebUI-User-Email": user.email,
-                            "X-OpenWebUI-User-Role": user.role,
+                            "X-OpenWebUI-User-Username": user.username,
+                            "X-OpenWebUI-User-Role": 'admin',
                         }
                         if ENABLE_FORWARD_USER_INFO_HEADERS and user
                         else {}
@@ -144,7 +144,7 @@ async def get_headers_and_cookies(
             {
                 "X-OpenWebUI-User-Name": quote(user.name, safe=" "),
                 "X-OpenWebUI-User-Id": user.id,
-                "X-OpenWebUI-User-Email": user.email,
+                "X-OpenWebUI-User-Username": user.username,
                 "X-OpenWebUI-User-Role": user.role,
                 **(
                     {"X-OpenWebUI-Chat-Id": metadata.get("chat_id")}
@@ -822,40 +822,40 @@ async def generate_chat_completion(
     metadata = payload.pop("metadata", None)
 
     model_id = form_data.get("model")
-    model_info = Models.get_model_by_id(model_id)
+    # model_info = Models.get_model_by_id(model_id)
 
     # Check model info and override the payload
-    if model_info:
-        if model_info.base_model_id:
-            payload["model"] = model_info.base_model_id
-            model_id = model_info.base_model_id
-
-        params = model_info.params.model_dump()
-
-        if params:
-            system = params.pop("system", None)
-
-            payload = apply_model_params_to_body_openai(params, payload)
-            payload = apply_system_prompt_to_body(system, payload, metadata, user)
-
-        # Check if user has access to the model
-        if not bypass_filter and user.role == "user":
-            if not (
-                user.id == model_info.user_id
-                or has_access(
-                    user.id, type="read", access_control=model_info.access_control
-                )
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Model not found",
-                )
-    elif not bypass_filter:
-        if user.role != "admin":
-            raise HTTPException(
-                status_code=403,
-                detail="Model not found",
-            )
+    # if model_info:
+    #     if model_info.base_model_id:
+    #         payload["model"] = model_info.base_model_id
+    #         model_id = model_info.base_model_id
+    #
+    #     params = model_info.params.model_dump()
+    #
+    #     if params:
+    #         system = params.pop("system", None)
+    #
+    #         payload = apply_model_params_to_body_openai(params, payload)
+    #         payload = apply_system_prompt_to_body(system, payload, metadata, user)
+    #
+    #     # Check if user has access to the model
+    #     if not bypass_filter and user.role == "user":
+    #         if not (
+    #             user.id == model_info.user_id
+    #             or has_access(
+    #                 user.id, type="read", access_control=model_info.access_control
+    #             )
+    #         ):
+    #             raise HTTPException(
+    #                 status_code=403,
+    #                 detail="Model not found",
+    #             )
+    # elif not bypass_filter:
+    #     if user.role != "admin":
+    #         raise HTTPException(
+    #             status_code=403,
+    #             detail="Model not found",
+    #         )
 
     await get_all_models(request, user=user)
     model = request.app.state.OPENAI_MODELS.get(model_id)
@@ -884,8 +884,8 @@ async def generate_chat_completion(
         payload["user"] = {
             "name": user.name,
             "id": user.id,
-            "email": user.email,
-            "role": user.role,
+            "username": user.username,
+            "role": 'admin',
         }
 
     url = request.app.state.config.OPENAI_API_BASE_URLS[idx]

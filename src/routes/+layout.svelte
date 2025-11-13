@@ -71,14 +71,13 @@
 	const BREAKPOINT = 768;
 
 	const setupSocket = async (enableWebsocket) => {
-		const _socket = io(`${WEBUI_BASE_URL}` || undefined, {
+		const _socket = io(undefined, {
 			reconnection: true,
 			reconnectionDelay: 1000,
 			reconnectionDelayMax: 5000,
 			randomizationFactor: 0.5,
-			path: '/ws/socket.io',
+			path: '/kael/ws/socket.io',
 			transports: enableWebsocket ? ['websocket'] : ['polling', 'websocket'],
-			auth: { token: localStorage.token }
 		});
 		await socket.set(_socket);
 
@@ -87,7 +86,6 @@
 		});
 
 		_socket.on('connect', async () => {
-			console.log('connected', _socket.id);
 			const version = await getVersion(localStorage.token);
 			if (version !== null) {
 				if ($WEBUI_VERSION !== null && version !== $WEBUI_VERSION) {
@@ -313,7 +311,7 @@
 					toast.custom(NotificationToast, {
 						componentProps: {
 							onClick: () => {
-								goto(`/c/${event.chat_id}`);
+								goto(`/kael/c/${event.chat_id}`);
 							},
 							content: content,
 							title: title
@@ -462,7 +460,7 @@
 				toast.custom(NotificationToast, {
 					componentProps: {
 						onClick: () => {
-							goto(`/channels/${event.channel_id}`);
+							goto(`/kael/channels/${event.channel_id}`);
 						},
 						content: data?.content,
 						title: `#${event?.channel?.name}`
@@ -636,32 +634,22 @@
 				const currentUrl = `${window.location.pathname}${window.location.search}`;
 				const encodedUrl = encodeURIComponent(currentUrl);
 
-				if (localStorage.token) {
-					// Get Session User Info
-					const sessionUser = await getSessionUser(localStorage.token).catch((error) => {
-						toast.error(`${error}`);
-						return null;
-					});
+				// Get Session User Info
+				const sessionUser = await getSessionUser().catch((error) => {
+					toast.error(`${error}`);
+					return null;
+				});
 
-					if (sessionUser) {
-						await user.set(sessionUser);
-						await config.set(await getBackendConfig());
-					} else {
-						// Redirect Invalid Session User to /auth Page
-						localStorage.removeItem('token');
-						await goto(`/auth?redirect=${encodedUrl}`);
-					}
+				if (sessionUser) {
+					await user.set(sessionUser);
+					await config.set(await getBackendConfig());
 				} else {
-					// Don't redirect if we're already on the auth page
-					// Needed because we pass in tokens from OAuth logins via URL fragments
-					if ($page.url.pathname !== '/auth') {
-						await goto(`/auth?redirect=${encodedUrl}`);
-					}
+					await goto(`/core/auth/login/?next=/kael?redirect=${encodedUrl}`);
 				}
 			}
 		} else {
 			// Redirect to /error when Backend Not Detected
-			await goto(`/error`);
+			await goto(`/kael/error`);
 		}
 
 		await tick();

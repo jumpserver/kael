@@ -5,7 +5,7 @@
 	import Evaluations from '$lib/components/admin/Evaluations.svelte';
 
 	onMount(() => {
-		goto('/admin/evaluations/leaderboard');
+		goto('/kael/admin/evaluations/leaderboard');
 	});
 </script>
 

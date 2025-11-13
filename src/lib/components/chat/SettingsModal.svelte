@@ -847,7 +847,7 @@
 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 						on:click={async (e) => {
 							e.preventDefault();
-							await goto('/admin/settings');
+							await goto('/kael/admin/settings');
 							show = false;
 						}}
 					>

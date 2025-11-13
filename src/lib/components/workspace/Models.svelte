@@ -110,7 +110,7 @@
 			id: `${model.id}-clone`,
 			name: `${model.name} (Clone)`
 		});
-		goto('/workspace/models/create');
+		goto('/kael/workspace/models/create');
 	};
 
 	const shareModelHandler = async (model) => {
@@ -422,7 +422,7 @@
 								model.user_id === $user?.id ||
 								model.access_control.write.group_ids.some((wg) => group_ids.includes(wg))
 							) {
-								goto(`/workspace/models/edit?id=${encodeURIComponent(model.id)}`);
+								goto(`/kael/workspace/models/edit?id=${encodeURIComponent(model.id)}`);
 							}
 						}}
 					>
@@ -502,7 +502,7 @@
 																	{model}
 																	editHandler={() => {
 																		goto(
-																			`/workspace/models/edit?id=${encodeURIComponent(model.id)}`
+																			`/kael/workspace/models/edit?id=${encodeURIComponent(model.id)}`
 																		);
 																	}}
 																	shareHandler={() => {

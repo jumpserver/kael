@@ -28,6 +28,7 @@
 		WEBUI_NAME
 	} from '$lib/stores';
 	import { onMount, getContext, tick, onDestroy } from 'svelte';
+	import { generateInitialsImage } from '$lib/utils';
 
 	const i18n = getContext('i18n');
 
@@ -533,7 +534,7 @@
 	id="sidebar-new-chat-button"
 	class="hidden"
 	on:click={() => {
-		goto('/');
+		goto('/kael');
 		newChatHandler();
 	}}
 />
@@ -585,7 +586,7 @@
 								e.stopImmediatePropagation();
 								e.preventDefault();
 
-								goto('/');
+								goto('/kael');
 								newChatHandler();
 							}}
 							aria-label={$i18n.t('New Chat')}
@@ -627,7 +628,7 @@
 									e.stopImmediatePropagation();
 									e.preventDefault();
 
-									goto('/notes');
+									goto('/kael/notes');
 									itemClickHandler();
 								}}
 								draggable="false"
@@ -651,7 +652,7 @@
 									e.stopImmediatePropagation();
 									e.preventDefault();
 
-									goto('/workspace');
+									goto('/kael/workspace');
 									itemClickHandler();
 								}}
 								aria-label={$i18n.t('Workspace')}
@@ -1236,7 +1237,7 @@
 							>
 								<div class=" self-center mr-3">
 									<img
-										src={$user?.profile_image_url}
+										src={generateInitialsImage($user?.name)}
 										class=" size-6 object-cover rounded-full"
 										alt={$i18n.t('Open User Profile Menu')}
 										aria-label={$i18n.t('Open User Profile Menu')}

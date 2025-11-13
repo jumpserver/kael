@@ -56,7 +56,7 @@
 				)
 			);
 
-			await goto('/admin/functions');
+			await goto('/kael/admin/functions');
 		}
 	};
 

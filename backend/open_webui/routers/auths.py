@@ -80,58 +80,16 @@ class SessionUserInfoResponse(SessionUserResponse):
     date_of_birth: Optional[datetime.date] = None
 
 
-@router.get("/", response_model=SessionUserInfoResponse)
+@router.get("/")
 async def get_session_user(
-    request: Request, response: Response, user=Depends(get_current_user)
+        request: Request, user=Depends(get_current_user)
 ):
-
-    auth_header = request.headers.get("Authorization")
-    auth_token = get_http_authorization_cred(auth_header)
-    token = auth_token.credentials
-    data = decode_token(token)
-
-    expires_at = None
-
-    if data:
-        expires_at = data.get("exp")
-
-        if (expires_at is not None) and int(time.time()) > expires_at:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=ERROR_MESSAGES.INVALID_TOKEN,
-            )
-
-        # Set the cookie token
-        response.set_cookie(
-            key="token",
-            value=token,
-            expires=(
-                datetime.datetime.fromtimestamp(expires_at, datetime.timezone.utc)
-                if expires_at
-                else None
-            ),
-            httponly=True,  # Ensures the cookie is not accessible via JavaScript
-            samesite=WEBUI_AUTH_COOKIE_SAME_SITE,
-            secure=WEBUI_AUTH_COOKIE_SECURE,
-        )
-
-    user_permissions = get_permissions(
-        user.id, request.app.state.config.USER_PERMISSIONS
-    )
-
     return {
-        "token": token,
-        "token_type": "Bearer",
-        "expires_at": expires_at,
+        "expires_at": None,
         "id": user.id,
-        "email": user.email,
         "name": user.name,
-        "role": user.role,
-        "profile_image_url": user.profile_image_url,
-        "bio": user.bio,
-        "gender": user.gender,
-        "date_of_birth": user.date_of_birth,
-        "permissions": user_permissions,
+        "role": 'admin',
+        "permissions": request.app.state.config.USER_PERMISSIONS,
     }
 
 

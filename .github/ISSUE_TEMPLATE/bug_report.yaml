@@ -143,7 +143,7 @@ body:
         3. Clone the Open WebUI repo (git clone ...).
         4. Use the Docker Compose file without modifications.
         5. Open browser Chrome 115.0 in incognito mode.
-        6. Go to http://localhost:8080 and log in with user "test@example.com".
+        6. Go to http://localhost:8083 and log in with user "test@example.com".
         7. Set the language to "English" and theme to "Dark".
         8. Attempt to connect to Ollama at "http://localhost:11434".
         9. Observe that the error message "Connection refused" appears at the top right.

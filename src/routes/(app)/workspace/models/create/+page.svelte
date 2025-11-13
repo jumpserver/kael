@@ -54,7 +54,7 @@
 					)
 				);
 				toast.success($i18n.t('Model created successfully!'));
-				await goto('/workspace/models');
+				await goto('/kael/workspace/models');
 			}
 		}
 	};

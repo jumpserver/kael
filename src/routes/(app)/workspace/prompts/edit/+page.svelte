@@ -22,7 +22,7 @@
 		if (prompt) {
 			toast.success($i18n.t('Prompt updated successfully'));
 			await prompts.set(await getPrompts(localStorage.token));
-			await goto('/workspace/prompts');
+			await goto('/kael/workspace/prompts');
 		}
 	};
 

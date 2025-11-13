@@ -55,7 +55,7 @@
 			await tick();
 			scrollToBottom();
 		} else {
-			goto('/');
+			goto('/kael');
 		}
 	};
 

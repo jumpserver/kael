@@ -132,7 +132,7 @@
 				id: `${_function.id}_clone`,
 				name: `${_function.name} (${$i18n.t('Clone')})`
 			});
-			goto('/admin/functions/create');
+			goto('/kael/admin/functions/create');
 		}
 	};
 
@@ -253,7 +253,7 @@
 		sessionStorage.function = JSON.stringify({
 			...func
 		});
-		goto('/admin/functions/create');
+		goto('/kael/admin/functions/create');
 	}}
 />
 
@@ -323,7 +323,7 @@
 						{/if}
 						<AddFunctionMenu
 							createHandler={() => {
-								goto('/admin/functions/create');
+								goto('/kael/admin/functions/create');
 							}}
 							importFromLinkHandler={() => {
 								showImportModal = true;
@@ -519,7 +519,7 @@
 									<FunctionMenu
 										{func}
 										editHandler={() => {
-											goto(`/admin/functions/edit?id=${encodeURIComponent(func.id)}`);
+											goto(`/kael/admin/functions/edit?id=${encodeURIComponent(func.id)}`);
 										}}
 										shareHandler={() => {
 											shareHandler(func);

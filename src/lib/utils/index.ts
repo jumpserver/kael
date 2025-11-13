@@ -357,38 +357,39 @@ export const compressImage = async (imageUrl, maxWidth, maxHeight) => {
 	});
 };
 export const generateInitialsImage = (name) => {
-	const canvas = document.createElement('canvas');
-	const ctx = canvas.getContext('2d');
-	canvas.width = 100;
-	canvas.height = 100;
-
-	if (!canvasPixelTest()) {
-		console.log(
-			'generateInitialsImage: failed pixel test, fingerprint evasion is likely. Using default image.'
-		);
-		return `${WEBUI_BASE_URL}/user.png`;
-	}
-
-	ctx.fillStyle = '#F39C12';
-	ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-	ctx.fillStyle = '#FFFFFF';
-	ctx.font = '40px Helvetica';
-	ctx.textAlign = 'center';
-	ctx.textBaseline = 'middle';
-
-	const sanitizedName = name.trim();
-	const initials =
-		sanitizedName.length > 0
-			? sanitizedName[0] +
-				(sanitizedName.split(' ').length > 1
-					? sanitizedName[sanitizedName.lastIndexOf(' ') + 1]
-					: '')
-			: '';
-
-	ctx.fillText(initials.toUpperCase(), canvas.width / 2, canvas.height / 2);
-
-	return canvas.toDataURL();
+	return '/kael/avatar.png';
+	// const canvas = document.createElement('canvas');
+	// const ctx = canvas.getContext('2d');
+	// canvas.width = 100;
+	// canvas.height = 100;
+	//
+	// if (!canvasPixelTest()) {
+	// 	console.log(
+	// 		'generateInitialsImage: failed pixel test, fingerprint evasion is likely. Using default image.'
+	// 	);
+	// 	return `${WEBUI_BASE_URL}/user.png`;
+	// }
+	//
+	// ctx.fillStyle = '#F39C12';
+	// ctx.fillRect(0, 0, canvas.width, canvas.height);
+	//
+	// ctx.fillStyle = '#FFFFFF';
+	// ctx.font = '40px Helvetica';
+	// ctx.textAlign = 'center';
+	// ctx.textBaseline = 'middle';
+	//
+	// const sanitizedName = name.trim();
+	// const initials =
+	// 	sanitizedName.length > 0
+	// 		? sanitizedName[0] +
+	// 			(sanitizedName.split(' ').length > 1
+	// 				? sanitizedName[sanitizedName.lastIndexOf(' ') + 1]
+	// 				: '')
+	// 		: '';
+	//
+	// ctx.fillText(initials.toUpperCase(), canvas.width / 2, canvas.height / 2);
+	//
+	// return canvas.toDataURL();
 };
 
 export const formatDate = (inputDate) => {

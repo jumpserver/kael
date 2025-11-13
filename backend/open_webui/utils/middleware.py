@@ -1,30 +1,23 @@
 import time
 import logging
 import sys
-import os
-import base64
 import textwrap
 
 import asyncio
-from aiocache import cached
-from typing import Any, Optional
-import random
+from typing import Optional
 import json
 import html
-import inspect
 import re
 import ast
 
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 
-
 from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse
-from starlette.responses import Response, StreamingResponse, JSONResponse
+from starlette.responses import StreamingResponse, JSONResponse
 
-
-from open_webui.models.oauth_sessions import OAuthSessions
+from open_webui.jms import chat_manager, CommandHandler, CommandRecord, ReplayHandler
 from open_webui.models.chats import Chats
 from open_webui.models.folders import Folders
 from open_webui.models.users import Users
@@ -63,13 +56,11 @@ from open_webui.utils.files import (
     get_image_url_from_base64,
 )
 
-
 from open_webui.models.users import UserModel
 from open_webui.models.functions import Functions
 from open_webui.models.models import Models
 
 from open_webui.retrieval.utils import get_sources_from_items
-
 
 from open_webui.utils.chat import generate_chat_completion
 from open_webui.utils.task import (
@@ -101,7 +92,6 @@ from open_webui.utils.code_interpreter import execute_code_jupyter
 from open_webui.utils.payload import apply_system_prompt_to_body
 from open_webui.utils.mcp.client import MCPClient
 
-
 from open_webui.config import (
     CACHE_DIR,
     DEFAULT_TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE,
@@ -119,11 +109,9 @@ from open_webui.env import (
 )
 from open_webui.constants import TASKS
 
-
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
-
 
 DEFAULT_REASONING_TAGS = [
     ("<think>", "</think>"),
@@ -140,13 +128,13 @@ DEFAULT_CODE_INTERPRETER_TAGS = [("<code_interpreter>", "</code_interpreter>")]
 
 
 def process_tool_result(
-    request,
-    tool_function_name,
-    tool_result,
-    tool_type,
-    direct_tool=False,
-    metadata=None,
-    user=None,
+        request,
+        tool_function_name,
+        tool_result,
+        tool_type,
+        direct_tool=False,
+        metadata=None,
+        user=None,
 ):
     tool_result_embeds = []
 
@@ -184,7 +172,7 @@ def process_tool_result(
             tool_result = tool_result.body.decode("utf-8", "replace")
 
     elif (tool_type == "external" and isinstance(tool_result, tuple)) or (
-        direct_tool and isinstance(tool_result, list) and len(tool_result) == 2
+            direct_tool and isinstance(tool_result, list) and len(tool_result) == 2
     ):
         tool_result, tool_response_headers = tool_result
 
@@ -283,7 +271,7 @@ def process_tool_result(
 
 
 async def chat_completion_tools_handler(
-    request: Request, body: dict, extra_params: dict, user: UserModel, models, tools
+        request: Request, body: dict, extra_params: dict, user: UserModel, models, tools
 ) -> tuple[dict, dict]:
     async def get_content_from_response(response) -> Optional[str]:
         content = None
@@ -359,7 +347,7 @@ async def chat_completion_tools_handler(
             return body, {}
 
         try:
-            content = content[content.find("{") : content.rfind("}") + 1]
+            content = content[content.find("{"): content.rfind("}") + 1]
             if not content:
                 raise Exception("No JSON object found in the response")
 
@@ -488,9 +476,9 @@ async def chat_completion_tools_handler(
                     )
 
                     if (
-                        tools[tool_function_name]
-                        .get("metadata", {})
-                        .get("file_handler", False)
+                            tools[tool_function_name]
+                                    .get("metadata", {})
+                                    .get("file_handler", False)
                     ):
                         skip_files = True
 
@@ -517,7 +505,7 @@ async def chat_completion_tools_handler(
 
 
 async def chat_memory_handler(
-    request: Request, form_data: dict, extra_params: dict, user
+        request: Request, form_data: dict, extra_params: dict, user
 ):
     try:
         results = await query_memory(
@@ -556,7 +544,7 @@ async def chat_memory_handler(
 
 
 async def chat_web_search_handler(
-    request: Request, form_data: dict, extra_params: dict, user
+        request: Request, form_data: dict, extra_params: dict, user
 ):
     event_emitter = extra_params["__event_emitter__"]
     await event_emitter(
@@ -649,7 +637,7 @@ async def chat_web_search_handler(
 
             if results.get("collection_names"):
                 for col_idx, collection_name in enumerate(
-                    results.get("collection_names")
+                        results.get("collection_names")
                 ):
                     files.append(
                         {
@@ -734,7 +722,7 @@ def get_last_images(message_list):
 
 
 async def chat_image_generation_handler(
-    request: Request, form_data: dict, extra_params: dict, user
+        request: Request, form_data: dict, extra_params: dict, user
 ):
     metadata = extra_params.get("__metadata__", {})
     chat_id = metadata.get("chat_id", None)
@@ -906,7 +894,7 @@ async def chat_image_generation_handler(
 
 
 async def chat_completion_files_handler(
-    request: Request, body: dict, extra_params: dict, user: UserModel
+        request: Request, body: dict, extra_params: dict, user: UserModel
 ) -> tuple[dict, dict[str, list]]:
     __event_emitter__ = extra_params["__event_emitter__"]
     sources = []
@@ -987,7 +975,7 @@ async def chat_completion_files_handler(
                         hybrid_bm25_weight=request.app.state.config.HYBRID_BM25_WEIGHT,
                         hybrid_search=request.app.state.config.ENABLE_RAG_HYBRID_SEARCH,
                         full_context=all_full_context
-                        or request.app.state.config.RAG_FULL_CONTEXT,
+                                     or request.app.state.config.RAG_FULL_CONTEXT,
                         user=user,
                     ),
                 )
@@ -1008,9 +996,9 @@ async def chat_completion_files_handler(
             for index, _ in enumerate(documents):
                 metadata = metadatas[index] if index < len(metadatas) else None
                 _id = (
-                    (metadata or {}).get("source")
-                    or (src_info or {}).get("id")
-                    or "N/A"
+                        (metadata or {}).get("source")
+                        or (src_info or {}).get("id")
+                        or "N/A"
                 )
                 unique_ids.add(_id)
 
@@ -1143,7 +1131,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     chat_id = metadata.get("chat_id", None)
     if chat_id and user:
         chat = Chats.get_chat_by_id_and_user_id(chat_id, user.id)
-        if chat and chat.folder_id:
+        if chat and chat['folder_id']:
             folder = Folders.get_folder_by_id_and_user_id(chat.folder_id, user.id)
 
             if folder and folder.data:
@@ -1305,15 +1293,15 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         for tool_id in tool_ids:
             if tool_id.startswith("server:mcp:"):
                 try:
-                    server_id = tool_id[len("server:mcp:") :]
+                    server_id = tool_id[len("server:mcp:"):]
 
                     mcp_server_connection = None
                     for (
-                        server_connection
+                            server_connection
                     ) in request.app.state.config.TOOL_SERVER_CONNECTIONS:
                         if (
-                            server_connection.get("type", "") == "mcp"
-                            and server_connection.get("info", {}).get("id") == server_id
+                                server_connection.get("type", "") == "mcp"
+                                and server_connection.get("info", {}).get("id") == server_id
                         ):
                             mcp_server_connection = server_connection
                             break
@@ -1367,7 +1355,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
                     tool_specs = await mcp_clients[server_id].list_tool_specs()
                     for tool_spec in tool_specs:
-
                         def make_tool_function(client, function_name):
                             async def tool_function(**kwargs):
                                 return await client.call_tool(
@@ -1468,22 +1455,22 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         for source in sources:
             if "document" in source:
                 for document_text, document_metadata in zip(
-                    source["document"], source["metadata"]
+                        source["document"], source["metadata"]
                 ):
                     source_name = source.get("source", {}).get("name", None)
                     source_id = (
-                        document_metadata.get("source", None)
-                        or source.get("source", {}).get("id", None)
-                        or "N/A"
+                            document_metadata.get("source", None)
+                            or source.get("source", {}).get("id", None)
+                            or "N/A"
                     )
 
                     if source_id not in citation_idx_map:
                         citation_idx_map[source_id] = len(citation_idx_map) + 1
 
                     context_string += (
-                        f'<source id="{citation_idx_map[source_id]}"'
-                        + (f' name="{source_name}"' if source_name else "")
-                        + f">{document_text}</source>\n"
+                            f'<source id="{citation_idx_map[source_id]}"'
+                            + (f' name="{source_name}"' if source_name else "")
+                            + f">{document_text}</source>\n"
                     )
 
         context_string = context_string.strip()
@@ -1506,7 +1493,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         source
         for source in sources
         if source.get("source", {}).get("name", "")
-        or source.get("source", {}).get("id", "")
+           or source.get("source", {}).get("id", "")
     ]
 
     if len(sources) > 0:
@@ -1525,11 +1512,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             }
         )
 
+    chat_id = metadata.get("chat_id", '')
+    asyncio.create_task(ReplayHandler(chat_id).write_input(user_message))
     return form_data, metadata, events
 
 
 async def process_chat_response(
-    request, response, form_data, user, metadata, model, events, tasks
+        request, response, form_data, user, metadata, model, events, tasks
 ):
     async def background_tasks_handler():
         message = None
@@ -1581,8 +1570,8 @@ async def process_chat_response(
         if message and "model" in message:
             if tasks and messages:
                 if (
-                    TASKS.FOLLOW_UP_GENERATION in tasks
-                    and tasks[TASKS.FOLLOW_UP_GENERATION]
+                        TASKS.FOLLOW_UP_GENERATION in tasks
+                        and tasks[TASKS.FOLLOW_UP_GENERATION]
                 ):
                     res = await generate_follow_ups(
                         request,
@@ -1608,8 +1597,8 @@ async def process_chat_response(
                             follow_ups_string = ""
 
                         follow_ups_string = follow_ups_string[
-                            follow_ups_string.find("{") : follow_ups_string.rfind("}")
-                            + 1
+                            follow_ups_string.find("{"): follow_ups_string.rfind("}")
+                                                         + 1
                         ]
 
                         try:
@@ -1638,7 +1627,7 @@ async def process_chat_response(
                             pass
 
                 if not metadata.get("chat_id", "").startswith(
-                    "local:"
+                        "local:"
                 ):  # Only update titles and tags for non-temp chats
                     if TASKS.TITLE_GENERATION in tasks:
                         user_message = get_last_user_message(messages)
@@ -1664,17 +1653,17 @@ async def process_chat_response(
                                     )
 
                                     title_string = (
-                                        response_message.get("content")
-                                        or response_message.get(
-                                            "reasoning_content",
-                                        )
-                                        or message.get("content", user_message)
+                                            response_message.get("content")
+                                            or response_message.get(
+                                        "reasoning_content",
+                                    )
+                                            or message.get("content", user_message)
                                     )
                                 else:
                                     title_string = ""
 
                                 title_string = title_string[
-                                    title_string.find("{") : title_string.rfind("}") + 1
+                                    title_string.find("{"): title_string.rfind("}") + 1
                                 ]
 
                                 try:
@@ -1734,7 +1723,7 @@ async def process_chat_response(
                                 tags_string = ""
 
                             tags_string = tags_string[
-                                tags_string.find("{") : tags_string.rfind("}") + 1
+                                tags_string.find("{"): tags_string.rfind("}") + 1
                             ]
 
                             try:
@@ -1755,12 +1744,12 @@ async def process_chat_response(
     event_emitter = None
     event_caller = None
     if (
-        "session_id" in metadata
-        and metadata["session_id"]
-        and "chat_id" in metadata
-        and metadata["chat_id"]
-        and "message_id" in metadata
-        and metadata["message_id"]
+            "session_id" in metadata
+            and metadata["session_id"]
+            and "chat_id" in metadata
+            and metadata["chat_id"]
+            and "message_id" in metadata
+            and metadata["message_id"]
     ):
         event_emitter = get_event_emitter(metadata)
         event_caller = get_event_call(metadata)
@@ -1775,7 +1764,7 @@ async def process_chat_response(
                         response = response[0]
 
                     if isinstance(response, JSONResponse) and isinstance(
-                        response.body, bytes
+                            response.body, bytes
                     ):
                         try:
                             response_data = json.loads(
@@ -1918,8 +1907,8 @@ async def process_chat_response(
 
     # Non standard response
     if not any(
-        content_type in response.headers["Content-Type"]
-        for content_type in ["text/event-stream", "application/x-ndjson"]
+            content_type in response.headers["Content-Type"]
+            for content_type in ["text/event-stream", "application/x-ndjson"]
     ):
         return response
 
@@ -1957,7 +1946,7 @@ async def process_chat_response(
         def split_content_and_whitespace(content):
             content_stripped = content.rstrip()
             original_whitespace = (
-                content[len(content_stripped) :]
+                content[len(content_stripped):]
                 if len(content) > len(content_stripped)
                 else ""
             )
@@ -2075,8 +2064,8 @@ async def process_chat_response(
                         if is_opening_code_block(content_stripped):
                             # Remove trailing backticks that would open a new block
                             content = (
-                                content_stripped.rstrip("`").rstrip()
-                                + original_whitespace
+                                    content_stripped.rstrip("`").rstrip()
+                                    + original_whitespace
                             )
                         else:
                             # Keep content as is - either closing backticks or no backticks
@@ -2189,7 +2178,7 @@ async def process_chat_response(
                                 : match.start()
                             ]  # Content before opening tag
                             after_tag = content[
-                                match.end() :
+                                match.end():
                             ]  # Content after opening tag
 
                             # Remove the start tag and after from the currently handling text block
@@ -2358,8 +2347,8 @@ async def process_chat_response(
             reasoning_tags = []
             if DETECT_REASONING_TAGS:
                 if (
-                    isinstance(reasoning_tags_param, list)
-                    and len(reasoning_tags_param) == 2
+                        isinstance(reasoning_tags_param, list)
+                        and len(reasoning_tags_param) == 2
                 ):
                     reasoning_tags = [
                         (reasoning_tags_param[0], reasoning_tags_param[1])
@@ -2432,7 +2421,7 @@ async def process_chat_response(
                             continue
 
                         # Remove the prefix
-                        data = data[len("data:") :].strip()
+                        data = data[len("data:"):].strip()
 
                         try:
                             data = json.loads(data)
@@ -2447,7 +2436,7 @@ async def process_chat_response(
 
                             if data:
                                 if "event" in data and not getattr(
-                                    request.state, "direct", False
+                                        request.state, "direct", False
                                 ):
                                     await event_emitter(data.get("event", {}))
 
@@ -2508,11 +2497,11 @@ async def process_chat_response(
                                                 # Check if the tool call already exists
                                                 current_response_tool_call = None
                                                 for (
-                                                    response_tool_call
+                                                        response_tool_call
                                                 ) in response_tool_calls:
                                                     if (
-                                                        response_tool_call.get("index")
-                                                        == tool_call_index
+                                                            response_tool_call.get("index")
+                                                            == tool_call_index
                                                     ):
                                                         current_response_tool_call = (
                                                             response_tool_call
@@ -2559,14 +2548,14 @@ async def process_chat_response(
                                     value = delta.get("content")
 
                                     reasoning_content = (
-                                        delta.get("reasoning_content")
-                                        or delta.get("reasoning")
-                                        or delta.get("thinking")
+                                            delta.get("reasoning_content")
+                                            or delta.get("reasoning")
+                                            or delta.get("thinking")
                                     )
                                     if reasoning_content:
                                         if (
-                                            not content_blocks
-                                            or content_blocks[-1]["type"] != "reasoning"
+                                                not content_blocks
+                                                or content_blocks[-1]["type"] != "reasoning"
                                         ):
                                             reasoning_block = {
                                                 "type": "reasoning",
@@ -2592,13 +2581,13 @@ async def process_chat_response(
 
                                     if value:
                                         if (
-                                            content_blocks
-                                            and content_blocks[-1]["type"]
-                                            == "reasoning"
-                                            and content_blocks[-1]
-                                            .get("attributes", {})
-                                            .get("type")
-                                            == "reasoning_content"
+                                                content_blocks
+                                                and content_blocks[-1]["type"]
+                                                == "reasoning"
+                                                and content_blocks[-1]
+                                                .get("attributes", {})
+                                                .get("type")
+                                                == "reasoning_content"
                                         ):
                                             reasoning_block = content_blocks[-1]
                                             reasoning_block["ended_at"] = time.time()
@@ -2624,7 +2613,7 @@ async def process_chat_response(
                                             )
 
                                         content_blocks[-1]["content"] = (
-                                            content_blocks[-1]["content"] + value
+                                                content_blocks[-1]["content"] + value
                                         )
 
                                         if DETECT_REASONING_TAGS:
@@ -2736,8 +2725,8 @@ async def process_chat_response(
                 tool_call_retries = 0
 
                 while (
-                    len(tool_calls) > 0
-                    and tool_call_retries < CHAT_RESPONSE_MAX_TOOL_CALL_RETRIES
+                        len(tool_calls) > 0
+                        and tool_call_retries < CHAT_RESPONSE_MAX_TOOL_CALL_RETRIES
                 ):
 
                     tool_call_retries += 1
@@ -2934,8 +2923,8 @@ async def process_chat_response(
                     retries = 0
 
                     while (
-                        content_blocks[-1]["type"] == "code_interpreter"
-                        and retries < MAX_RETRIES
+                            content_blocks[-1]["type"] == "code_interpreter"
+                            and retries < MAX_RETRIES
                     ):
 
                         await event_emitter(
@@ -2977,8 +2966,8 @@ async def process_chat_response(
                                     code = blocking_code + "\n" + code
 
                                 if (
-                                    request.app.state.config.CODE_INTERPRETER_ENGINE
-                                    == "pyodide"
+                                        request.app.state.config.CODE_INTERPRETER_ENGINE
+                                        == "pyodide"
                                 ):
                                     output = await event_caller(
                                         {
@@ -2993,8 +2982,8 @@ async def process_chat_response(
                                         }
                                     )
                                 elif (
-                                    request.app.state.config.CODE_INTERPRETER_ENGINE
-                                    == "jupyter"
+                                        request.app.state.config.CODE_INTERPRETER_ENGINE
+                                        == "jupyter"
                                 ):
                                     output = await execute_code_jupyter(
                                         request.app.state.config.CODE_INTERPRETER_JUPYTER_URL,
@@ -3002,13 +2991,13 @@ async def process_chat_response(
                                         (
                                             request.app.state.config.CODE_INTERPRETER_JUPYTER_AUTH_TOKEN
                                             if request.app.state.config.CODE_INTERPRETER_JUPYTER_AUTH
-                                            == "token"
+                                               == "token"
                                             else None
                                         ),
                                         (
                                             request.app.state.config.CODE_INTERPRETER_JUPYTER_AUTH_PASSWORD
                                             if request.app.state.config.CODE_INTERPRETER_JUPYTER_AUTH
-                                            == "password"
+                                               == "password"
                                             else None
                                         ),
                                         request.app.state.config.CODE_INTERPRETER_JUPYTER_TIMEOUT,
@@ -3114,6 +3103,17 @@ async def process_chat_response(
                     "content": serialize_content_blocks(content_blocks),
                     "title": title,
                 }
+
+                chat_id = metadata.get("chat_id", '')
+
+                chat_data = chat_manager.retrieve(chat_id)
+                user_message = get_last_user_message(form_data["messages"])
+
+                command_handler = CommandHandler(chat_id, chat_data['session_info'])
+                command_handler.command_record = CommandRecord(
+                    input=user_message, output=data['content']
+                )
+                asyncio.create_task(ReplayHandler(chat_id).write_input(data['content']))
 
                 if not ENABLE_REALTIME_CHAT_SAVE:
                     # Save message in the database

@@ -92,7 +92,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/general');
+				goto('/kael/admin/settings/general');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -119,7 +119,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/connections');
+				goto('/kael/admin/settings/connections');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -144,7 +144,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/models');
+				goto('/kael/admin/settings/models');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -171,7 +171,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/evaluations');
+				goto('/kael/admin/settings/evaluations');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -187,7 +187,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/tools');
+				goto('/kael/admin/settings/tools');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -214,7 +214,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/documents');
+				goto('/kael/admin/settings/documents');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -245,7 +245,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/web');
+				goto('/kael/admin/settings/web');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -270,7 +270,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/code-execution');
+				goto('/kael/admin/settings/code-execution');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -297,7 +297,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/interface');
+				goto('/kael/admin/settings/interface');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -324,7 +324,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/audio');
+				goto('/kael/admin/settings/audio');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -352,7 +352,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/images');
+				goto('/kael/admin/settings/images');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -379,7 +379,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/pipelines');
+				goto('/kael/admin/settings/pipelines');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -410,7 +410,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/settings/db');
+				goto('/kael/admin/settings/db');
 			}}
 		>
 			<div class=" self-center mr-2">

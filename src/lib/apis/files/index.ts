@@ -1,4 +1,5 @@
 import { WEBUI_API_BASE_URL } from '$lib/constants';
+import { apiFetch } from '$lib/net/apiFetch';
 import { splitStream } from '$lib/utils';
 
 export const uploadFile = async (token: string, file: File, metadata?: object | null) => {
@@ -10,7 +11,7 @@ export const uploadFile = async (token: string, file: File, metadata?: object | 
 
 	let error = null;
 
-	const res = await fetch(`${WEBUI_API_BASE_URL}/files/`, {
+	const res = await apiFetch(`${WEBUI_API_BASE_URL}/files/`, {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',
@@ -89,7 +90,7 @@ export const getFileProcessStatus = async (token: string, id: string) => {
 	queryParams.append('stream', 'true');
 
 	let error = null;
-	const res = await fetch(`${WEBUI_API_BASE_URL}/files/${id}/process/status?${queryParams}`, {
+	const res = await apiFetch(`${WEBUI_API_BASE_URL}/files/${id}/process/status?${queryParams}`, {
 		method: 'GET',
 		headers: {
 			Accept: 'application/json',
@@ -111,7 +112,7 @@ export const getFileProcessStatus = async (token: string, id: string) => {
 export const uploadDir = async (token: string) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_API_BASE_URL}/files/upload/dir`, {
+	const res = await apiFetch(`${WEBUI_API_BASE_URL}/files/upload/dir`, {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',
@@ -137,7 +138,7 @@ export const uploadDir = async (token: string) => {
 export const getFiles = async (token: string = '') => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_API_BASE_URL}/files/`, {
+	const res = await apiFetch(`${WEBUI_API_BASE_URL}/files/`, {
 		method: 'GET',
 		headers: {
 			Accept: 'application/json',
@@ -168,7 +169,7 @@ export const getFiles = async (token: string = '') => {
 export const getFileById = async (token: string, id: string) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_API_BASE_URL}/files/${id}`, {
+	const res = await apiFetch(`${WEBUI_API_BASE_URL}/files/${id}`, {
 		method: 'GET',
 		headers: {
 			Accept: 'application/json',
@@ -199,7 +200,7 @@ export const getFileById = async (token: string, id: string) => {
 export const updateFileDataContentById = async (token: string, id: string, content: string) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_API_BASE_URL}/files/${id}/data/content/update`, {
+	const res = await apiFetch(`${WEBUI_API_BASE_URL}/files/${id}/data/content/update`, {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',
@@ -233,7 +234,7 @@ export const updateFileDataContentById = async (token: string, id: string, conte
 export const getFileContentById = async (id: string) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_API_BASE_URL}/files/${id}/content`, {
+	const res = await apiFetch(`${WEBUI_API_BASE_URL}/files/${id}/content`, {
 		method: 'GET',
 		headers: {
 			Accept: 'application/json'
@@ -261,7 +262,7 @@ export const getFileContentById = async (id: string) => {
 export const deleteFileById = async (token: string, id: string) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_API_BASE_URL}/files/${id}`, {
+	const res = await apiFetch(`${WEBUI_API_BASE_URL}/files/${id}`, {
 		method: 'DELETE',
 		headers: {
 			Accept: 'application/json',
@@ -292,7 +293,7 @@ export const deleteFileById = async (token: string, id: string) => {
 export const deleteAllFiles = async (token: string) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_API_BASE_URL}/files/all`, {
+	const res = await apiFetch(`${WEBUI_API_BASE_URL}/files/all`, {
 		method: 'DELETE',
 		headers: {
 			Accept: 'application/json',
