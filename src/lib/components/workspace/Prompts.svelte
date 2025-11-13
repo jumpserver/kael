@@ -94,7 +94,7 @@
 		clonedPrompt.command = slugify(`${baseCommand} clone`);
 
 		sessionStorage.prompt = JSON.stringify(clonedPrompt);
-		goto('/workspace/prompts/create');
+		goto('/kael/workspace/prompts/create');
 	};
 
 	const exportHandler = async (prompt) => {

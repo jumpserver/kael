@@ -100,7 +100,6 @@
 				userSettings = {};
 			}
 		}
-
 		if (userSettings?.ui) {
 			settings.set(userSettings.ui);
 		}
@@ -147,7 +146,7 @@
 
 	onMount(async () => {
 		if ($user === undefined || $user === null) {
-			await goto('/auth');
+			await goto('/kael/auth');
 			return;
 		}
 		if (!['user', 'admin'].includes($user?.role)) {
@@ -159,9 +158,10 @@
 			checkLocalDBChats(),
 			setBanners(),
 			setTools(),
-			setUserSettings(async () => {
-				await Promise.all([setModels(), setToolServers()]);
-			})
+			// TODO: Re-enable after fixing performance issues
+			// setUserSettings(async () => {
+			// 	await Promise.all([setModels(), setToolServers()]);
+			// })
 		]);
 
 		// Helper function to check if the pressed keys match the shortcut definition
@@ -242,7 +242,7 @@
 					} else {
 						temporaryChatEnabled.set(!$temporaryChatEnabled);
 					}
-					await goto('/');
+					await goto('/kael/');
 					setTimeout(() => {
 						document.getElementById('new-chat-button')?.click();
 					}, 0);
@@ -303,7 +303,8 @@
 </script>
 
 <SettingsModal bind:show={$showSettings} />
-<ChangelogModal bind:show={$showChangelog} />
+<!--TODO -->
+<!--<ChangelogModal bind:show={$showChangelog} />-->
 
 {#if version && compareVersion(version.latest, version.current) && ($settings?.showUpdateToast ?? true)}
 	<div class=" absolute bottom-8 right-8 z-50" in:fade={{ duration: 100 }}>

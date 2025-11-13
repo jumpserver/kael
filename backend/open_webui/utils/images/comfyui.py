@@ -196,7 +196,7 @@ async def comfyui_create_image(
         ws.connect(f"{ws_url}/ws?clientId={client_id}", header=headers)
         log.info("WebSocket connection established.")
     except Exception as e:
-        log.exception(f"Failed to connect to WebSocket server: {e}")
+        log.exception(f"Failed to connect to WebSocket {e}")
         return None
 
     try:

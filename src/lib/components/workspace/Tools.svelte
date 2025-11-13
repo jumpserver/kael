@@ -117,7 +117,7 @@
 				id: `${_tool.id}_clone`,
 				name: `${_tool.name} (Clone)`
 			});
-			goto('/workspace/tools/create');
+			goto('/kael/workspace/tools/create');
 		}
 	};
 
@@ -197,7 +197,7 @@
 		sessionStorage.tool = JSON.stringify({
 			...tool
 		});
-		goto('/workspace/tools/create');
+		goto('/kael/workspace/tools/create');
 	}}
 	loadUrlHandler={async (url) => {
 		return await loadToolByUrl(localStorage.token, url);
@@ -271,7 +271,7 @@
 				{#if $user?.role === 'admin'}
 					<AddToolMenu
 						createHandler={() => {
-							goto('/workspace/tools/create');
+							goto('/kael/workspace/tools/create');
 						}}
 						importFromLinkHandler={() => {
 							showImportModal = true;
@@ -458,7 +458,7 @@
 
 									<ToolMenu
 										editHandler={() => {
-											goto(`/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`);
+											goto(`/kael/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`);
 										}}
 										shareHandler={() => {
 											shareHandler(tool);

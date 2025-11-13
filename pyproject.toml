@@ -60,7 +60,7 @@ dependencies = [
     "fake-useragent==2.2.0",
     "chromadb==1.0.20",
     "opensearch-py==2.8.0",
-    
+
     "transformers",
     "sentence-transformers==5.1.1",
     "accelerate",
@@ -111,8 +111,9 @@ dependencies = [
 
     "azure-identity==1.25.0",
     "azure-storage-blob==12.24.1",
-
+    "protobuf==5.29.5",
     "ldap3==2.9.1",
+    "grpcio==1.74.0",
 ]
 readme = "README.md"
 requires-python = ">= 3.11, < 3.13.0a1"
@@ -127,16 +128,16 @@ classifiers = [
     "Topic :: Multimedia",
 ]
 
-[project.optional-dependencies]
-postgres = [
-    "psycopg2-binary==2.9.10",
-    "pgvector==0.4.1",
-]
+#[project.optional-dependencies]
+#postgres = [
+#    "psycopg2-binary==2.9.10",
+#    "pgvector==0.4.1",
+#]
 
 all = [
     "pymongo",
-    "psycopg2-binary==2.9.9",
-    "pgvector==0.4.0",
+#    "psycopg2-binary==2.9.9",
+#    "pgvector==0.4.0",
     "moto[s3]>=5.0.26",
     "gcp-storage-emulator>=2024.8.3",
     "docker~=7.1.0",
@@ -154,8 +155,8 @@ all = [
     "firecrawl-py==4.5.0",
 ]
 
-[project.scripts]
-open-webui = "open_webui:app"
+#[project.scripts]
+#open-webui = "open_webui:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -187,7 +188,7 @@ exclude = [
     "webui.db",
     "chroma.sqlite3",
 ]
-force-include = { "CHANGELOG.md" = "open_webui/CHANGELOG.md", build = "open_webui/frontend" }
+#force-include = { "CHANGELOG.md" = "open_webui/CHANGELOG.md", build = "open_webui/frontend" }
 
 [tool.codespell]
 # Ref: https://github.com/codespell-project/codespell#using-a-config-file

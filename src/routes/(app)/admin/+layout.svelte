@@ -14,7 +14,7 @@
 
 	onMount(async () => {
 		if ($user?.role !== 'admin') {
-			await goto('/');
+			await goto('/kael/');
 		}
 		loaded = true;
 	});

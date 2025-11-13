@@ -3,6 +3,7 @@ import { defineConfig } from 'vite';
 
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 
+// @ts-ignore
 export default defineConfig({
 	plugins: [
 		sveltekit(),
@@ -25,6 +26,30 @@ export default defineConfig({
 	},
 	worker: {
 		format: 'es'
+	},
+	server: {
+		port: 5173,
+		proxy: {
+			'^/kael/api/': {
+				target: 'http://localhost:8083',
+				changeOrigin: true
+				// 如果后端实际上是 /api 而不是 /kael/api，添加：
+				// rewrite: p => p.replace(/^\/kael\/api\//, '/api/')
+			},
+			'/kael/openai': {
+				target: 'http://localhost:8083',
+				changeOrigin: true
+			},
+			'/kael/ollama': {
+				target: 'http://localhost:8083',
+				changeOrigin: true
+			},
+			'/kael/ws': {
+				target: 'http://localhost:8083',
+				ws: true,
+				changeOrigin: true
+			}
+		}
 	},
 	esbuild: {
 		pure: process.env.ENV === 'dev' ? [] : ['console.log', 'console.debug', 'console.error']

@@ -38,7 +38,6 @@
 
 	const setSessionUser = async (sessionUser, redirectPath: string | null = null) => {
 		if (sessionUser) {
-			console.log(sessionUser);
 			toast.success($i18n.t(`You're now logged in.`));
 			if (sessionUser.token) {
 				localStorage.token = sessionUser.token;
@@ -48,7 +47,7 @@
 			await config.set(await getBackendConfig());
 
 			if (!redirectPath) {
-				redirectPath = $page.url.searchParams.get('redirect') || '/';
+				redirectPath = $page.url.searchParams.get('redirect') || '/kael';
 			}
 
 			goto(redirectPath);
@@ -156,7 +155,8 @@
 	onMount(async () => {
 		const redirectPath = $page.url.searchParams.get('redirect');
 		if ($user !== undefined) {
-			goto(redirectPath || '/');
+			const redirectPath = "/core/auth/login/?next=/kael"
+			goto(redirectPath);
 		} else {
 			if (redirectPath) {
 				localStorage.setItem('redirectPath', redirectPath);

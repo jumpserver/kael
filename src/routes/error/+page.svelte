@@ -9,7 +9,7 @@
 
 	onMount(async () => {
 		if ($config) {
-			await goto('/');
+			await goto('/kael/');
 		}
 
 		loaded = true;

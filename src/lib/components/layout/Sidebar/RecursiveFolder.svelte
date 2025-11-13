@@ -500,7 +500,7 @@
 							await selectedFolder.set(folder);
 						}
 
-						await goto('/');
+						await goto('/kael/');
 
 						if ($mobile) {
 							showSidebar.set(!$showSidebar);

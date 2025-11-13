@@ -107,7 +107,7 @@
 		});
 
 		if (res) {
-			goto(`/c/${res.id}`);
+			goto(`/kael/c/${res.id}`);
 
 			currentChatPage.set(1);
 			await chats.set(await getChatList(localStorage.token, $currentChatPage));
@@ -124,7 +124,7 @@
 		if (res) {
 			tags.set(await getAllTags(localStorage.token));
 			if ($chatId === id) {
-				await goto('/');
+				await goto('/kael/');
 
 				await chatId.set('');
 				await tick();
@@ -407,7 +407,7 @@
 				: selected
 					? 'bg-gray-100 dark:bg-gray-950 selected'
 					: ' group-hover:bg-gray-100 dark:group-hover:bg-gray-950'}  whitespace-nowrap text-ellipsis"
-			href="/c/{id}"
+			href="/kael/c/{id}"
 			on:click={() => {
 				dispatch('select');
 

@@ -1,18 +1,20 @@
 import logging
-import json
 import time
 import uuid
 from typing import Optional
+from fastapi import Request
 
+from open_webui.jms import chat_manager
+from open_webui.jms import SessionHandler
+from open_webui.jms.wisp.protobuf.common_pb2 import User
 from open_webui.internal.db import Base, get_db
-from open_webui.models.tags import TagModel, Tag, Tags
+from open_webui.models.tags import TagModel, Tags
 from open_webui.models.folders import Folders
 from open_webui.env import SRC_LOG_LEVELS
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import BigInteger, Boolean, Column, String, Text, JSON, Index
-from sqlalchemy import or_, func, select, and_, text
-from sqlalchemy.sql import exists
+from sqlalchemy import or_, and_, text
 from sqlalchemy.sql.expression import bindparam
 
 ####################
@@ -112,6 +114,7 @@ class ChatResponse(BaseModel):
     archived: bool
     pinned: Optional[bool] = False
     meta: dict = {}
+    session_info: dict = {}
     folder_id: Optional[str] = None
 
 
@@ -123,33 +126,46 @@ class ChatTitleIdResponse(BaseModel):
 
 
 class ChatTable:
-    def insert_new_chat(self, user_id: str, form_data: ChatForm) -> Optional[ChatModel]:
-        with get_db() as db:
-            id = str(uuid.uuid4())
-            chat = ChatModel(
-                **{
-                    "id": id,
-                    "user_id": user_id,
-                    "title": (
-                        form_data.chat["title"]
-                        if "title" in form_data.chat
-                        else "New Chat"
-                    ),
-                    "chat": form_data.chat,
-                    "folder_id": form_data.folder_id,
-                    "created_at": int(time.time()),
-                    "updated_at": int(time.time()),
-                }
-            )
+    @staticmethod
+    def get_ip(request: Request):
+        client_host, client_port = request.client or (None, None)
+        ip = client_host
 
-            result = Chat(**chat.model_dump())
-            db.add(result)
-            db.commit()
-            db.refresh(result)
-            return ChatModel.model_validate(result) if result else None
+        xff = request.headers.get("x-forwarded-for")
+        xri = request.headers.get("x-real-ip")
+        if xff:
+            ip = xff.split(",")[0].strip()
+        elif xri:
+            ip = xri.strip()
+        return ip
 
+    def insert_new_chat(self, form_data: ChatForm, sid: str, request: Request, user: User):
+        ip = self.get_ip(request)
+        session_handler = SessionHandler(sid=sid, ip=ip, user=user)
+        chat_model = form_data.chat.get("models", [None])[0] or ''
+        session = session_handler.create_session(chat_model)
+
+        data = {
+            'id': session.id,
+            'user_id': session.user_id,
+            'title': form_data.chat['title'] if 'title' in form_data.chat else 'New Chat',
+            'chat': form_data.chat,
+            'socket_id': sid,
+            'folder_id': form_data.folder_id or '',
+            'session_info': {
+                'org_id': session.org_id,
+                'asset': session.asset,
+                'account': session.account,
+                'user': session.user
+            }
+        }
+
+        chat = chat_manager.create(data)
+        return chat
+
+    # TODO
     def import_chat(
-        self, user_id: str, form_data: ChatImportForm
+            self, user_id: str, form_data: ChatImportForm
     ) -> Optional[ChatModel]:
         with get_db() as db:
             id = str(uuid.uuid4())
@@ -185,32 +201,29 @@ class ChatTable:
             db.refresh(result)
             return ChatModel.model_validate(result) if result else None
 
-    def update_chat_by_id(self, id: str, chat: dict) -> Optional[ChatModel]:
-        try:
-            with get_db() as db:
-                chat_item = db.get(Chat, id)
-                chat_item.chat = chat
-                chat_item.title = chat["title"] if "title" in chat else "New Chat"
-                chat_item.updated_at = int(time.time())
-                db.commit()
-                db.refresh(chat_item)
+    @staticmethod
+    def update_chat_by_id(_id: str, chat: dict) -> Optional[ChatModel]:
+        chat_dict = chat_manager.update(
+            _id,
+            {
+                'chat': chat,
+                'title': chat["title"] if "title" in chat else "New Chat",
+            }
+        )
+        return chat_dict
 
-                return ChatModel.model_validate(chat_item)
-        except Exception:
+    def update_chat_title_by_id(self, _id: str, title: str) -> Optional[ChatModel]:
+        chat_dict = self.get_chat_by_id(_id)
+        if chat_dict is None:
             return None
 
-    def update_chat_title_by_id(self, id: str, title: str) -> Optional[ChatModel]:
-        chat = self.get_chat_by_id(id)
-        if chat is None:
-            return None
-
-        chat = chat.chat
+        chat = chat_dict['chat']
         chat["title"] = title
+        return self.update_chat_by_id(_id, chat)
 
-        return self.update_chat_by_id(id, chat)
-
+    # TODO
     def update_chat_tags_by_id(
-        self, id: str, tags: list[str], user
+            self, id: str, tags: list[str], user
     ) -> Optional[ChatModel]:
         chat = self.get_chat_by_id(id)
         if chat is None:
@@ -229,41 +242,41 @@ class ChatTable:
             self.add_chat_tag_by_id_and_user_id_and_tag_name(id, user.id, tag_name)
         return self.get_chat_by_id(id)
 
-    def get_chat_title_by_id(self, id: str) -> Optional[str]:
-        chat = self.get_chat_by_id(id)
-        if chat is None:
+    def get_chat_title_by_id(self, _id: str) -> Optional[str]:
+        chat_dict = self.get_chat_by_id(_id)
+        if chat_dict is None:
             return None
 
-        return chat.chat.get("title", "New Chat")
+        return chat_dict['chat'].get("title", "New Chat")
 
-    def get_messages_map_by_chat_id(self, id: str) -> Optional[dict]:
-        chat = self.get_chat_by_id(id)
-        if chat is None:
+    def get_messages_map_by_chat_id(self, _id: str) -> Optional[dict]:
+        chat_dict = self.get_chat_by_id(_id)
+        if chat_dict is None:
             return None
 
-        return chat.chat.get("history", {}).get("messages", {}) or {}
+        return chat_dict['chat'].get("history", {}).get("messages", {}) or {}
 
     def get_message_by_id_and_message_id(
-        self, id: str, message_id: str
+            self, _id: str, message_id: str
     ) -> Optional[dict]:
-        chat = self.get_chat_by_id(id)
-        if chat is None:
+        chat_dict = self.get_chat_by_id(_id)
+        if chat_dict is None:
             return None
 
-        return chat.chat.get("history", {}).get("messages", {}).get(message_id, {})
+        return chat_dict['chat'].get("history", {}).get("messages", {}).get(message_id, {})
 
     def upsert_message_to_chat_by_id_and_message_id(
-        self, id: str, message_id: str, message: dict
-    ) -> Optional[ChatModel]:
-        chat = self.get_chat_by_id(id)
-        if chat is None:
+            self, _id: str, message_id: str, message: dict
+    ):
+        chat_dict = self.get_chat_by_id(_id)
+        if chat_dict is None:
             return None
 
         # Sanitize message content for null characters before upserting
         if isinstance(message.get("content"), str):
             message["content"] = message["content"].replace("\x00", "")
 
-        chat = chat.chat
+        chat = chat_dict['chat']
         history = chat.get("history", {})
 
         if message_id in history.get("messages", {}):
@@ -277,16 +290,16 @@ class ChatTable:
         history["currentId"] = message_id
 
         chat["history"] = history
-        return self.update_chat_by_id(id, chat)
+        return self.update_chat_by_id(_id, chat)
 
     def add_message_status_to_chat_by_id_and_message_id(
-        self, id: str, message_id: str, status: dict
-    ) -> Optional[ChatModel]:
-        chat = self.get_chat_by_id(id)
-        if chat is None:
+            self, _id: str, message_id: str, status: dict
+    ):
+        chat_dict = self.get_chat_by_id(_id)
+        if chat_dict is None:
             return None
 
-        chat = chat.chat
+        chat = chat_dict['chat']
         history = chat.get("history", {})
 
         if message_id in history.get("messages", {}):
@@ -295,8 +308,9 @@ class ChatTable:
             history["messages"][message_id]["statusHistory"] = status_history
 
         chat["history"] = history
-        return self.update_chat_by_id(id, chat)
+        return self.update_chat_by_id(_id, chat)
 
+    # TODO
     def insert_shared_chat_by_chat_id(self, chat_id: str) -> Optional[ChatModel]:
         with get_db() as db:
             # Get the existing chat to share
@@ -332,6 +346,7 @@ class ChatTable:
             db.commit()
             return shared_chat if (shared_result and result) else None
 
+    # TODO
     def update_shared_chat_by_chat_id(self, chat_id: str) -> Optional[ChatModel]:
         try:
             with get_db() as db:
@@ -356,6 +371,7 @@ class ChatTable:
         except Exception:
             return None
 
+    # TODO
     def delete_shared_chat_by_chat_id(self, chat_id: str) -> bool:
         try:
             with get_db() as db:
@@ -366,206 +382,163 @@ class ChatTable:
         except Exception:
             return False
 
-    def unarchive_all_chats_by_user_id(self, user_id: str) -> bool:
+    @staticmethod
+    def unarchive_all_chats_by_user_id(user_id: str) -> bool:
         try:
-            with get_db() as db:
-                db.query(Chat).filter_by(user_id=user_id).update({"archived": False})
-                db.commit()
-                return True
+            chat_manager.update(data={"archived": False}, query={"user_id": user_id})
+            return True
         except Exception:
             return False
 
+    @staticmethod
     def update_chat_share_id_by_id(
-        self, id: str, share_id: Optional[str]
-    ) -> Optional[ChatModel]:
-        try:
-            with get_db() as db:
-                chat = db.get(Chat, id)
-                chat.share_id = share_id
-                db.commit()
-                db.refresh(chat)
-                return ChatModel.model_validate(chat)
-        except Exception:
-            return None
+            _id: str, share_id: Optional[str]
+    ):
+        data = {'share_id': share_id}
+        chat_dict = chat_manager.update(_id, data)
+        return chat_dict
 
-    def toggle_chat_pinned_by_id(self, id: str) -> Optional[ChatModel]:
-        try:
-            with get_db() as db:
-                chat = db.get(Chat, id)
-                chat.pinned = not chat.pinned
-                chat.updated_at = int(time.time())
-                db.commit()
-                db.refresh(chat)
-                return ChatModel.model_validate(chat)
-        except Exception:
-            return None
+    def toggle_chat_pinned_by_id(self, _id: str):
+        chat_dict = self.get_chat_by_id(_id)
+        pinned = not chat_dict.get('pinned', False)
+        data = {'pinned': pinned}
+        return chat_manager.update(_id, data)
 
-    def toggle_chat_archive_by_id(self, id: str) -> Optional[ChatModel]:
-        try:
-            with get_db() as db:
-                chat = db.get(Chat, id)
-                chat.archived = not chat.archived
-                chat.updated_at = int(time.time())
-                db.commit()
-                db.refresh(chat)
-                return ChatModel.model_validate(chat)
-        except Exception:
-            return None
+    def toggle_chat_archive_by_id(self, _id: str):
+        chat_dict = self.get_chat_by_id(_id)
+        archived = not chat_dict.get('archived', False)
+        data = {'archived': archived}
+        chat_dict = chat_manager.update(_id, data)
+        return chat_dict
 
-    def archive_all_chats_by_user_id(self, user_id: str) -> bool:
+    @staticmethod
+    def archive_all_chats_by_user_id(user_id: str) -> bool:
         try:
-            with get_db() as db:
-                db.query(Chat).filter_by(user_id=user_id).update({"archived": True})
-                db.commit()
-                return True
+            chat_manager.update(data={"archived": True}, query={"user_id": user_id})
+            return True
         except Exception:
             return False
 
+    @staticmethod
     def get_archived_chat_list_by_user_id(
-        self,
-        user_id: str,
-        filter: Optional[dict] = None,
-        skip: int = 0,
-        limit: int = 50,
-    ) -> list[ChatModel]:
+            user_id: str,
+            filter: Optional[dict] = None,
+            skip: int = 0,
+            limit: int = 50,
+    ) -> list:
+        query = {
+            'user_id': user_id,
+            'archived': True,
+            'offset': skip,
+            'limit': limit,
+        }
 
-        with get_db() as db:
-            query = db.query(Chat).filter_by(user_id=user_id, archived=True)
+        if filter:
+            query_key = filter.get("query")
+            if query_key:
+                query['search'] = query_key
 
-            if filter:
-                query_key = filter.get("query")
-                if query_key:
-                    query = query.filter(Chat.title.ilike(f"%{query_key}%"))
+            order_by = filter.get("order_by")
+            direction = filter.get("direction")
 
-                order_by = filter.get("order_by")
-                direction = filter.get("direction")
+            if order_by and direction:
+                if direction.lower() == "asc":
+                    query['ordering'] = 'date_updated'
 
-                if order_by and direction:
-                    if not getattr(Chat, order_by, None):
-                        raise ValueError("Invalid order_by field")
+        resp = chat_manager.list(query=query)
+        return resp['results']
 
-                    if direction.lower() == "asc":
-                        query = query.order_by(getattr(Chat, order_by).asc())
-                    elif direction.lower() == "desc":
-                        query = query.order_by(getattr(Chat, order_by).desc())
-                    else:
-                        raise ValueError("Invalid direction for ordering")
-            else:
-                query = query.order_by(Chat.updated_at.desc())
-
-            if skip:
-                query = query.offset(skip)
-            if limit:
-                query = query.limit(limit)
-
-            all_chats = query.all()
-            return [ChatModel.model_validate(chat) for chat in all_chats]
-
+    @staticmethod
     def get_chat_list_by_user_id(
-        self,
-        user_id: str,
-        include_archived: bool = False,
-        filter: Optional[dict] = None,
-        skip: int = 0,
-        limit: int = 50,
-    ) -> list[ChatModel]:
-        with get_db() as db:
-            query = db.query(Chat).filter_by(user_id=user_id)
-            if not include_archived:
-                query = query.filter_by(archived=False)
+            user_id: str,
+            include_archived: bool = False,
+            filter: Optional[dict] = None,
+            skip: int = 0,
+            limit: int = 50,
+    ) -> list:
+        query = {
+            'user_id': user_id,
+            'offset': skip,
+            'limit': limit,
+        }
 
-            if filter:
-                query_key = filter.get("query")
-                if query_key:
-                    query = query.filter(Chat.title.ilike(f"%{query_key}%"))
+        if not include_archived:
+            query['archived'] = False
 
-                order_by = filter.get("order_by")
-                direction = filter.get("direction")
+        if filter:
+            query_key = filter.get("query")
+            if query_key:
+                query['search'] = query_key
 
-                if order_by and direction and getattr(Chat, order_by):
-                    if direction.lower() == "asc":
-                        query = query.order_by(getattr(Chat, order_by).asc())
-                    elif direction.lower() == "desc":
-                        query = query.order_by(getattr(Chat, order_by).desc())
-                    else:
-                        raise ValueError("Invalid direction for ordering")
-            else:
-                query = query.order_by(Chat.updated_at.desc())
+            order_by = filter.get("order_by")
+            direction = filter.get("direction")
 
-            if skip:
-                query = query.offset(skip)
-            if limit:
-                query = query.limit(limit)
+            if order_by and direction:
+                if direction.lower() == "asc":
+                    query['ordering'] = 'date_updated'
 
-            all_chats = query.all()
-            return [ChatModel.model_validate(chat) for chat in all_chats]
+        resp = chat_manager.list(query=query)
+        return resp['results']
 
+    @staticmethod
     def get_chat_title_id_list_by_user_id(
-        self,
-        user_id: str,
-        include_archived: bool = False,
-        include_folders: bool = False,
-        include_pinned: bool = False,
-        skip: Optional[int] = None,
-        limit: Optional[int] = None,
+            user_id: str,
+            include_archived: bool = False,
+            include_folders: bool = False,
+            include_pinned: bool = False,
+            skip: Optional[int] = 0,
+            limit: Optional[int] = 10,
     ) -> list[ChatTitleIdResponse]:
-        with get_db() as db:
-            query = db.query(Chat).filter_by(user_id=user_id)
+        query = {
+            'user_id': user_id,
+            'offset': skip,
+            'limit': limit,
+            'fields_size': 'mini'
+        }
 
-            if not include_folders:
-                query = query.filter_by(folder_id=None)
+        if not include_folders:
+            query['folder_id'] = None
 
-            if not include_pinned:
-                query = query.filter(or_(Chat.pinned == False, Chat.pinned == None))
+        if not include_pinned:
+            query['pinned'] = False
 
-            if not include_archived:
-                query = query.filter_by(archived=False)
+        if not include_archived:
+            query['archived'] = False
 
-            query = query.order_by(Chat.updated_at.desc()).with_entities(
-                Chat.id, Chat.title, Chat.updated_at, Chat.created_at
+        resp = chat_manager.list(query=query)
+        filtered = resp['results']
+        return [
+            ChatTitleIdResponse.model_validate(
+                {
+                    "id": chat['id'],
+                    "title": chat['title'],
+                    "updated_at": chat['updated_at'],
+                    "created_at": chat['created_at'],
+                }
             )
+            for chat in filtered
+        ]
 
-            if skip:
-                query = query.offset(skip)
-            if limit:
-                query = query.limit(limit)
-
-            all_chats = query.all()
-
-            # result has to be destructured from sqlalchemy `row` and mapped to a dict since the `ChatModel`is not the returned dataclass.
-            return [
-                ChatTitleIdResponse.model_validate(
-                    {
-                        "id": chat[0],
-                        "title": chat[1],
-                        "updated_at": chat[2],
-                        "created_at": chat[3],
-                    }
-                )
-                for chat in all_chats
-            ]
-
+    @staticmethod
     def get_chat_list_by_chat_ids(
-        self, chat_ids: list[str], skip: int = 0, limit: int = 50
-    ) -> list[ChatModel]:
-        with get_db() as db:
-            all_chats = (
-                db.query(Chat)
-                .filter(Chat.id.in_(chat_ids))
-                .filter_by(archived=False)
-                .order_by(Chat.updated_at.desc())
-                .all()
-            )
-            return [ChatModel.model_validate(chat) for chat in all_chats]
+            chat_ids: list[str], skip: int = 0, limit: int = 50
+    ) -> list:
+        query = {
+            'archived': False,
+            'ids': ','.join(chat_ids),
+            'offset': skip,
+            'limit': limit,
+        }
 
-    def get_chat_by_id(self, id: str) -> Optional[ChatModel]:
-        try:
-            with get_db() as db:
-                chat = db.get(Chat, id)
-                return ChatModel.model_validate(chat)
-        except Exception:
-            return None
+        resp = chat_manager.list(query=query)
+        filtered = resp['results']
+        return filtered
 
+    @staticmethod
+    def get_chat_by_id(_id: str):
+        return chat_manager.retrieve(_id)
+
+    # TODO
     def get_chat_by_share_id(self, id: str) -> Optional[ChatModel]:
         try:
             with get_db() as db:
@@ -580,57 +553,50 @@ class ChatTable:
         except Exception:
             return None
 
-    def get_chat_by_id_and_user_id(self, id: str, user_id: str) -> Optional[ChatModel]:
-        try:
-            with get_db() as db:
-                chat = db.query(Chat).filter_by(id=id, user_id=user_id).first()
-                return ChatModel.model_validate(chat)
-        except Exception:
-            return None
+    def get_chat_by_id_and_user_id(self, _id: str, user_id: str):
+        return self.get_chat_by_id(_id)
+        # try:
+        #     with get_db() as db:
+        #         chat = db.query(Chat).filter_by(id=id, user_id=user_id).first()
+        #         return ChatModel.model_validate(chat)
+        # except Exception:
+        #     return None
 
-    def get_chats(self, skip: int = 0, limit: int = 50) -> list[ChatModel]:
-        with get_db() as db:
-            all_chats = (
-                db.query(Chat)
-                # .limit(limit).offset(skip)
-                .order_by(Chat.updated_at.desc())
-            )
-            return [ChatModel.model_validate(chat) for chat in all_chats]
+    @staticmethod
+    def get_chats(skip: int = 0, limit: int = 50):
+        return chat_manager.list()
 
-    def get_chats_by_user_id(self, user_id: str) -> list[ChatModel]:
-        with get_db() as db:
-            all_chats = (
-                db.query(Chat)
-                .filter_by(user_id=user_id)
-                .order_by(Chat.updated_at.desc())
-            )
-            return [ChatModel.model_validate(chat) for chat in all_chats]
+    @staticmethod
+    def get_chats_by_user_id(user_id: str):
+        query = {
+            'user_id': user_id,
+        }
+        return chat_manager.list(query=query)
 
-    def get_pinned_chats_by_user_id(self, user_id: str) -> list[ChatModel]:
-        with get_db() as db:
-            all_chats = (
-                db.query(Chat)
-                .filter_by(user_id=user_id, pinned=True, archived=False)
-                .order_by(Chat.updated_at.desc())
-            )
-            return [ChatModel.model_validate(chat) for chat in all_chats]
+    @staticmethod
+    def get_pinned_chats_by_user_id(user_id: str):
+        query = {
+            'user_id': user_id,
+            'pinned': True,
+            'archived': False,
+        }
+        return chat_manager.list(query=query)
 
-    def get_archived_chats_by_user_id(self, user_id: str) -> list[ChatModel]:
-        with get_db() as db:
-            all_chats = (
-                db.query(Chat)
-                .filter_by(user_id=user_id, archived=True)
-                .order_by(Chat.updated_at.desc())
-            )
-            return [ChatModel.model_validate(chat) for chat in all_chats]
+    @staticmethod
+    def get_archived_chats_by_user_id(user_id: str):
+        query = {
+            'user_id': user_id,
+            'archived': True,
+        }
+        return chat_manager.list(query=query)
 
     def get_chats_by_user_id_and_search_text(
-        self,
-        user_id: str,
-        search_text: str,
-        include_archived: bool = False,
-        skip: int = 0,
-        limit: int = 60,
+            self,
+            user_id: str,
+            search_text: str,
+            include_archived: bool = False,
+            skip: int = 0,
+            limit: int = 60,
     ) -> list[ChatModel]:
         """
         Filters chats based on a search query using Python, allowing pagination using skip and limit.
@@ -644,24 +610,6 @@ class ChatTable:
 
         search_text_words = search_text.split(" ")
 
-        # search_text might contain 'tag:tag_name' format so we need to extract the tag_name, split the search_text and remove the tags
-        tag_ids = [
-            word.replace("tag:", "").replace(" ", "_").lower()
-            for word in search_text_words
-            if word.startswith("tag:")
-        ]
-
-        # Extract folder names - handle spaces and case insensitivity
-        folders = Folders.search_folders_by_names(
-            user_id,
-            [
-                word.replace("folder:", "")
-                for word in search_text_words
-                if word.startswith("folder:")
-            ],
-        )
-        folder_ids = [folder.id for folder in folders]
-
         is_pinned = None
         if "pinned:true" in search_text_words:
             is_pinned = True
@@ -674,162 +622,41 @@ class ChatTable:
         elif "archived:false" in search_text_words:
             is_archived = False
 
-        is_shared = None
-        if "shared:true" in search_text_words:
-            is_shared = True
-        elif "shared:false" in search_text_words:
-            is_shared = False
-
         search_text_words = [
             word
             for word in search_text_words
             if (
-                not word.startswith("tag:")
-                and not word.startswith("folder:")
-                and not word.startswith("pinned:")
-                and not word.startswith("archived:")
-                and not word.startswith("shared:")
+                    not word.startswith("tag:")
+                    and not word.startswith("folder:")
+                    and not word.startswith("pinned:")
+                    and not word.startswith("archived:")
+                    and not word.startswith("shared:")
             )
         ]
 
         search_text = " ".join(search_text_words)
+        query = {
+            'user_id': user_id,
+            'skip': skip,
+            'limit': limit,
+        }
 
-        with get_db() as db:
-            query = db.query(Chat).filter(Chat.user_id == user_id)
+        if is_archived is not None:
+            query['archived'] = is_archived
+        elif not include_archived:
+            query['archived'] = False
 
-            if is_archived is not None:
-                query = query.filter(Chat.archived == is_archived)
-            elif not include_archived:
-                query = query.filter(Chat.archived == False)
+        if is_pinned is not None:
+            query['pinned'] = is_pinned
 
-            if is_pinned is not None:
-                query = query.filter(Chat.pinned == is_pinned)
+        query['search'] = search_text
+        resp = chat_manager.list(query=query)
 
-            if is_shared is not None:
-                if is_shared:
-                    query = query.filter(Chat.share_id.isnot(None))
-                else:
-                    query = query.filter(Chat.share_id.is_(None))
-
-            if folder_ids:
-                query = query.filter(Chat.folder_id.in_(folder_ids))
-
-            query = query.order_by(Chat.updated_at.desc())
-
-            # Check if the database dialect is either 'sqlite' or 'postgresql'
-            dialect_name = db.bind.dialect.name
-            if dialect_name == "sqlite":
-                # SQLite case: using JSON1 extension for JSON searching
-                sqlite_content_sql = (
-                    "EXISTS ("
-                    "    SELECT 1 "
-                    "    FROM json_each(Chat.chat, '$.messages') AS message "
-                    "    WHERE LOWER(message.value->>'content') LIKE '%' || :content_key || '%'"
-                    ")"
-                )
-                sqlite_content_clause = text(sqlite_content_sql)
-                query = query.filter(
-                    or_(
-                        Chat.title.ilike(bindparam("title_key")), sqlite_content_clause
-                    ).params(title_key=f"%{search_text}%", content_key=search_text)
-                )
-
-                # Check if there are any tags to filter, it should have all the tags
-                if "none" in tag_ids:
-                    query = query.filter(
-                        text(
-                            """
-                            NOT EXISTS (
-                                SELECT 1
-                                FROM json_each(Chat.meta, '$.tags') AS tag
-                            )
-                            """
-                        )
-                    )
-                elif tag_ids:
-                    query = query.filter(
-                        and_(
-                            *[
-                                text(
-                                    f"""
-                                    EXISTS (
-                                        SELECT 1
-                                        FROM json_each(Chat.meta, '$.tags') AS tag
-                                        WHERE tag.value = :tag_id_{tag_idx}
-                                    )
-                                    """
-                                ).params(**{f"tag_id_{tag_idx}": tag_id})
-                                for tag_idx, tag_id in enumerate(tag_ids)
-                            ]
-                        )
-                    )
-
-            elif dialect_name == "postgresql":
-                # PostgreSQL doesn't allow null bytes in text. We filter those out by checking
-                # the JSON representation for \u0000 before attempting text extraction
-                postgres_content_sql = (
-                    "EXISTS ("
-                    "    SELECT 1 "
-                    "    FROM json_array_elements(Chat.chat->'messages') AS message "
-                    "    WHERE message->'content' IS NOT NULL "
-                    "    AND (message->'content')::text NOT LIKE '%\\u0000%' "
-                    "    AND LOWER(message->>'content') LIKE '%' || :content_key || '%'"
-                    ")"
-                )
-                postgres_content_clause = text(postgres_content_sql)
-                # Also filter out chats with null bytes in title
-                query = query.filter(text("Chat.title::text NOT LIKE '%\\x00%'"))
-                query = query.filter(
-                    or_(
-                        Chat.title.ilike(bindparam("title_key")),
-                        postgres_content_clause,
-                    ).params(title_key=f"%{search_text}%", content_key=search_text)
-                )
-
-                # Check if there are any tags to filter, it should have all the tags
-                if "none" in tag_ids:
-                    query = query.filter(
-                        text(
-                            """
-                            NOT EXISTS (
-                                SELECT 1
-                                FROM json_array_elements_text(Chat.meta->'tags') AS tag
-                            )
-                            """
-                        )
-                    )
-                elif tag_ids:
-                    query = query.filter(
-                        and_(
-                            *[
-                                text(
-                                    f"""
-                                    EXISTS (
-                                        SELECT 1
-                                        FROM json_array_elements_text(Chat.meta->'tags') AS tag
-                                        WHERE tag = :tag_id_{tag_idx}
-                                    )
-                                    """
-                                ).params(**{f"tag_id_{tag_idx}": tag_id})
-                                for tag_idx, tag_id in enumerate(tag_ids)
-                            ]
-                        )
-                    )
-            else:
-                raise NotImplementedError(
-                    f"Unsupported dialect: {db.bind.dialect.name}"
-                )
-
-            # Perform pagination at the SQL level
-            all_chats = query.offset(skip).limit(limit).all()
-
-            log.info(f"The number of chats: {len(all_chats)}")
-
-            # Validate and return chats
-            return [ChatModel.model_validate(chat) for chat in all_chats]
+        # Validate and return chats
+        return resp['results']
 
     def get_chats_by_folder_id_and_user_id(
-        self, folder_id: str, user_id: str, skip: int = 0, limit: int = 60
+            self, folder_id: str, user_id: str, skip: int = 0, limit: int = 60
     ) -> list[ChatModel]:
         with get_db() as db:
             query = db.query(Chat).filter_by(folder_id=folder_id, user_id=user_id)
@@ -846,8 +673,9 @@ class ChatTable:
             all_chats = query.all()
             return [ChatModel.model_validate(chat) for chat in all_chats]
 
+    # TODO
     def get_chats_by_folder_ids_and_user_id(
-        self, folder_ids: list[str], user_id: str
+            self, folder_ids: list[str], user_id: str
     ) -> list[ChatModel]:
         with get_db() as db:
             query = db.query(Chat).filter(
@@ -861,29 +689,26 @@ class ChatTable:
             all_chats = query.all()
             return [ChatModel.model_validate(chat) for chat in all_chats]
 
+    @staticmethod
     def update_chat_folder_id_by_id_and_user_id(
-        self, id: str, user_id: str, folder_id: str
-    ) -> Optional[ChatModel]:
-        try:
-            with get_db() as db:
-                chat = db.get(Chat, id)
-                chat.folder_id = folder_id
-                chat.updated_at = int(time.time())
-                chat.pinned = False
-                db.commit()
-                db.refresh(chat)
-                return ChatModel.model_validate(chat)
-        except Exception:
-            return None
+            _id: str, user_id: str, folder_id: str
+    ):
+        data = {
+            'folder_id': folder_id,
+            'pinned': False
+        }
+        return chat_manager.update(_id, data)
 
+    # TODO
     def get_chat_tags_by_id_and_user_id(self, id: str, user_id: str) -> list[TagModel]:
         with get_db() as db:
             chat = db.get(Chat, id)
             tags = chat.meta.get("tags", [])
             return [Tags.get_tag_by_name_and_user_id(tag, user_id) for tag in tags]
 
+    # TODO
     def get_chat_list_by_user_id_and_tag_name(
-        self, user_id: str, tag_name: str, skip: int = 0, limit: int = 50
+            self, user_id: str, tag_name: str, skip: int = 0, limit: int = 50
     ) -> list[ChatModel]:
         with get_db() as db:
             query = db.query(Chat).filter_by(user_id=user_id)
@@ -913,15 +738,16 @@ class ChatTable:
             log.debug(f"all_chats: {all_chats}")
             return [ChatModel.model_validate(chat) for chat in all_chats]
 
+    # TODO
     def add_chat_tag_by_id_and_user_id_and_tag_name(
-        self, id: str, user_id: str, tag_name: str
+            self, _id: str, user_id: str, tag_name: str
     ) -> Optional[ChatModel]:
         tag = Tags.get_tag_by_name_and_user_id(tag_name, user_id)
         if tag is None:
             tag = Tags.insert_new_tag(tag_name, user_id)
         try:
             with get_db() as db:
-                chat = db.get(Chat, id)
+                chat = db.get(Chat, _id)
 
                 tag_id = tag.id
                 if tag_id not in chat.meta.get("tags", []):
@@ -936,41 +762,43 @@ class ChatTable:
         except Exception:
             return None
 
-    def count_chats_by_tag_name_and_user_id(self, tag_name: str, user_id: str) -> int:
-        with get_db() as db:  # Assuming `get_db()` returns a session object
-            query = db.query(Chat).filter_by(user_id=user_id, archived=False)
-
-            # Normalize the tag_name for consistency
-            tag_id = tag_name.replace(" ", "_").lower()
-
-            if db.bind.dialect.name == "sqlite":
-                # SQLite JSON1 support for querying the tags inside the `meta` JSON field
-                query = query.filter(
-                    text(
-                        f"EXISTS (SELECT 1 FROM json_each(Chat.meta, '$.tags') WHERE json_each.value = :tag_id)"
-                    )
-                ).params(tag_id=tag_id)
-
-            elif db.bind.dialect.name == "postgresql":
-                # PostgreSQL JSONB support for querying the tags inside the `meta` JSON field
-                query = query.filter(
-                    text(
-                        "EXISTS (SELECT 1 FROM json_array_elements_text(Chat.meta->'tags') elem WHERE elem = :tag_id)"
-                    )
-                ).params(tag_id=tag_id)
-
-            else:
-                raise NotImplementedError(
-                    f"Unsupported dialect: {db.bind.dialect.name}"
-                )
-
-            # Get the count of matching records
-            count = query.count()
-
-            # Debugging output for inspection
-            log.info(f"Count of chats for tag '{tag_name}': {count}")
-
-            return count
+    @staticmethod
+    def count_chats_by_tag_name_and_user_id(tag_name: str, user_id: str) -> int:
+        return 0
+        # with get_db() as db:  # Assuming `get_db()` returns a session object
+        #     query = db.query(Chat).filter_by(user_id=user_id, archived=False)
+        #
+        #     # Normalize the tag_name for consistency
+        #     tag_id = tag_name.replace(" ", "_").lower()
+        #
+        #     if db.bind.dialect.name == "sqlite":
+        #         # SQLite JSON1 support for querying the tags inside the `meta` JSON field
+        #         query = query.filter(
+        #             text(
+        #                 f"EXISTS (SELECT 1 FROM json_each(Chat.meta, '$.tags') WHERE json_each.value = :tag_id)"
+        #             )
+        #         ).params(tag_id=tag_id)
+        #
+        #     elif db.bind.dialect.name == "postgresql":
+        #         # PostgreSQL JSONB support for querying the tags inside the `meta` JSON field
+        #         query = query.filter(
+        #             text(
+        #                 "EXISTS (SELECT 1 FROM json_array_elements_text(Chat.meta->'tags') elem WHERE elem = :tag_id)"
+        #             )
+        #         ).params(tag_id=tag_id)
+        #
+        #     else:
+        #         raise NotImplementedError(
+        #             f"Unsupported dialect: {db.bind.dialect.name}"
+        #         )
+        #
+        #     # Get the count of matching records
+        #     count = query.count()
+        #
+        #     # Debugging output for inspection
+        #     log.info(f"Count of chats for tag '{tag_name}': {count}")
+        #
+        #     return count
 
     def count_chats_by_folder_id_and_user_id(self, folder_id: str, user_id: str) -> int:
         with get_db() as db:
@@ -983,82 +811,74 @@ class ChatTable:
             return count
 
     def delete_tag_by_id_and_user_id_and_tag_name(
-        self, id: str, user_id: str, tag_name: str
+            self, _id: str, user_id: str, tag_name: str
     ) -> bool:
         try:
-            with get_db() as db:
-                chat = db.get(Chat, id)
-                tags = chat.meta.get("tags", [])
-                tag_id = tag_name.replace(" ", "_").lower()
-
-                tags = [tag for tag in tags if tag != tag_id]
-                chat.meta = {
-                    **chat.meta,
-                    "tags": list(set(tags)),
-                }
-                db.commit()
-                return True
+            chat_dict = self.get_chat_by_id(_id)
+            tags = chat_dict['meta'].get("tags", [])
+            tag_id = tag_name.replace(" ", "_").lower()
+            tags = [tag for tag in tags if tag != tag_id]
+            meta = {
+                **chat_dict['meta'],
+                "tags": list(set(tags)),
+            }
+            chat_manager.update(_id, {'meta': meta})
+            return True
         except Exception:
             return False
 
-    def delete_all_tags_by_id_and_user_id(self, id: str, user_id: str) -> bool:
+    def delete_all_tags_by_id_and_user_id(self, _id: str, user_id: str) -> bool:
         try:
-            with get_db() as db:
-                chat = db.get(Chat, id)
-                chat.meta = {
-                    **chat.meta,
+            chat_dict = self.get_chat_by_id(_id)
+            data = {
+                'meta': {
+                    **chat_dict['meta'],
                     "tags": [],
                 }
-                db.commit()
-
-                return True
+            }
+            chat_manager.update(_id, data)
+            return True
         except Exception:
             return False
 
-    def delete_chat_by_id(self, id: str) -> bool:
+    @staticmethod
+    def delete_chat_by_id(self, _id: str) -> bool:
         try:
-            with get_db() as db:
-                db.query(Chat).filter_by(id=id).delete()
-                db.commit()
-
-                return True and self.delete_shared_chat_by_chat_id(id)
+            chat_manager.destroy(_id)
+            return True
+            # return True and self.delete_shared_chat_by_chat_id(id)
         except Exception:
             return False
 
-    def delete_chat_by_id_and_user_id(self, id: str, user_id: str) -> bool:
+    @staticmethod
+    def delete_chat_by_id_and_user_id(_id: str, user_id: str) -> bool:
         try:
-            with get_db() as db:
-                db.query(Chat).filter_by(id=id, user_id=user_id).delete()
-                db.commit()
-
-                return True and self.delete_shared_chat_by_chat_id(id)
+            chat_manager.destroy(_id, {'user_id': user_id})
+            return True
+            # return True and self.delete_shared_chat_by_chat_id(id)
         except Exception:
             return False
 
-    def delete_chats_by_user_id(self, user_id: str) -> bool:
+    @staticmethod
+    def delete_chats_by_user_id(user_id: str) -> bool:
         try:
-            with get_db() as db:
-                self.delete_shared_chats_by_user_id(user_id)
-
-                db.query(Chat).filter_by(user_id=user_id).delete()
-                db.commit()
-
-                return True
+            # self.delete_shared_chats_by_user_id(user_id)
+            chat_manager.destroy('', {'user_id': user_id})
+            return True
         except Exception:
             return False
 
+    @staticmethod
     def delete_chats_by_user_id_and_folder_id(
-        self, user_id: str, folder_id: str
+            user_id: str, folder_id: str
     ) -> bool:
         try:
-            with get_db() as db:
-                db.query(Chat).filter_by(user_id=user_id, folder_id=folder_id).delete()
-                db.commit()
-
-                return True
+            chat_manager.destroy('', {'user_id': user_id, 'folder_id': folder_id})
+            return True
         except Exception:
             return False
 
+    # TODO
     def delete_shared_chats_by_user_id(self, user_id: str) -> bool:
         try:
             with get_db() as db:

@@ -16,7 +16,7 @@ class ExternalReranker(BaseReranker):
     def __init__(
         self,
         api_key: str,
-        url: str = "http://localhost:8080/v1/rerank",
+        url: str = "http://localhost:8083/v1/rerank",
         model: str = "reranker",
     ):
         self.api_key = api_key
@@ -49,8 +49,8 @@ class ExternalReranker(BaseReranker):
                         {
                             "X-OpenWebUI-User-Name": quote(user.name, safe=" "),
                             "X-OpenWebUI-User-Id": user.id,
-                            "X-OpenWebUI-User-Email": user.email,
-                            "X-OpenWebUI-User-Role": user.role,
+                            "X-OpenWebUI-User-Username": user.username,
+                            "X-OpenWebUI-User-Role": 'admin',
                         }
                         if ENABLE_FORWARD_USER_INFO_HEADERS and user
                         else {}
