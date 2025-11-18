@@ -337,7 +337,7 @@ async def get_user_by_id(user_id: str, user=Depends(get_verified_user)):
         chat_id = user_id.replace("shared-", "")
         chat = Chats.get_chat_by_id(chat_id)
         if chat:
-            user_id = chat.user_id
+            user_id = chat['user_id']
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
