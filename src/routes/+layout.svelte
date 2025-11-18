@@ -26,6 +26,7 @@
 		isLastActiveTab,
 		isApp,
 		appInfo,
+		appData,
 		toolServers,
 		playingNotificationSound
 	} from '$lib/stores';
