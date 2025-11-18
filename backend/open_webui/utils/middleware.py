@@ -739,8 +739,8 @@ async def chat_image_generation_handler(
         }
     )
 
-    messages_map = chat.chat.get("history", {}).get("messages", {})
-    message_id = chat.chat.get("history", {}).get("currentId")
+    messages_map = chat['chat'].get("history", {}).get("messages", {})
+    message_id = chat['chat'].get("history", {}).get("currentId")
     message_list = get_message_list(messages_map, message_id)
     user_message = get_last_user_message(message_list)
 
@@ -1132,7 +1132,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     if chat_id and user:
         chat = Chats.get_chat_by_id_and_user_id(chat_id, user.id)
         if chat and chat['folder_id']:
-            folder = Folders.get_folder_by_id_and_user_id(chat.folder_id, user.id)
+            folder = Folders.get_folder_by_id_and_user_id(chat['folder_id'], user.id)
 
             if folder and folder.data:
                 if "system_prompt" in folder.data:

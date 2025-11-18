@@ -195,7 +195,7 @@ class ChatTable:
                 }
             )
 
-            result = Chat(**chat.model_dump())
+            result = Chat(**chat)
             db.add(result)
             db.commit()
             db.refresh(result)
@@ -231,7 +231,7 @@ class ChatTable:
 
         self.delete_all_tags_by_id_and_user_id(id, user.id)
 
-        for tag in chat.meta.get("tags", []):
+        for tag in chat['meta'].get("tags", []):
             if self.count_chats_by_tag_name_and_user_id(tag, user.id) == 0:
                 Tags.delete_tag_by_name_and_user_id(tag, user.id)
 
@@ -316,19 +316,19 @@ class ChatTable:
             # Get the existing chat to share
             chat = db.get(Chat, chat_id)
             # Check if the chat is already shared
-            if chat.share_id:
-                return self.get_chat_by_id_and_user_id(chat.share_id, "shared")
+            if chat['share_id']:
+                return self.get_chat_by_id_and_user_id(chat['share_id'], "shared")
             # Create a new chat with the same data, but with a new ID
             shared_chat = ChatModel(
                 **{
                     "id": str(uuid.uuid4()),
                     "user_id": f"shared-{chat_id}",
-                    "title": chat.title,
-                    "chat": chat.chat,
-                    "meta": chat.meta,
-                    "pinned": chat.pinned,
-                    "folder_id": chat.folder_id,
-                    "created_at": chat.created_at,
+                    "title": chat['title'],
+                    "chat": chat['chat'],
+                    "meta": chat['meta'],
+                    "pinned": chat['pinned'],
+                    "folder_id": chat['folder_id'],
+                    "created_at": chat['created_at'],
                     "updated_at": int(time.time()),
                 }
             )
@@ -358,11 +358,11 @@ class ChatTable:
                 if shared_chat is None:
                     return self.insert_shared_chat_by_chat_id(chat_id)
 
-                shared_chat.title = chat.title
-                shared_chat.chat = chat.chat
-                shared_chat.meta = chat.meta
-                shared_chat.pinned = chat.pinned
-                shared_chat.folder_id = chat.folder_id
+                shared_chat.title = chat['title']
+                shared_chat.chat = chat['chat']
+                shared_chat.meta = chat['meta']
+                shared_chat.pinned = chat['pinned']
+                shared_chat.folder_id = chat['folder_id']
                 shared_chat.updated_at = int(time.time())
                 db.commit()
                 db.refresh(shared_chat)
@@ -703,7 +703,7 @@ class ChatTable:
     def get_chat_tags_by_id_and_user_id(self, id: str, user_id: str) -> list[TagModel]:
         with get_db() as db:
             chat = db.get(Chat, id)
-            tags = chat.meta.get("tags", [])
+            tags = chat['meta'].get("tags", [])
             return [Tags.get_tag_by_name_and_user_id(tag, user_id) for tag in tags]
 
     # TODO
@@ -750,10 +750,10 @@ class ChatTable:
                 chat = db.get(Chat, _id)
 
                 tag_id = tag.id
-                if tag_id not in chat.meta.get("tags", []):
+                if tag_id not in chat['meta'].get("tags", []):
                     chat.meta = {
-                        **chat.meta,
-                        "tags": list(set(chat.meta.get("tags", []) + [tag_id])),
+                        **chat['meta'],
+                        "tags": list(set(chat['meta'].get("tags", []) + [tag_id])),
                     }
 
                 db.commit()
@@ -883,7 +883,7 @@ class ChatTable:
         try:
             with get_db() as db:
                 chats_by_user = db.query(Chat).filter_by(user_id=user_id).all()
-                shared_chat_ids = [f"shared-{chat.id}" for chat in chats_by_user]
+                shared_chat_ids = [f"shared-{chat['id']}" for chat in chats_by_user]
 
                 db.query(Chat).filter(Chat.user_id.in_(shared_chat_ids)).delete()
                 db.commit()
