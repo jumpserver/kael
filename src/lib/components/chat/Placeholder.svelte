@@ -9,6 +9,7 @@
 
 	import { getChatList } from '$lib/apis/chats';
 	import { updateFolderById } from '$lib/apis/folders';
+	import ModelIcon from '$lib/components/icons/models/ModelIcon.svelte';
 
 	import {
 		config,
@@ -66,10 +67,22 @@
 		selectedModelIdx = models.length - 1;
 	}
 
+	let greetingKey = 'Good morning, {{name}}';
+	$: {
+		const hour = new Date().getHours();
+		if (hour < 12) {
+			greetingKey = 'Good morning, {{name}}';
+		} else if (hour < 18) {
+			greetingKey = 'Good afternoon, {{name}}';
+		} else {
+			greetingKey = 'Good evening, {{name}}';
+		}
+	}
+
 	$: models = selectedModels.map((id) => $_models.find((m) => m.id === id));
 </script>
 
-<div class="m-auto w-full max-w-6xl px-2 @2xl:px-20 translate-y-6 py-24 text-center">
+<div class="m-auto w-full max-w-6xl px-2 @2xl:px-20 translate-y-6 pb-20 text-center">
 	{#if $temporaryChatEnabled}
 		<Tooltip
 			content={$i18n.t("This chat won't appear in history and your messages will not be saved.")}
@@ -120,17 +133,17 @@
 											selectedModelIdx = modelIdx;
 										}}
 									>
-<!--												TODO-->
-<!--										<img-->
-<!--											crossorigin="anonymous"-->
-<!--											src={model?.info?.meta?.profile_image_url ??-->
-<!--												($i18n.language === 'dg-DG'-->
-<!--													? `${WEBUI_BASE_URL}/doge.png`-->
-<!--													: `${WEBUI_BASE_URL}/static/favicon.png`)}-->
-<!--											class=" size-9 @sm:size-10 rounded-full border-[1px] border-gray-100 dark:border-none"-->
-<!--											aria-hidden="true"-->
-<!--											draggable="false"-->
-<!--										/>-->
+										<!--												TODO-->
+										<!--										<img-->
+										<!--											crossorigin="anonymous"-->
+										<!--											src={model?.info?.meta?.profile_image_url ??-->
+										<!--												($i18n.language === 'dg-DG'-->
+										<!--													? `${WEBUI_BASE_URL}/doge.png`-->
+										<!--													: `${WEBUI_BASE_URL}/static/favicon.png`)}-->
+										<!--											class=" size-9 @sm:size-10 rounded-full border-[1px] border-gray-100 dark:border-none"-->
+										<!--											aria-hidden="true"-->
+										<!--											draggable="false"-->
+										<!--										/>-->
 									</button>
 								</Tooltip>
 							{/each}
@@ -142,18 +155,19 @@
 						in:fade={{ duration: 100 }}
 					>
 						{#if models[selectedModelIdx]?.name}
+							<ModelIcon name={models[selectedModelIdx]?.name} className="size-10 mr-2" />
 							<Tooltip
 								content={models[selectedModelIdx]?.name}
 								placement="top"
-								className=" flex items-center "
+								className=" flex items-center hidden"
 							>
 								<span class="line-clamp-1">
 									{models[selectedModelIdx]?.name}
 								</span>
 							</Tooltip>
-						{:else}
-							{$i18n.t('Hello, {{name}}', { name: $user?.name })}
 						{/if}
+
+						{$i18n.t(greetingKey, { name: $user?.name })}
 					</div>
 				</div>
 

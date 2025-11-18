@@ -956,7 +956,7 @@ ENABLE_DIRECT_CONNECTIONS = PersistentConfig(
 ENABLE_OLLAMA_API = PersistentConfig(
     "ENABLE_OLLAMA_API",
     "ollama.enable",
-    os.environ.get("ENABLE_OLLAMA_API", "True").lower() == "true",
+    os.environ.get("ENABLE_OLLAMA_API", "False").lower() == "true",
 )
 
 OLLAMA_API_BASE_URL = os.environ.get(
@@ -1114,14 +1114,14 @@ ENABLE_SIGNUP = PersistentConfig(
     (
         False
         if not WEBUI_AUTH
-        else os.environ.get("ENABLE_SIGNUP", "True").lower() == "true"
+        else os.environ.get("ENABLE_SIGNUP", "False").lower() == "true"
     ),
 )
 
 ENABLE_LOGIN_FORM = PersistentConfig(
     "ENABLE_LOGIN_FORM",
     "ui.ENABLE_LOGIN_FORM",
-    os.environ.get("ENABLE_LOGIN_FORM", "True").lower() == "true",
+    os.environ.get("ENABLE_LOGIN_FORM", "False").lower() == "true",
 )
 
 
@@ -1322,11 +1322,11 @@ USER_PERMISSIONS_CHAT_STT = (
 )
 
 USER_PERMISSIONS_CHAT_TTS = (
-    os.environ.get("USER_PERMISSIONS_CHAT_TTS", "True").lower() == "true"
+    os.environ.get("USER_PERMISSIONS_CHAT_TTS", "False").lower() == "true"
 )
 
 USER_PERMISSIONS_CHAT_CALL = (
-    os.environ.get("USER_PERMISSIONS_CHAT_CALL", "True").lower() == "true"
+    os.environ.get("USER_PERMISSIONS_CHAT_CALL", "False").lower() == "true"
 )
 
 USER_PERMISSIONS_CHAT_MULTIPLE_MODELS = (
@@ -1426,13 +1426,13 @@ ENABLE_CHANNELS = PersistentConfig(
 ENABLE_NOTES = PersistentConfig(
     "ENABLE_NOTES",
     "notes.enable",
-    os.environ.get("ENABLE_NOTES", "True").lower() == "true",
+    os.environ.get("ENABLE_NOTES", "False").lower() == "true",
 )
 
 ENABLE_EVALUATION_ARENA_MODELS = PersistentConfig(
     "ENABLE_EVALUATION_ARENA_MODELS",
     "evaluation.arena.enable",
-    os.environ.get("ENABLE_EVALUATION_ARENA_MODELS", "True").lower() == "true",
+    os.environ.get("ENABLE_EVALUATION_ARENA_MODELS", "False").lower() == "true",
 )
 EVALUATION_ARENA_MODELS = PersistentConfig(
     "EVALUATION_ARENA_MODELS",
