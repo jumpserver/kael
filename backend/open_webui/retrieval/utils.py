@@ -595,9 +595,9 @@ def get_sources_from_items(
             # Chat Attached
             chat = Chats.get_chat_by_id(item.get("id"))
 
-            if chat and (user.role == "admin" or chat.user_id == user.id):
-                messages_map = chat.chat.get("history", {}).get("messages", {})
-                message_id = chat.chat.get("history", {}).get("currentId")
+            if chat and (user.role == "admin" or chat['user_id'] == user.id):
+                messages_map = chat['chat'].get("history", {}).get("messages", {})
+                message_id = chat['chat'].get("history", {}).get("currentId")
 
                 if messages_map and message_id:
                     # Reconstruct the message list in order
@@ -612,7 +612,7 @@ def get_sources_from_items(
                     # User has access to the chat
                     query_result = {
                         "documents": [[message_history]],
-                        "metadatas": [[{"file_id": chat.id, "name": chat.title}]],
+                        "metadatas": [[{"file_id": chat['id'], "name": chat['title']}]],
                     }
 
         elif item.get("type") == "url":

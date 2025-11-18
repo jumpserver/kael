@@ -441,7 +441,7 @@ def setup_lazy_routes(app):
             request: Request, chat_id: str, user=Depends(get_verified_user)
     ):
         chat = Chats.get_chat_by_id(chat_id)
-        if chat is None or chat.user_id != user.id:
+        if chat is None or chat['user_id'] != user.id:
             return {"task_ids": []}
 
         task_ids = await list_task_ids_by_item_id(request.app.state.redis, chat_id)
