@@ -1045,7 +1045,7 @@
 						/>
 					</div>
 					<form
-						class="w-full flex flex-col gap-1.5 {recording ? 'hidden' : ''}"
+						class="w-full flex flex-col gap-1.5 px-6 {recording ? 'hidden' : ''}"
 						on:submit|preventDefault={() => {
 							// check if selectedModels support image input
 							dispatch('submit', prompt);
@@ -1802,7 +1802,7 @@
 						{/if}
 					</form>
 				</div>
-				<p class="text-xs text-gray-500 text-center mt-2">
+				<p class="text-xs text-gray-500 text-center my-1">
 					{$i18n.t('LLMs can make mistakes. Verify important info.')}
 				</p>
 			</div>

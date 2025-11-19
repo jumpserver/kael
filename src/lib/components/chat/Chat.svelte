@@ -980,7 +980,7 @@
 		await showOverview.set(false);
 		await showArtifacts.set(false);
 
-		if ($page.url.pathname.includes('/c/')) {
+		if ($page.url.pathname.includes('/kael/c/')) {
 			window.history.replaceState(history.state, '', `/`);
 		}
 

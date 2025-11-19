@@ -17,7 +17,7 @@
 		// 		goto('/kael');
 		// 	}
 		// } else {
-		goto('/kael/workspace/models');
+		goto('/kael/');
 		// }
 	});
 </script>

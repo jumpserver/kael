@@ -570,7 +570,7 @@
 
 {#if !$mobile && !$showSidebar}
 	<div
-		class=" py-2 px-1.5 flex flex-col justify-between text-black dark:text-white hover:bg-gray-50/50 dark:hover:bg-gray-950/50 h-full border-e border-gray-50 dark:border-gray-850 z-10 transition-all"
+		class=" py-2 px-1.5 flex flex-col justify-between text-black dark:text-white bg-gray-50/50 dark:hover:bg-gray-950/50 h-full border-e border-gray-50 dark:border-gray-850 z-10 transition-all"
 		id="sidebar"
 	>
 		<button
@@ -627,7 +627,7 @@
 					</Tooltip>
 				</div>
 
-				<div class="">
+				<div class="{$showSidebar ? '' : 'hidden'}">
 					<div class="relative {$temporaryChatEnabled ? 'opacity-20' : ''}">
 						<SearchInput
 							bind:value={search}
@@ -636,7 +636,7 @@
 							showClearButton={true}
 						/>
 					</div>
-					<Tooltip content={$i18n.t('Search 123')} placement="right">
+					<Tooltip content={$i18n.t('Search 123')} placement="right" className="hidden">
 						<button
 							class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
 							on:click={(e) => {
@@ -656,7 +656,7 @@
 				</div>
 
 				{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))}
-					<div class="">
+					<div class="hidden">
 						<Tooltip content={$i18n.t('Notes')} placement="right">
 							<a
 								class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
@@ -680,7 +680,7 @@
 				{/if}
 
 				{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools}
-					<div class="">
+					<div class="hidden">
 						<Tooltip content={$i18n.t('Workspace')} placement="right">
 							<a
 								class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
@@ -735,7 +735,7 @@
 							>
 								<div class=" self-center flex items-center justify-center size-9">
 									<img
-										src={$user?.profile_image_url}
+										src={generateInitialsImage($user?.name)}
 										class=" size-6 object-cover rounded-full"
 										alt={$i18n.t('Open User Profile Menu')}
 										aria-label={$i18n.t('Open User Profile Menu')}
@@ -771,19 +771,7 @@
 			<div
 				class="sidebar px-2 pt-2 pb-1.5 flex justify-between space-x-1 text-gray-600 dark:text-gray-400 sticky top-0 z-10 -mb-3"
 			>
-				<button
-					class="cursor-pointer p-[7px] flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-					on:click={async () => {
-						selectedChatId = null;
-						await goto('/kael/');
-						const newChatButton = document.getElementById('new-chat-button');
-						setTimeout(() => {
-							newChatButton?.click();
-						}, 0);
-					}}
-				>
-					<PencilSquare className="size-5" strokeWidth="2" />
-				</button>
+				
 
 				<a href="/" class="flex flex-1 px-1.5 hidden" on:click={newChatHandler}>
 					<div
@@ -812,6 +800,21 @@
 					</button>
 				</Tooltip>
 
+				<Tooltip content={$i18n.t('New Chat')} placement="bottom">
+				    <button
+				    	class="cursor-pointer p-[7px] flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+				    	on:click={async () => {
+				    		selectedChatId = null;
+				    		await goto('/kael/');
+				    		const newChatButton = document.getElementById('new-chat-button');
+				    		setTimeout(() => {
+				    			newChatButton?.click();
+				    		}, 0);
+				    	}}
+				    >
+				    	<PencilSquare className="size-5" strokeWidth="2" /> 
+				    </button>
+				</Tooltip>
 				<div
 					class="{scrollTop > 0
 						? 'visible'
@@ -1035,7 +1038,7 @@
 				<Folder
 					className="px-2 mt-0.5"
 					name={$i18n.t('Your chats')}
-					chevron={false}
+					chevron={true}
 					on:change={async (e) => {
 						selectedFolder.set(null);
 					}}
@@ -1193,7 +1196,7 @@
 											class="w-full pl-2.5 text-xs text-gray-500 dark:text-gray-500 font-medium {idx ===
 											0
 												? 'hidden'
-												: 'pt-5'} pb-1.5"
+												: 'pt-3'} pb-1.5"
 										>
 											{$i18n.t(chat.time_range)}
 											<!-- localisation keys for time_range to be recognized from the i18next parser (so they don't get automatically removed):
@@ -1283,7 +1286,7 @@
 							}}
 						>
 							<div
-								class=" flex items-center rounded-2xl py-3 px-3 w-full hover:bg-gray-100 dark:hover:bg-gray-900/50 transition"
+								class=" flex items-center rounded-xl py-2 px-2  w-full hover:bg-gray-100 dark:hover:bg-gray-900/50 transition"
 							>
 								<div class=" self-center mr-3">
 									<img

@@ -19,6 +19,7 @@
 	import { slide } from 'svelte/transition';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
+	import { generateInitialsImage } from '$lib/utils';
 
 	import ShareChatModal from '../chat/ShareChatModal.svelte';
 	import ModelSelector from '../chat/ModelSelector.svelte';
@@ -235,7 +236,7 @@
 								<div class=" self-center">
 									<span class="sr-only">{$i18n.t('User menu')}</span>
 									<img
-										src={$user?.profile_image_url}
+										src={generateInitialsImage($user?.name)}
 										class="size-6 object-cover rounded-full"
 										alt=""
 										draggable="false"
