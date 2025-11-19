@@ -219,7 +219,7 @@
 						</Tooltip>
 					{/if}
 
-					{#if $user !== undefined && $user !== null}
+					{#if $user !== undefined && $user !== null && $user.role === "adminProfile"}
 						<UserMenu
 							className="max-w-[240px]"
 							role={$user?.role}
