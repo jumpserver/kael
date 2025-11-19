@@ -455,6 +455,7 @@
             absolute {className === 'pr-2'
 			? 'right-[8px]'
 			: 'right-1'} top-[4px] py-1 pr-0.5 mr-1.5 pl-5 bg-linear-to-l from-80%
+				{mouseOver ? 'visible' : 'invisible'}
 
               to-transparent"
 		on:mouseenter={(e) => {
