@@ -1089,7 +1089,7 @@
 			$models.map((m) => m.id).includes(modelId) ? modelId : ''
 		);
 
-		const userSettings = await getUserSettings(localStorage.token);
+		const userSettings = await getUserSettings($user?.name);
 
 		if (userSettings) {
 			settings.set(userSettings.ui);
@@ -1141,7 +1141,7 @@
 
 				chatTitle.set(chatContent.title);
 
-				const userSettings = await getUserSettings(localStorage.token);
+				const userSettings = await getUserSettings($user?.name);
 
 				if (userSettings) {
 					await settings.set(userSettings.ui);
