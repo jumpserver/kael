@@ -3,11 +3,9 @@ from typing import Optional
 import base64
 import io
 
-
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response, StreamingResponse, FileResponse
 from pydantic import BaseModel
-
 
 from open_webui.models.auths import Auths
 from open_webui.models.oauth_sessions import OAuthSessions
@@ -25,7 +23,6 @@ from open_webui.models.users import (
     UserUpdateForm,
 )
 
-
 from open_webui.socket.main import (
     get_active_status_by_user_id,
     get_active_user_ids,
@@ -34,10 +31,8 @@ from open_webui.socket.main import (
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import SRC_LOG_LEVELS, STATIC_DIR
 
-
 from open_webui.utils.auth import get_admin_user, get_password_hash, get_verified_user
 from open_webui.utils.access_control import get_permissions, has_permission
-
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MODELS"])
@@ -52,7 +47,7 @@ router = APIRouter()
 
 @router.get("/active")
 async def get_active_users(
-    user=Depends(get_verified_user),
+        user=Depends(get_verified_user),
 ):
     """
     Get a list of active users.
@@ -72,11 +67,11 @@ PAGE_ITEM_COUNT = 30
 
 @router.get("/", response_model=UserListResponse)
 async def get_users(
-    query: Optional[str] = None,
-    order_by: Optional[str] = None,
-    direction: Optional[str] = None,
-    page: Optional[int] = 1,
-    user=Depends(get_admin_user),
+        query: Optional[str] = None,
+        order_by: Optional[str] = None,
+        direction: Optional[str] = None,
+        page: Optional[int] = 1,
+        user=Depends(get_admin_user),
 ):
     limit = PAGE_ITEM_COUNT
 
@@ -96,15 +91,15 @@ async def get_users(
 
 @router.get("/all", response_model=UserInfoListResponse)
 async def get_all_users(
-    user=Depends(get_admin_user),
+        user=Depends(get_admin_user),
 ):
     return Users.get_users()
 
 
 @router.get("/search", response_model=UserIdNameListResponse)
 async def search_users(
-    query: Optional[str] = None,
-    user=Depends(get_verified_user),
+        query: Optional[str] = None,
+        user=Depends(get_verified_user),
 ):
     limit = PAGE_ITEM_COUNT
 
@@ -135,11 +130,12 @@ async def get_user_groups(user=Depends(get_verified_user)):
 
 @router.get("/permissions")
 async def get_user_permissisions(request: Request, user=Depends(get_verified_user)):
-    user_permissions = get_permissions(
-        user.id, request.app.state.config.USER_PERMISSIONS
-    )
-
-    return user_permissions
+    # user_permissions = get_permissions(
+    #     user.id, request.app.state.config.USER_PERMISSIONS
+    # )
+    #
+    # return user_permissions
+    return request.app.state.config.USER_PERMISSIONS
 
 
 ############################
@@ -217,7 +213,7 @@ async def get_default_user_permissions(request: Request, user=Depends(get_admin_
 
 @router.post("/default/permissions")
 async def update_default_user_permissions(
-    request: Request, form_data: UserPermissions, user=Depends(get_admin_user)
+        request: Request, form_data: UserPermissions, user=Depends(get_admin_user)
 ):
     request.app.state.config.USER_PERMISSIONS = form_data.model_dump()
     return request.app.state.config.USER_PERMISSIONS
@@ -247,17 +243,17 @@ async def get_user_settings_by_session_user(user=Depends(get_verified_user)):
 
 @router.post("/user/settings/update", response_model=UserSettings)
 async def update_user_settings_by_session_user(
-    request: Request, form_data: UserSettings, user=Depends(get_verified_user)
+        request: Request, form_data: UserSettings, user=Depends(get_verified_user)
 ):
     updated_user_settings = form_data.model_dump()
     if (
-        user.role != "admin"
-        and "toolServers" in updated_user_settings.get("ui").keys()
-        and not has_permission(
-            user.id,
-            "features.direct_tool_servers",
-            request.app.state.config.USER_PERMISSIONS,
-        )
+            user.role != "admin"
+            and "toolServers" in updated_user_settings.get("ui").keys()
+            and not has_permission(
+        user.id,
+        "features.direct_tool_servers",
+        request.app.state.config.USER_PERMISSIONS,
+    )
     ):
         # If the user is not an admin and does not have permission to use tool servers, remove the key
         updated_user_settings["ui"].pop("toolServers", None)
@@ -296,7 +292,7 @@ async def get_user_info_by_session_user(user=Depends(get_verified_user)):
 
 @router.post("/user/info/update", response_model=Optional[dict])
 async def update_user_info_by_session_user(
-    form_data: dict, user=Depends(get_verified_user)
+        form_data: dict, user=Depends(get_verified_user)
 ):
     user = Users.get_user_by_id(user.id)
     if user:
@@ -429,9 +425,9 @@ async def get_user_active_status_by_id(user_id: str, user=Depends(get_verified_u
 
 @router.post("/{user_id}/update", response_model=Optional[UserModel])
 async def update_user_by_id(
-    user_id: str,
-    form_data: UserUpdateForm,
-    session_user=Depends(get_admin_user),
+        user_id: str,
+        form_data: UserUpdateForm,
+        session_user=Depends(get_admin_user),
 ):
     # Prevent modification of the primary admin user by other admins
     try:
