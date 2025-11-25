@@ -107,7 +107,7 @@
 		});
 
 		if (res) {
-			goto(`/c/${res.id}`);
+			goto(`/kael/c/${res.id}`);
 
 			currentChatPage.set(1);
 			await chats.set(await getChatList(localStorage.token, $currentChatPage));
@@ -342,13 +342,13 @@
 <div
 	id="sidebar-chat-group"
 	bind:this={itemElement}
-	class=" w-full {className} relative group"
+	class=" w-full {className} relative group mb-[1px]"
 	draggable={draggable && !confirmEdit}
 >
 	{#if confirmEdit}
 		<div
 			id="sidebar-chat-item"
-			class=" w-full flex justify-between rounded-xl px-[11px] py-[6px] {id === $chatId ||
+			class=" w-full flex justify-between rounded-xl px-[11px] py-[7px] {id === $chatId ||
 			confirmEdit
 				? 'bg-gray-100 dark:bg-gray-900 selected'
 				: selected
@@ -401,13 +401,13 @@
 	{:else}
 		<a
 			id="sidebar-chat-item"
-			class=" w-full flex justify-between rounded-xl px-[11px] py-[6px] {id === $chatId ||
+			class=" w-full flex justify-between rounded-xl px-[11px] py-[7px] {id === $chatId ||
 			confirmEdit
 				? 'bg-gray-100 dark:bg-gray-900 selected'
 				: selected
 					? 'bg-gray-100 dark:bg-gray-950 selected'
 					: ' group-hover:bg-gray-100 dark:group-hover:bg-gray-950'}  whitespace-nowrap text-ellipsis"
-			href="/c/{id}"
+			href="/kael/c/{id}"
 			on:click={() => {
 				dispatch('select');
 
@@ -455,6 +455,7 @@
             absolute {className === 'pr-2'
 			? 'right-[8px]'
 			: 'right-1'} top-[4px] py-1 pr-0.5 mr-1.5 pl-5 bg-linear-to-l from-80%
+				{mouseOver ? 'visible' : 'invisible'}
 
               to-transparent"
 		on:mouseenter={(e) => {

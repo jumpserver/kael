@@ -10,7 +10,6 @@ export const createNewChat = async (token: string, chat: object, folderId: strin
 		headers: {
 			Accept: 'application/json',
 			'Content-Type': 'application/json',
-			authorization: `Bearer ${token}`
 		},
 		body: JSON.stringify({
 			chat: chat,

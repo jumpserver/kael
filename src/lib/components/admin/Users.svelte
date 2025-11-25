@@ -67,7 +67,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/users/overview');
+				goto('/kael/admin/users/overview');
 			}}
 		>
 			<div class=" self-center mr-2">
@@ -92,7 +92,7 @@
 				? ''
 				: ' text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 			on:click={() => {
-				goto('/admin/users/groups');
+				goto('/kael/admin/users/groups');
 			}}
 		>
 			<div class=" self-center mr-2">

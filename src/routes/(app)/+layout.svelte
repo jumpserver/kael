@@ -87,7 +87,7 @@
 	};
 
 	const setUserSettings = async (cb: () => Promise<void>) => {
-		let userSettings = await getUserSettings(localStorage.token).catch((error) => {
+		let userSettings = await getUserSettings($user?.name).catch((error) => {
 			console.error(error);
 			return null;
 		});

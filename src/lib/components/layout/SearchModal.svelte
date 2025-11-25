@@ -368,7 +368,7 @@
 							idx + actions.length
 								? 'bg-gray-50 dark:bg-gray-850'
 								: ''}"
-							href="/c/{chat.id}"
+							href="/kael/c/{chat.id}"
 							draggable="false"
 							data-arrow-selected={selectedIdx === idx + actions.length ? 'true' : undefined}
 							on:mouseenter={() => {

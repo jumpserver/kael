@@ -18,6 +18,7 @@
 	export let allowHTML = true;
 	export let tippyOptions = {};
 	export let interactive = false;
+	export let delay = 1000;
 
 	export let onClick = () => {};
 
@@ -46,6 +47,7 @@
 					arrow: false,
 					offset: offset,
 					...(interactive ? { interactive: true } : {}),
+					delay: delay,
 					...tippyOptions
 				});
 			}

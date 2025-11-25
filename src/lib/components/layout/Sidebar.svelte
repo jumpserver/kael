@@ -64,6 +64,7 @@
 	import Note from '../icons/Note.svelte';
 	import { slide } from 'svelte/transition';
 	import HotkeyHint from '../common/HotkeyHint.svelte';
+	import SearchInput from './Sidebar/SearchInput.svelte';
 
 	const BREAKPOINT = 768;
 
@@ -85,6 +86,7 @@
 
 	let folders = {};
 	let folderRegistry = {};
+	let search = '';
 
 	let newFolderId = null;
 
@@ -223,6 +225,33 @@
 		await chats.set([...($chats ? $chats : []), ...newChatList]);
 
 		chatListLoading = false;
+	};
+
+	let searchDebounceTimeout;
+
+	const searchDebounceHandler = async () => {
+		console.log('search', search);
+		chats.set(null);
+
+		if (searchDebounceTimeout) {
+			clearTimeout(searchDebounceTimeout);
+		}
+
+		if (search === '') {
+			await initChatList();
+			return;
+		} else {
+			searchDebounceTimeout = setTimeout(async () => {
+				allChatsLoaded = false;
+				currentChatPage.set(1);
+				await chats.set(await getChatListBySearchText(localStorage.token, search));
+
+				if ($chats.length === 0) {
+					// tags.set(await getAllTags());
+					tags.set([]);
+				}
+			}, 1000);
+		}
 	};
 
 	const importChatHandler = async (items, pinned = false, folderId = null) => {
@@ -534,14 +563,14 @@
 	id="sidebar-new-chat-button"
 	class="hidden"
 	on:click={() => {
-		goto('/');
+		goto('/kael');
 		newChatHandler();
 	}}
 />
 
 {#if !$mobile && !$showSidebar}
 	<div
-		class=" py-2 px-1.5 flex flex-col justify-between text-black dark:text-white hover:bg-gray-50/50 dark:hover:bg-gray-950/50 h-full border-e border-gray-50 dark:border-gray-850 z-10 transition-all"
+		class=" py-2 px-1.5 flex flex-col justify-between text-black dark:text-white bg-gray-50/50 dark:hover:bg-gray-950/50 h-full border-e border-gray-50 dark:border-gray-850 z-10 transition-all"
 		id="sidebar"
 	>
 		<button
@@ -586,7 +615,7 @@
 								e.stopImmediatePropagation();
 								e.preventDefault();
 
-								goto('/');
+								goto('/kael');
 								newChatHandler();
 							}}
 							aria-label={$i18n.t('New Chat')}
@@ -617,7 +646,7 @@
 								showSearch.set(true);
 							}}
 							draggable="false"
-							aria-label={$i18n.t('Search')}
+							aria-label={$i18n.t('Search 123')}
 						>
 							<div class=" self-center flex items-center justify-center size-9">
 								<Search className="size-4.5" />
@@ -627,16 +656,16 @@
 				</div>
 
 				{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))}
-					<div class="">
+					<div class="hidden">
 						<Tooltip content={$i18n.t('Notes')} placement="right">
 							<a
 								class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
-								href="/notes"
+								href="/kael/notes"
 								on:click={async (e) => {
 									e.stopImmediatePropagation();
 									e.preventDefault();
 
-									goto('/notes');
+									goto('/kael/notes');
 									itemClickHandler();
 								}}
 								draggable="false"
@@ -651,16 +680,16 @@
 				{/if}
 
 				{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools}
-					<div class="">
+					<div class="hidden">
 						<Tooltip content={$i18n.t('Workspace')} placement="right">
 							<a
 								class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
-								href="/workspace"
+								href="/kael/workspace"
 								on:click={async (e) => {
 									e.stopImmediatePropagation();
 									e.preventDefault();
 
-									goto('/workspace');
+									goto('/kael/workspace');
 									itemClickHandler();
 								}}
 								aria-label={$i18n.t('Workspace')}
@@ -706,7 +735,7 @@
 							>
 								<div class=" self-center flex items-center justify-center size-9">
 									<img
-										src={$user?.profile_image_url}
+										src={generateInitialsImage($user?.name)}
 										class=" size-6 object-cover rounded-full"
 										alt={$i18n.t('Open User Profile Menu')}
 										aria-label={$i18n.t('Open User Profile Menu')}
@@ -740,7 +769,7 @@
 				: 'invisible'}"
 		>
 			<div
-				class="sidebar px-2 pt-2 pb-1.5 flex justify-between space-x-1 text-gray-600 dark:text-gray-400 sticky top-0 z-10 -mb-3"
+				class="sidebar px-2 pt-2 pb-2 flex justify-between space-x-1 text-gray-600 dark:text-gray-400 sticky top-0 z-10 -mb-3"
 			>
 				<a href="/" class="flex flex-1 px-1.5 hidden" on:click={newChatHandler}>
 					<div
@@ -802,11 +831,11 @@
 				}}
 			>
 				<div class="pb-1.5">
-					<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200">
+					<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200 hidden">
 						<a
 							id="sidebar-new-chat-button"
 							class="group grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition outline-none"
-							href="/"
+							href="/kael/"
 							draggable="false"
 							on:click={newChatHandler}
 							aria-label={$i18n.t('New Chat')}
@@ -823,7 +852,20 @@
 						</a>
 					</div>
 
-					<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200">
+					<div class="px-[7px] justify-center text-gray-800 dark:text-gray-200">
+						{#if $temporaryChatEnabled}
+							<div class="absolute z-40 w-full h-full flex justify-center"></div>
+						{/if}
+
+						<SearchInput
+							bind:value={search}
+							on:input={searchDebounceHandler}
+							placeholder={$i18n.t('Search')}
+							showClearButton={true}
+						/>
+					</div>
+
+					<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200 hidden">
 						<button
 							id="sidebar-search-button"
 							class="group grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition outline-none"
@@ -845,11 +887,11 @@
 					</div>
 
 					{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))}
-						<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200">
+						<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200 hidden">
 							<a
 								id="sidebar-notes-button"
 								class="grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-								href="/notes"
+								href="/kael/notes"
 								on:click={itemClickHandler}
 								draggable="false"
 								aria-label={$i18n.t('Notes')}
@@ -866,11 +908,11 @@
 					{/if}
 
 					{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools}
-						<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200">
+						<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200 hidden">
 							<a
 								id="sidebar-workspace-button"
 								class="grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-								href="/workspace"
+								href="/kael/workspace"
 								on:click={itemClickHandler}
 								draggable="false"
 								aria-label={$i18n.t('Workspace')}
@@ -941,7 +983,7 @@
 
 				{#if folders}
 					<Folder
-						className="px-2 mt-0.5"
+						className="px-2 mt-0.5 hidden"
 						name={$i18n.t('Folders')}
 						chevron={false}
 						onAdd={() => {
@@ -993,8 +1035,8 @@
 
 				<Folder
 					className="px-2 mt-0.5"
-					name={$i18n.t('Chats')}
-					chevron={false}
+					name={$i18n.t('Your chats')}
+					chevron={true}
 					on:change={async (e) => {
 						selectedFolder.set(null);
 					}}
@@ -1151,8 +1193,8 @@
 										<div
 											class="w-full pl-2.5 text-xs text-gray-500 dark:text-gray-500 font-medium {idx ===
 											0
-												? ''
-												: 'pt-5'} pb-1.5"
+												? 'hidden'
+												: 'pt-3'} pb-1.5"
 										>
 											{$i18n.t(chat.time_range)}
 											<!-- localisation keys for time_range to be recognized from the i18next parser (so they don't get automatically removed):

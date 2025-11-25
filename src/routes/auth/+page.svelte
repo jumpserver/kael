@@ -47,7 +47,7 @@
 			await config.set(await getBackendConfig());
 
 			if (!redirectPath) {
-				redirectPath = $page.url.searchParams.get('redirect') || '/';
+				redirectPath = $page.url.searchParams.get('redirect') || '/kael';
 			}
 
 			goto(redirectPath);
