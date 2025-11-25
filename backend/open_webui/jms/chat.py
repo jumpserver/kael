@@ -12,9 +12,14 @@ logger = logging.getLogger(__name__)
 logger.setLevel(SRC_LOG_LEVELS["WISP"])
 
 CHAT_URL = "/api/v1/terminal/chats/"
+TERMINAL_CONFIG_URL = "/api/v1/terminal/terminals/config/"
 
 
 class ChatHandler(BaseWisp):
+    def get_providers(self):
+        resp = self._request("GET", TERMINAL_CONFIG_URL, action="list providers")
+        return self._loads(TERMINAL_CONFIG_URL, resp.body).get("CHAT_AI_PROVIDERS", [])
+
     def list(self, query: Optional[Dict[str, Any]] = None) -> List[dict]:
         query = self._normalize_query(query)
         resp = self._request("GET", CHAT_URL, query=query, action="list chats")
