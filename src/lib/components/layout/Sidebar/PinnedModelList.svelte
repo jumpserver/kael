@@ -3,7 +3,7 @@
 
 	import { onMount } from 'svelte';
 
-	import { chatId, mobile, models, settings, showSidebar, user } from '$lib/stores';
+	import { chatId, mobile, models, settings, showSidebar } from '$lib/stores';
 	import { WEBUI_BASE_URL } from '$lib/constants';
 	import { updateUserSettings } from '$lib/apis/users';
 	import PinnedModelItem from './PinnedModelItem.svelte';
@@ -27,7 +27,7 @@
 					pinnedModels.splice(newIndex, 0, modelId);
 
 					settings.set({ ...$settings, pinnedModels: pinnedModels });
-					await updateUserSettings({ ui: $settings }, $user?.name);
+					await updateUserSettings(localStorage.token, { ui: $settings });
 				}
 			});
 		}
@@ -55,7 +55,7 @@
 				onUnpin={() => {
 					const pinnedModels = $settings.pinnedModels.filter((id) => id !== modelId);
 					settings.set({ ...$settings, pinnedModels });
-					updateUserSettings({ ui: $settings }, $user?.name);
+					updateUserSettings(localStorage.token, { ui: $settings });
 				}}
 			/>
 		{/if}

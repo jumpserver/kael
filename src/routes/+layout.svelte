@@ -26,7 +26,6 @@
 		isLastActiveTab,
 		isApp,
 		appInfo,
-		appData,
 		toolServers,
 		playingNotificationSound
 	} from '$lib/stores';
@@ -72,7 +71,7 @@
 	const BREAKPOINT = 768;
 
 	const setupSocket = async (enableWebsocket) => {
-		const _socket = io(undefined, {
+		const _socket = io(`${WEBUI_BASE_URL}` || undefined, {
 			reconnection: true,
 			reconnectionDelay: 1000,
 			reconnectionDelayMax: 5000,
@@ -87,6 +86,7 @@
 		});
 
 		_socket.on('connect', async () => {
+			console.log('connected', _socket.id);
 			const version = await getVersion(localStorage.token);
 			if (version !== null) {
 				if ($WEBUI_VERSION !== null && version !== $WEBUI_VERSION) {
@@ -312,7 +312,7 @@
 					toast.custom(NotificationToast, {
 						componentProps: {
 							onClick: () => {
-								goto(`/kael/c/${event.chat_id}`);
+								goto(`/c/${event.chat_id}`);
 							},
 							content: content,
 							title: title
@@ -461,7 +461,7 @@
 				toast.custom(NotificationToast, {
 					componentProps: {
 						onClick: () => {
-							goto(`/kael/channels/${event.channel_id}`);
+							goto(`/channels/${event.channel_id}`);
 						},
 						content: data?.content,
 						title: `#${event?.channel?.name}`

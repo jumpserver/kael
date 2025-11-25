@@ -112,7 +112,7 @@
 			{#if role === 'admin'}
 				<DropdownMenu.Item
 					as="a"
-					href="/kael/playground"
+					href="/playground"
 					class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition select-none"
 					on:click={async () => {
 						show = false;
@@ -129,8 +129,8 @@
 				</DropdownMenu.Item>
 				<DropdownMenu.Item
 					as="a"
-					href="/kael/admin"
-					class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition select-none hidden"
+					href="/admin"
+					class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition select-none"
 					on:click={async () => {
 						show = false;
 						if ($mobile) {
@@ -203,7 +203,7 @@
 			<hr class=" border-gray-50 dark:border-gray-800 my-1 p-0" />
 
 			<DropdownMenu.Item
-				class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition hidden"
+				class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition"
 				on:click={async () => {
 					const res = await userSignOut();
 					user.set(null);

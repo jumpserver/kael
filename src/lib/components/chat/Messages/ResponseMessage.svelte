@@ -14,7 +14,6 @@
 	import { createNewFeedback, getFeedbackById, updateFeedbackById } from '$lib/apis/evaluations';
 	import { getChatById } from '$lib/apis/chats';
 	import { generateTags } from '$lib/apis';
-	import ModelIcon from '$lib/components/icons/models/ModelIcon.svelte';
 
 	import {
 		audioQueue,
@@ -578,14 +577,13 @@
 		id="message-{message.id}"
 		dir={$settings.chatDirection}
 	>
-		<div class={`shrink-0 ltr:mr-1 rtl:ml-3 hidden @lg:flex mt-1 `}>
-			<ModelIcon name={model?.name ?? message.model} className="size-8 mr-2" />
+		<div class={`shrink-0 ltr:mr-3 rtl:ml-3 hidden @lg:flex mt-1 `}>
 			<ProfileImage
 				src={model?.info?.meta?.profile_image_url ??
 					($i18n.language === 'dg-DG'
 						? `${WEBUI_BASE_URL}/doge.png`
 						: `${WEBUI_BASE_URL}/favicon.png`)}
-				className={'size-8 assistant-message-profile-image hidden'}
+				className={'size-8 assistant-message-profile-image'}
 			/>
 		</div>
 

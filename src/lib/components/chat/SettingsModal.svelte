@@ -521,7 +521,7 @@
 		console.log(updated);
 		await settings.set({ ...$settings, ...updated });
 		await models.set(await getModels());
-		await updateUserSettings({ ui: $settings }, $user?.name);
+		await updateUserSettings(localStorage.token, { ui: $settings });
 	};
 
 	const getModels = async () => {
@@ -789,7 +789,7 @@
 								role="tab"
 								aria-controls="tab-account"
 								aria-selected={selectedTab === 'account'}
-								class={`px-0.5 md:px-2.5 py-1 min-w-fit rounded-xl flex-1 md:flex-none flex text-left transition hidden
+								class={`px-0.5 md:px-2.5 py-1 min-w-fit rounded-xl flex-1 md:flex-none flex text-left transition
 								${
 									selectedTab === 'account'
 										? ($settings?.highContrastMode ?? false)

@@ -595,9 +595,9 @@ def get_sources_from_items(
             # Chat Attached
             chat = Chats.get_chat_by_id(item.get("id"))
 
-            if chat and (user.role == "admin" or chat['user_id'] == user.id):
-                messages_map = chat['chat'].get("history", {}).get("messages", {})
-                message_id = chat['chat'].get("history", {}).get("currentId")
+            if chat and (user.role == "admin" or chat.user_id == user.id):
+                messages_map = chat.chat.get("history", {}).get("messages", {})
+                message_id = chat.chat.get("history", {}).get("currentId")
 
                 if messages_map and message_id:
                     # Reconstruct the message list in order
@@ -612,7 +612,7 @@ def get_sources_from_items(
                     # User has access to the chat
                     query_result = {
                         "documents": [[message_history]],
-                        "metadatas": [[{"file_id": chat['id'], "name": chat['title']}]],
+                        "metadatas": [[{"file_id": chat.id, "name": chat.title}]],
                     }
 
         elif item.get("type") == "url":
@@ -797,7 +797,6 @@ def get_sources_from_items(
 
 def get_model_path(model: str, update_model: bool = False):
     # Construct huggingface_hub kwargs with local_files_only to return the snapshot path
-    return
     cache_dir = os.getenv("SENTENCE_TRANSFORMERS_HOME")
 
     local_files_only = not update_model
@@ -862,8 +861,8 @@ def generate_openai_batch_embeddings(
                     {
                         "X-OpenWebUI-User-Name": quote(user.name, safe=" "),
                         "X-OpenWebUI-User-Id": user.id,
-                        "X-OpenWebUI-User-Username": user.username,
-                        "X-OpenWebUI-User-Role": 'admin',
+                        "X-OpenWebUI-User-Email": user.email,
+                        "X-OpenWebUI-User-Role": user.role,
                     }
                     if ENABLE_FORWARD_USER_INFO_HEADERS and user
                     else {}
@@ -911,8 +910,8 @@ def generate_azure_openai_batch_embeddings(
                         {
                             "X-OpenWebUI-User-Name": quote(user.name, safe=" "),
                             "X-OpenWebUI-User-Id": user.id,
-                            "X-OpenWebUI-User-Username": user.username,
-                            "X-OpenWebUI-User-Role": 'admin',
+                            "X-OpenWebUI-User-Email": user.email,
+                            "X-OpenWebUI-User-Role": user.role,
                         }
                         if ENABLE_FORWARD_USER_INFO_HEADERS and user
                         else {}
@@ -961,8 +960,8 @@ def generate_ollama_batch_embeddings(
                     {
                         "X-OpenWebUI-User-Name": quote(user.name, safe=" "),
                         "X-OpenWebUI-User-Id": user.id,
-                        "X-OpenWebUI-User-Username": user.username,
-                        "X-OpenWebUI-User-Role": 'admin',
+                        "X-OpenWebUI-User-Email": user.email,
+                        "X-OpenWebUI-User-Role": user.role,
                     }
                     if ENABLE_FORWARD_USER_INFO_HEADERS
                     else {}

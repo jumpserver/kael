@@ -110,7 +110,7 @@
 			id: `${model.id}-clone`,
 			name: `${model.name} (Clone)`
 		});
-		goto('/kael/workspace/models/create');
+		goto('/workspace/models/create');
 	};
 
 	const shareModelHandler = async (model) => {
@@ -335,7 +335,7 @@
 				{/if}
 				<a
 					class=" px-2 py-1.5 rounded-xl bg-black text-white dark:bg-white dark:text-black transition font-medium text-sm flex items-center"
-					href="/kael/workspace/models/create"
+					href="/workspace/models/create"
 				>
 					<Plus className="size-3" strokeWidth="2.5" />
 
@@ -422,7 +422,7 @@
 								model.user_id === $user?.id ||
 								model.access_control.write.group_ids.some((wg) => group_ids.includes(wg))
 							) {
-								goto(`/kael/workspace/models/edit?id=${encodeURIComponent(model.id)}`);
+								goto(`/workspace/models/edit?id=${encodeURIComponent(model.id)}`);
 							}
 						}}
 					>
@@ -502,7 +502,7 @@
 																	{model}
 																	editHandler={() => {
 																		goto(
-																			`/kael/workspace/models/edit?id=${encodeURIComponent(model.id)}`
+																			`/workspace/models/edit?id=${encodeURIComponent(model.id)}`
 																		);
 																	}}
 																	shareHandler={() => {

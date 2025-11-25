@@ -214,17 +214,16 @@ def setup_lazy_routes(app):
                     raise Exception("Model not found")
 
                 model = request.app.state.MODELS[model_id]
-                # model_info = Models.get_model_by_id(model_id)
-                model_info = None
+                model_info = Models.get_model_by_id(model_id)
 
                 # Check if user has access to the model
-                # if not BYPASS_MODEL_ACCESS_CONTROL and (
-                #         user.role != "admin" or not BYPASS_ADMIN_ACCESS_CONTROL
-                # ):
-                #     try:
-                #         check_model_access(user, model)
-                #     except Exception as e:
-                #         raise e
+                if not BYPASS_MODEL_ACCESS_CONTROL and (
+                        user.role != "admin" or not BYPASS_ADMIN_ACCESS_CONTROL
+                ):
+                    try:
+                        check_model_access(user, model)
+                    except Exception as e:
+                        raise e
             else:
                 model = model_item
                 model_info = None
@@ -441,7 +440,7 @@ def setup_lazy_routes(app):
             request: Request, chat_id: str, user=Depends(get_verified_user)
     ):
         chat = Chats.get_chat_by_id(chat_id)
-        if chat is None or chat['user_id'] != user.id:
+        if chat is None or chat.user_id != user.id:
             return {"task_ids": []}
 
         task_ids = await list_task_ids_by_item_id(request.app.state.redis, chat_id)

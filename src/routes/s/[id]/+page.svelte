@@ -5,7 +5,7 @@
 
 	import dayjs from 'dayjs';
 
-import { settings, chatId, WEBUI_NAME, models, config, user as sessionUser } from '$lib/stores';
+	import { settings, chatId, WEBUI_NAME, models, config } from '$lib/stores';
 	import { convertMessagesToHistory, createMessagesList } from '$lib/utils';
 
 	import { getChatByShareId, cloneSharedChatById } from '$lib/apis/chats';
@@ -60,7 +60,7 @@ import { settings, chatId, WEBUI_NAME, models, config, user as sessionUser } fro
 	//////////////////////////
 
 	const loadSharedChat = async () => {
-		const userSettings = await getUserSettings($sessionUser?.name).catch((error) => {
+		const userSettings = await getUserSettings(localStorage.token).catch((error) => {
 			console.error(error);
 			return null;
 		});
@@ -136,7 +136,7 @@ import { settings, chatId, WEBUI_NAME, models, config, user as sessionUser } fro
 		});
 
 		if (res) {
-			goto(`/kael/c/${res.id}`);
+			goto(`/c/${res.id}`);
 		}
 	};
 </script>

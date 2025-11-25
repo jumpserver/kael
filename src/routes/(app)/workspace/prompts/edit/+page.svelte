@@ -45,10 +45,10 @@
 					access_control: _prompt?.access_control === undefined ? {} : _prompt?.access_control
 				};
 			} else {
-				goto('/kael/workspace/prompts');
+				goto('/workspace/prompts');
 			}
 		} else {
-			goto('/kael/workspace/prompts');
+			goto('/workspace/prompts');
 		}
 	});
 </script>

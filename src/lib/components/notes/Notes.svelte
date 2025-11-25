@@ -121,7 +121,7 @@
 		});
 
 		if (res) {
-			goto(`/kael/notes/${res.id}`);
+			goto(`/notes/${res.id}`);
 		}
 	};
 

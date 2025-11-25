@@ -5,7 +5,7 @@
 	import Users from '$lib/components/admin/Users.svelte';
 
 	onMount(() => {
-		goto('/kael/admin/users/overview');
+		goto('/admin/users/overview');
 	});
 </script>
 

@@ -956,7 +956,7 @@ ENABLE_DIRECT_CONNECTIONS = PersistentConfig(
 ENABLE_OLLAMA_API = PersistentConfig(
     "ENABLE_OLLAMA_API",
     "ollama.enable",
-    os.environ.get("ENABLE_OLLAMA_API", "False").lower() == "true",
+    os.environ.get("ENABLE_OLLAMA_API", "True").lower() == "true",
 )
 
 OLLAMA_API_BASE_URL = os.environ.get(
@@ -1114,14 +1114,14 @@ ENABLE_SIGNUP = PersistentConfig(
     (
         False
         if not WEBUI_AUTH
-        else os.environ.get("ENABLE_SIGNUP", "False").lower() == "true"
+        else os.environ.get("ENABLE_SIGNUP", "True").lower() == "true"
     ),
 )
 
 ENABLE_LOGIN_FORM = PersistentConfig(
     "ENABLE_LOGIN_FORM",
     "ui.ENABLE_LOGIN_FORM",
-    os.environ.get("ENABLE_LOGIN_FORM", "False").lower() == "true",
+    os.environ.get("ENABLE_LOGIN_FORM", "True").lower() == "true",
 )
 
 
@@ -1322,11 +1322,11 @@ USER_PERMISSIONS_CHAT_STT = (
 )
 
 USER_PERMISSIONS_CHAT_TTS = (
-    os.environ.get("USER_PERMISSIONS_CHAT_TTS", "False").lower() == "true"
+    os.environ.get("USER_PERMISSIONS_CHAT_TTS", "True").lower() == "true"
 )
 
 USER_PERMISSIONS_CHAT_CALL = (
-    os.environ.get("USER_PERMISSIONS_CHAT_CALL", "False").lower() == "true"
+    os.environ.get("USER_PERMISSIONS_CHAT_CALL", "True").lower() == "true"
 )
 
 USER_PERMISSIONS_CHAT_MULTIPLE_MODELS = (
@@ -1426,13 +1426,13 @@ ENABLE_CHANNELS = PersistentConfig(
 ENABLE_NOTES = PersistentConfig(
     "ENABLE_NOTES",
     "notes.enable",
-    os.environ.get("ENABLE_NOTES", "False").lower() == "true",
+    os.environ.get("ENABLE_NOTES", "True").lower() == "true",
 )
 
 ENABLE_EVALUATION_ARENA_MODELS = PersistentConfig(
     "ENABLE_EVALUATION_ARENA_MODELS",
     "evaluation.arena.enable",
-    os.environ.get("ENABLE_EVALUATION_ARENA_MODELS", "False").lower() == "true",
+    os.environ.get("ENABLE_EVALUATION_ARENA_MODELS", "True").lower() == "true",
 )
 EVALUATION_ARENA_MODELS = PersistentConfig(
     "EVALUATION_ARENA_MODELS",
@@ -1475,7 +1475,7 @@ ENABLE_ADMIN_CHAT_ACCESS = (
 ENABLE_COMMUNITY_SHARING = PersistentConfig(
     "ENABLE_COMMUNITY_SHARING",
     "ui.enable_community_sharing",
-    os.environ.get("ENABLE_COMMUNITY_SHARING", "False").lower() == "true",
+    os.environ.get("ENABLE_COMMUNITY_SHARING", "True").lower() == "true",
 )
 
 ENABLE_MESSAGE_RATING = PersistentConfig(
@@ -1595,36 +1595,13 @@ TITLE_GENERATION_PROMPT_TEMPLATE = PersistentConfig(
     "task.title.prompt_template",
     os.environ.get("TITLE_GENERATION_PROMPT_TEMPLATE", ""),
 )
-# TODO: re-enable examples after testing
-# DEFAULT_TITLE_GENERATION_PROMPT_TEMPLATE = """### Task:
-# Generate a concise, 3-5 word title with an emoji summarizing the chat history.
-# ### Guidelines:
-# - The title should clearly represent the main theme or subject of the conversation.
-# - Use emojis that enhance understanding of the topic, but avoid quotation marks or special formatting.
-# - Write the title in the chat's primary language; default to English if multilingual.
-# - Prioritize accuracy over excessive creativity; keep it clear and simple.
-# - Your entire response must consist solely of the JSON object, without any introductory or concluding text.
-# - The output must be a single, raw JSON object, without any markdown code fences or other encapsulating text.
-# - Ensure no conversational text, affirmations, or explanations precede or follow the raw JSON output, as this will cause direct parsing failure.
-# ### Output:
-# JSON format: { "title": "your concise title here" }
-# ### Examples:
-# - { "title": "📉 Stock Market Trends" },
-# - { "title": "🍪 Perfect Chocolate Chip Recipe" },
-# - { "title": "Evolution of Music Streaming" },
-# - { "title": "Remote Work Productivity Tips" },
-# - { "title": "Artificial Intelligence in Healthcare" },
-# - { "title": "🎮 Video Game Development Insights" }
-# ### Chat History:
-# <chat_history>
-# {{MESSAGES:END:2}}
-# </chat_history>"""
 
 DEFAULT_TITLE_GENERATION_PROMPT_TEMPLATE = """### Task:
-Generate a concise, 3-5 word title.
+Generate a concise, 3-5 word title with an emoji summarizing the chat history.
 ### Guidelines:
 - The title should clearly represent the main theme or subject of the conversation.
-- Use the primary language of the chat to write the title; if the chat contains multiple languages, generate the title in the primary language used.
+- Use emojis that enhance understanding of the topic, but avoid quotation marks or special formatting.
+- Write the title in the chat's primary language; default to English if multilingual.
 - Prioritize accuracy over excessive creativity; keep it clear and simple.
 - Your entire response must consist solely of the JSON object, without any introductory or concluding text.
 - The output must be a single, raw JSON object, without any markdown code fences or other encapsulating text.
@@ -1632,12 +1609,12 @@ Generate a concise, 3-5 word title.
 ### Output:
 JSON format: { "title": "your concise title here" }
 ### Examples:
-- { "title": "Stock Market Trends" },
-- { "title": "Perfect Chocolate Chip Recipe" },
+- { "title": "📉 Stock Market Trends" },
+- { "title": "🍪 Perfect Chocolate Chip Recipe" },
 - { "title": "Evolution of Music Streaming" },
 - { "title": "Remote Work Productivity Tips" },
 - { "title": "Artificial Intelligence in Healthcare" },
-- { "title": "Video Game Development Insights" }
+- { "title": "🎮 Video Game Development Insights" }
 ### Chat History:
 <chat_history>
 {{MESSAGES:END:2}}

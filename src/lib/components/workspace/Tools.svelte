@@ -117,7 +117,7 @@
 				id: `${_tool.id}_clone`,
 				name: `${_tool.name} (Clone)`
 			});
-			goto('/kael/workspace/tools/create');
+			goto('/workspace/tools/create');
 		}
 	};
 
@@ -197,7 +197,7 @@
 		sessionStorage.tool = JSON.stringify({
 			...tool
 		});
-		goto('/kael/workspace/tools/create');
+		goto('/workspace/tools/create');
 	}}
 	loadUrlHandler={async (url) => {
 		return await loadToolByUrl(localStorage.token, url);
@@ -271,7 +271,7 @@
 				{#if $user?.role === 'admin'}
 					<AddToolMenu
 						createHandler={() => {
-							goto('/kael/workspace/tools/create');
+							goto('/workspace/tools/create');
 						}}
 						importFromLinkHandler={() => {
 							showImportModal = true;
@@ -288,7 +288,7 @@
 				{:else}
 					<a
 						class=" px-2 py-1.5 rounded-xl bg-black text-white dark:bg-white dark:text-black transition font-medium text-sm flex items-center"
-						href="/kael/workspace/tools/create"
+						href="/workspace/tools/create"
 					>
 						<Plus className="size-3" strokeWidth="2.5" />
 
@@ -458,7 +458,7 @@
 
 									<ToolMenu
 										editHandler={() => {
-											goto(`/kael/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`);
+											goto(`/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`);
 										}}
 										shareHandler={() => {
 											shareHandler(tool);

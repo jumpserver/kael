@@ -57,7 +57,7 @@ class Tools:
         pass
 
     # Add your custom tools using pure Python code here, make sure to add type hints and descriptions
-
+	
     def get_user_name_and_email_and_id(self, __user__: dict = {}) -> str:
         """
         Get the user name, Email and ID from the user object.
@@ -213,7 +213,7 @@ class Tools:
 								<button
 									class="w-full text-left text-sm py-1.5 px-1 rounded-lg dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-gray-850"
 									on:click={() => {
-										goto('/kael/workspace/tools');
+										goto('/workspace/tools');
 									}}
 									type="button"
 								>

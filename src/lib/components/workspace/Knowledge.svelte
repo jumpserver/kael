@@ -130,7 +130,7 @@
 			<div class="flex w-full justify-end gap-1.5">
 				<a
 					class=" px-2 py-1.5 rounded-xl bg-black text-white dark:bg-white dark:text-black transition font-medium text-sm flex items-center"
-					href="/kael/workspace/knowledge/create"
+					href="/workspace/knowledge/create"
 				>
 					<Plus className="size-3" strokeWidth="2.5" />
 
@@ -207,7 +207,7 @@
 										)
 									);
 								} else {
-									goto(`/kael/workspace/knowledge/${item.id}`);
+									goto(`/workspace/knowledge/${item.id}`);
 								}
 							}}
 						>

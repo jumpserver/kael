@@ -158,7 +158,7 @@
 			note = res;
 			files = res.data.files || [];
 		} else {
-			goto('/kael');
+			goto('/');
 			return;
 		}
 
@@ -583,7 +583,7 @@ ${content}
 
 		if (res) {
 			toast.success($i18n.t('Note deleted successfully'));
-			goto('/kael/notes');
+			goto('/notes');
 		} else {
 			toast.error($i18n.t('Failed to delete note'));
 		}
