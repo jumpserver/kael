@@ -1159,4 +1159,11 @@
 	class="relative w-full min-w-full h-full min-h-fit {className} {!editable
 		? 'cursor-not-allowed'
 		: ''}"
-/>
+>
+</div>
+
+<style>
+ :global(p.is-empty.is-editor-empty) {	
+		opacity: 0.6;
+	}
+</style>

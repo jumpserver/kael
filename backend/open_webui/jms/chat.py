@@ -18,25 +18,25 @@ class ChatHandler(BaseWisp):
     def list(self, query: Optional[Dict[str, Any]] = None) -> List[dict]:
         query = self._normalize_query(query)
         resp = self._request("GET", CHAT_URL, query=query, action="list chats")
-        return self._loads(resp.body)
+        return self._loads(CHAT_URL, resp.body)
 
     def retrieve(self, chat_id: str) -> dict:
         self._ensure_id(chat_id)
         path = f"{CHAT_URL}{chat_id}/"
         resp = self._request("GET", path, action=f"retrieve chat {chat_id}")
-        return self._loads(resp.body)
+        return self._loads(path, resp.body)
 
     def create(self, data: Dict[str, Any]) -> dict:
         body = self._dumps(data)
         resp = self._request("POST", CHAT_URL, body=body, action="create chat")
-        return self._loads(resp.body)
+        return self._loads(CHAT_URL, resp.body)
 
     def update(self, chat_id: Optional[str] = None, data: Dict[str, Any] = None, query: Dict[str, Any] = None) -> dict:
         self._ensure_id(chat_id)
         path = f"{CHAT_URL}{chat_id}/"
         body = self._dumps(data)
         resp = self._request("PATCH", path, query=query, body=body, action=f"update chat {chat_id}")
-        return self._loads(resp.body)
+        return self._loads(path, resp.body)
 
     def destroy(self, chat_id: Optional[str] = None, query: Dict[str, Any] = None) -> None:
         """
@@ -100,11 +100,11 @@ class ChatHandler(BaseWisp):
             raise WispError(f"Failed to serialize request body: {e}") from e
 
     @staticmethod
-    def _loads(b: bytes) -> Any:
+    def _loads(path: str, b: bytes) -> Any:
         try:
             return json.loads(b.decode("utf-8")) if b else None
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            raise WispError(f"Failed to parse response body: {e}") from e
+            raise WispError(f"Failed to parse response body: {e} path {path}") from e
 
     @staticmethod
     def _safe_decode(b: Optional[bytes]) -> str:
