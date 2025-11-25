@@ -190,7 +190,7 @@ async def generate_title(
     )
 
     log.debug(
-        f"generating chat title using model {task_model_id} for user {user.username} "
+        f"generating chat title using model {task_model_id} for user {user.email} "
     )
 
     if request.app.state.config.TITLE_GENERATION_PROMPT_TEMPLATE != "":
@@ -274,7 +274,7 @@ async def generate_follow_ups(
     )
 
     log.debug(
-        f"generating chat title using model {task_model_id} for user {user.username} "
+        f"generating chat title using model {task_model_id} for user {user.email} "
     )
 
     if request.app.state.config.FOLLOW_UP_GENERATION_PROMPT_TEMPLATE != "":
@@ -347,7 +347,7 @@ async def generate_chat_tags(
     )
 
     log.debug(
-        f"generating chat tags using model {task_model_id} for user {user.username} "
+        f"generating chat tags using model {task_model_id} for user {user.email} "
     )
 
     if request.app.state.config.TAGS_GENERATION_PROMPT_TEMPLATE != "":
@@ -413,7 +413,7 @@ async def generate_image_prompt(
     )
 
     log.debug(
-        f"generating image prompt using model {task_model_id} for user {user.username} "
+        f"generating image prompt using model {task_model_id} for user {user.email} "
     )
 
     if request.app.state.config.IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE != "":
@@ -498,7 +498,7 @@ async def generate_queries(
     )
 
     log.debug(
-        f"generating {type} queries using model {task_model_id} for user {user.username}"
+        f"generating {type} queries using model {task_model_id} for user {user.email}"
     )
 
     if (request.app.state.config.QUERY_GENERATION_PROMPT_TEMPLATE).strip() != "":
@@ -583,7 +583,7 @@ async def generate_autocompletion(
     )
 
     log.debug(
-        f"generating autocompletion using model {task_model_id} for user {user.username}"
+        f"generating autocompletion using model {task_model_id} for user {user.email}"
     )
 
     if (request.app.state.config.AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE).strip() != "":
@@ -649,7 +649,7 @@ async def generate_emoji(
         models,
     )
 
-    log.debug(f"generating emoji using model {task_model_id} for user {user.username} ")
+    log.debug(f"generating emoji using model {task_model_id} for user {user.email} ")
 
     template = DEFAULT_EMOJI_GENERATION_PROMPT_TEMPLATE
 

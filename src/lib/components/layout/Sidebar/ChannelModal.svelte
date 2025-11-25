@@ -66,7 +66,7 @@
 			onUpdate();
 
 			if ($page.url.pathname === `/channels/${channel.id}`) {
-				goto('/kael');
+				goto('/');
 			}
 		}
 

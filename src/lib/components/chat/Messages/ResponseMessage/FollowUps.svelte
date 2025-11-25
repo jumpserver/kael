@@ -8,7 +8,7 @@
 	export let onClick: (followUp: string) => void = () => {};
 </script>
 
-<div class="mt-4 hidden">
+<div class="mt-4">
 	<div class="text-sm font-medium">
 		{$i18n.t('Follow up')}
 	</div>

@@ -11,7 +11,7 @@
 	export let selectedModels = [''];
 	export let disabled = false;
 
-	export let showSetDefault = false;
+	export let showSetDefault = true;
 
 	const saveDefaultModel = async () => {
 		const hasEmptyModel = selectedModels.filter((it) => it === '');
@@ -20,7 +20,7 @@
 			return;
 		}
 		settings.set({ ...$settings, models: selectedModels });
-		await updateUserSettings({ ui: $settings }, $user?.name);
+		await updateUserSettings(localStorage.token, { ui: $settings });
 
 		toast.success($i18n.t('Default model updated'));
 	};
@@ -35,7 +35,7 @@
 		}
 
 		settings.set({ ...$settings, pinnedModels: pinnedModels });
-		await updateUserSettings({ ui: $settings }, $user?.name);
+		await updateUserSettings(localStorage.token, { ui: $settings });
 	};
 
 	$: if (selectedModels.length > 0 && $models.length > 0) {
@@ -71,7 +71,7 @@
 			{#if $user?.role === 'admin' || ($user?.permissions?.chat?.multiple_models ?? true)}
 				{#if selectedModelIdx === 0}
 					<div
-						class="hidden self-center mx-1 disabled:text-gray-600 disabled:hover:text-gray-600 -translate-y-[0.5px]"
+						class="  self-center mx-1 disabled:text-gray-600 disabled:hover:text-gray-600 -translate-y-[0.5px]"
 					>
 						<Tooltip content={$i18n.t('Add Model')}>
 							<button
@@ -129,7 +129,7 @@
 
 {#if showSetDefault}
 	<div
-		class="relative text-left mt-[1px] ml-1 text-[0.7rem] text-gray-600 dark:text-gray-400 font-primary hidden"
+		class="relative text-left mt-[1px] ml-1 text-[0.7rem] text-gray-600 dark:text-gray-400 font-primary"
 	>
 		<button on:click={saveDefaultModel}> {$i18n.t('Set as default')}</button>
 	</div>

@@ -12,8 +12,6 @@
 	import { createEventDispatcher, onMount, getContext, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 
-	import ModelIcon from '$lib/components/icons/models/ModelIcon.svelte';
-
 	import { deleteModel, getOllamaVersion, pullModel, unloadModel } from '$lib/apis/ollama';
 
 	import {
@@ -449,7 +447,7 @@
 				</div>
 			{/if}
 
-			<div class="px-2 hidden">
+			<div class="px-2">
 				{#if tags && items.filter((item) => !(item.model?.info?.meta?.hidden ?? false)).length > 0}
 					<div
 						class=" flex w-full bg-white dark:bg-gray-850 overflow-x-auto scrollbar-none font-[450] mb-0.5"

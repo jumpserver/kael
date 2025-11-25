@@ -221,87 +221,61 @@ export const searchUsers = async (token: string, query: string) => {
 
 	return res;
 };
-const USER_SETTINGS_STORAGE_KEY = 'kael:user-settings';
-const DEFAULT_USER_SETTINGS = {
-	ui: {
-		models: ['gpt-4o-mini'],
-		version: '4.0.0'
-	}
-};
 
-const getUserSettingsKey = (userName?: string | null) => {
-	if (typeof localStorage === 'undefined') {
-		return USER_SETTINGS_STORAGE_KEY;
-	}
-
-	const identifier = userName?.trim() || '';
-
-	return identifier ? `${USER_SETTINGS_STORAGE_KEY}:${identifier}` : USER_SETTINGS_STORAGE_KEY;
-};
-
-const readLocalSettings = (userName?: string | null) => {
-	if (typeof localStorage === 'undefined') {
-		return { ...DEFAULT_USER_SETTINGS };
-	}
-
-	try {
-		const storageKey = getUserSettingsKey(userName);
-		const stored = localStorage.getItem(storageKey);
-
-		if (!stored) {
-			return { ...DEFAULT_USER_SETTINGS };
+export const getUserSettings = async (token: string) => {
+	let error = null;
+	const res = await fetch(`${WEBUI_API_BASE_URL}/users/user/settings`, {
+		method: 'GET',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
 		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
 
-		const parsed = JSON.parse(stored);
-
-		return {
-			...DEFAULT_USER_SETTINGS,
-			...parsed,
-			ui: {
-				...DEFAULT_USER_SETTINGS.ui,
-				...(parsed?.ui ?? {})
-			}
-		};
-	} catch (err) {
-		console.error(err);
-		return { ...DEFAULT_USER_SETTINGS };
+	if (error) {
+		throw error;
 	}
+
+	return res;
 };
 
-const writeLocalSettings = (settings: object, userName?: string | null) => {
-	if (typeof localStorage === 'undefined') return;
+export const updateUserSettings = async (token: string, settings: object) => {
+	let error = null;
 
-	try {
-		const storageKey = getUserSettingsKey(userName);
-		localStorage.setItem(storageKey, JSON.stringify(settings));
-	} catch (err) {
-		console.error(err);
+	const res = await fetch(`${WEBUI_API_BASE_URL}/users/user/settings/update`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			...settings
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
 	}
-};
 
-export const getUserSettings = async (userName?: string | null) => {
-	return readLocalSettings(userName);
-};
-
-export const updateUserSettings = async (
-	settings: Record<string, unknown>,
-	userName?: string | null
-) => {
-	const currentSettings = readLocalSettings(userName);
-	const incomingUi = (settings.ui as Record<string, unknown>) ?? {};
-	const updatedSettings = {
-		...currentSettings,
-		...settings,
-		ui: {
-			...DEFAULT_USER_SETTINGS.ui,
-			...(currentSettings?.ui ?? {}),
-			...incomingUi
-		}
-	};
-
-	writeLocalSettings(updatedSettings, userName);
-
-	return updatedSettings;
+	return res;
 };
 
 export const getUserById = async (token: string, userId: string) => {

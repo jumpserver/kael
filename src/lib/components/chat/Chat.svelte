@@ -99,8 +99,6 @@
 
 	export let chatIdProp = '';
 
-	const SELECTED_MODELS_STORAGE_KEY = 'kael:selected-models';
-
 	let loading = true;
 
 	const eventTarget = new EventTarget();
@@ -240,29 +238,9 @@
 		console.log('saveSessionSelectedModels', selectedModels, sessionStorage.selectedModels);
 	};
 
-	const saveLocalSelectedModels = () => {
-		const validSelection = selectedModels.filter((modelId) => modelId);
-
-		if (validSelection.length === 0) {
-			localStorage.removeItem(SELECTED_MODELS_STORAGE_KEY);
-			return;
-		}
-
-		const selectionString = JSON.stringify(validSelection);
-		if (localStorage.getItem(SELECTED_MODELS_STORAGE_KEY) === selectionString) {
-			return;
-		}
-
-		localStorage.setItem(SELECTED_MODELS_STORAGE_KEY, selectionString);
-	};
-
 	let oldSelectedModelIds = [''];
 	$: if (JSON.stringify(selectedModelIds) !== JSON.stringify(oldSelectedModelIds)) {
 		onSelectedModelIdsChange();
-	}
-
-	$: if (selectedModels) {
-		saveLocalSelectedModels();
 	}
 
 	const onSelectedModelIdsChange = () => {
@@ -976,18 +954,6 @@
 				if (sessionStorage.selectedModels) {
 					selectedModels = JSON.parse(sessionStorage.selectedModels);
 					sessionStorage.removeItem('selectedModels');
-				} else if (localStorage.getItem(SELECTED_MODELS_STORAGE_KEY)) {
-					try {
-						const localSelectedModels = JSON.parse(
-							localStorage.getItem(SELECTED_MODELS_STORAGE_KEY) ?? '[]'
-						);
-
-						if (Array.isArray(localSelectedModels)) {
-							selectedModels = localSelectedModels;
-						}
-					} catch (error) {
-						console.error('Failed to parse stored models from localStorage', error);
-					}
 				} else {
 					if ($settings?.models) {
 						selectedModels = $settings?.models;
@@ -1014,7 +980,7 @@
 		await showOverview.set(false);
 		await showArtifacts.set(false);
 
-		if ($page.url.pathname.includes('/kael/c/')) {
+		if ($page.url.pathname.includes('/c/')) {
 			window.history.replaceState(history.state, '', `/`);
 		}
 
@@ -1089,7 +1055,7 @@
 			$models.map((m) => m.id).includes(modelId) ? modelId : ''
 		);
 
-		const userSettings = await getUserSettings($user?.name);
+		const userSettings = await getUserSettings(localStorage.token);
 
 		if (userSettings) {
 			settings.set(userSettings.ui);
@@ -1141,7 +1107,7 @@
 
 				chatTitle.set(chatContent.title);
 
-				const userSettings = await getUserSettings($user?.name);
+				const userSettings = await getUserSettings(localStorage.token);
 
 				if (userSettings) {
 					await settings.set(userSettings.ui);

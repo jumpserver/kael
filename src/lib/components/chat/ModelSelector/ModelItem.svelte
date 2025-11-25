@@ -16,7 +16,6 @@
 	import { toast } from 'svelte-sonner';
 	import Tag from '$lib/components/icons/Tag.svelte';
 	import Label from '$lib/components/icons/Label.svelte';
-	import ModelIcon from '$lib/components/icons/models/ModelIcon.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -77,9 +76,11 @@
 		<div class="flex items-center gap-2">
 			<div class="flex items-center min-w-fit">
 				<Tooltip content={$user?.role === 'admin' ? (item?.value ?? '') : ''} placement="top-start">
-					<ModelIcon
-						name={item.model?.name ?? item.value ?? item.label ?? ''}
-						className="size-5 mr-2"
+					<img
+						src={item.model?.info?.meta?.profile_image_url ??
+							`${WEBUI_BASE_URL}/static/favicon.png`}
+						alt="Model"
+						class="rounded-full size-5 flex items-center"
 					/>
 				</Tooltip>
 			</div>
@@ -174,7 +175,7 @@
 							</svg>
 						</div>
 					</Tooltip>
-				{:else if item.model.connection_type === 'external 123'}
+				{:else if item.model.connection_type === 'external'}
 					<Tooltip content={`${$i18n.t('External')}`}>
 						<div class="translate-y-[1px]">
 							<svg

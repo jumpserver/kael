@@ -4,20 +4,20 @@
 	import { onMount } from 'svelte';
 
 	onMount(() => {
-		// if ($user?.role !== 'admin') {
-		// 	if ($user?.permissions?.workspace?.models) {
-		// 		goto('/kael/workspace/models');
-		// 	} else if ($user?.permissions?.workspace?.knowledge) {
-		// 		goto('/kael/workspace/knowledge');
-		// 	} else if ($user?.permissions?.workspace?.prompts) {
-		// 		goto('/kael/workspace/prompts');
-		// 	} else if ($user?.permissions?.workspace?.tools) {
-		// 		goto('/kael/workspace/tools');
-		// 	} else {
-		// 		goto('/kael');
-		// 	}
-		// } else {
-		goto('/kael/');
-		// }
+		if ($user?.role !== 'admin') {
+			if ($user?.permissions?.workspace?.models) {
+				goto('/workspace/models');
+			} else if ($user?.permissions?.workspace?.knowledge) {
+				goto('/workspace/knowledge');
+			} else if ($user?.permissions?.workspace?.prompts) {
+				goto('/workspace/prompts');
+			} else if ($user?.permissions?.workspace?.tools) {
+				goto('/workspace/tools');
+			} else {
+				goto('/');
+			}
+		} else {
+			goto('/workspace/models');
+		}
 	});
 </script>

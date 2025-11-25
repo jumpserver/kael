@@ -64,7 +64,6 @@
 	import Note from '../icons/Note.svelte';
 	import { slide } from 'svelte/transition';
 	import HotkeyHint from '../common/HotkeyHint.svelte';
-	import SearchInput from './Sidebar/SearchInput.svelte';
 
 	const BREAKPOINT = 768;
 
@@ -86,7 +85,6 @@
 
 	let folders = {};
 	let folderRegistry = {};
-	let search = '';
 
 	let newFolderId = null;
 
@@ -225,33 +223,6 @@
 		await chats.set([...($chats ? $chats : []), ...newChatList]);
 
 		chatListLoading = false;
-	};
-
-	let searchDebounceTimeout;
-
-	const searchDebounceHandler = async () => {
-		console.log('search', search);
-		chats.set(null);
-
-		if (searchDebounceTimeout) {
-			clearTimeout(searchDebounceTimeout);
-		}
-
-		if (search === '') {
-			await initChatList();
-			return;
-		} else {
-			searchDebounceTimeout = setTimeout(async () => {
-				allChatsLoaded = false;
-				currentChatPage.set(1);
-				await chats.set(await getChatListBySearchText(localStorage.token, search));
-
-				if ($chats.length === 0) {
-					// tags.set(await getAllTags());
-					tags.set([]);
-				}
-			}, 1000);
-		}
 	};
 
 	const importChatHandler = async (items, pinned = false, folderId = null) => {
@@ -563,14 +534,14 @@
 	id="sidebar-new-chat-button"
 	class="hidden"
 	on:click={() => {
-		goto('/kael');
+		goto('/');
 		newChatHandler();
 	}}
 />
 
 {#if !$mobile && !$showSidebar}
 	<div
-		class=" py-2 px-1.5 flex flex-col justify-between text-black dark:text-white bg-gray-50/50 dark:hover:bg-gray-950/50 h-full border-e border-gray-50 dark:border-gray-850 z-10 transition-all"
+		class=" py-2 px-1.5 flex flex-col justify-between text-black dark:text-white hover:bg-gray-50/50 dark:hover:bg-gray-950/50 h-full border-e border-gray-50 dark:border-gray-850 z-10 transition-all"
 		id="sidebar"
 	>
 		<button
@@ -615,7 +586,7 @@
 								e.stopImmediatePropagation();
 								e.preventDefault();
 
-								goto('/kael');
+								goto('/');
 								newChatHandler();
 							}}
 							aria-label={$i18n.t('New Chat')}
@@ -627,16 +598,8 @@
 					</Tooltip>
 				</div>
 
-				<div class="{$showSidebar ? '' : 'hidden'}">
-					<div class="relative {$temporaryChatEnabled ? 'opacity-20' : ''}">
-						<SearchInput
-							bind:value={search}
-							on:input={searchDebounceHandler}
-							placeholder={$i18n.t('Search')}
-							showClearButton={true}
-						/>
-					</div>
-					<Tooltip content={$i18n.t('Search 123')} placement="right" className="hidden">
+				<div class="">
+					<Tooltip content={$i18n.t('Search')} placement="right">
 						<button
 							class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
 							on:click={(e) => {
@@ -646,7 +609,7 @@
 								showSearch.set(true);
 							}}
 							draggable="false"
-							aria-label={$i18n.t('Search 123')}
+							aria-label={$i18n.t('Search')}
 						>
 							<div class=" self-center flex items-center justify-center size-9">
 								<Search className="size-4.5" />
@@ -656,16 +619,16 @@
 				</div>
 
 				{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))}
-					<div class="hidden">
+					<div class="">
 						<Tooltip content={$i18n.t('Notes')} placement="right">
 							<a
 								class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
-								href="/kael/notes"
+								href="/notes"
 								on:click={async (e) => {
 									e.stopImmediatePropagation();
 									e.preventDefault();
 
-									goto('/kael/notes');
+									goto('/notes');
 									itemClickHandler();
 								}}
 								draggable="false"
@@ -680,16 +643,16 @@
 				{/if}
 
 				{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools}
-					<div class="hidden">
+					<div class="">
 						<Tooltip content={$i18n.t('Workspace')} placement="right">
 							<a
 								class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
-								href="/kael/workspace"
+								href="/workspace"
 								on:click={async (e) => {
 									e.stopImmediatePropagation();
 									e.preventDefault();
 
-									goto('/kael/workspace');
+									goto('/workspace');
 									itemClickHandler();
 								}}
 								aria-label={$i18n.t('Workspace')}
@@ -735,7 +698,7 @@
 							>
 								<div class=" self-center flex items-center justify-center size-9">
 									<img
-										src={generateInitialsImage($user?.name)}
+										src={$user?.profile_image_url}
 										class=" size-6 object-cover rounded-full"
 										alt={$i18n.t('Open User Profile Menu')}
 										aria-label={$i18n.t('Open User Profile Menu')}
@@ -769,11 +732,23 @@
 				: 'invisible'}"
 		>
 			<div
-				class="sidebar px-2 pt-2 pb-2 flex justify-between space-x-1 text-gray-600 dark:text-gray-400 sticky top-0 z-10 -mb-3"
+				class="sidebar px-2 pt-2 pb-1.5 flex justify-between space-x-1 text-gray-600 dark:text-gray-400 sticky top-0 z-10 -mb-3"
 			>
-				
+				<a
+					class="flex items-center rounded-xl size-8.5 h-full justify-center hover:bg-gray-100/50 dark:hover:bg-gray-850/50 transition no-drag-region"
+					href="/"
+					draggable="false"
+					on:click={newChatHandler}
+				>
+					<img
+						crossorigin="anonymous"
+						src="{WEBUI_BASE_URL}/static/favicon.png"
+						class="sidebar-new-chat-icon size-6 rounded-full"
+						alt=""
+					/>
+				</a>
 
-				<a href="/" class="flex flex-1 px-1.5 hidden" on:click={newChatHandler}>
+				<a href="/" class="flex flex-1 px-1.5" on:click={newChatHandler}>
 					<div
 						id="sidebar-webui-name"
 						class=" self-center font-medium text-gray-850 dark:text-white font-primary"
@@ -800,21 +775,6 @@
 					</button>
 				</Tooltip>
 
-				<Tooltip content={$i18n.t('New Chat')} placement="bottom">
-				    <button
-				    	class="cursor-pointer p-[7px] flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-				    	on:click={async () => {
-				    		selectedChatId = null;
-				    		await goto('/kael/');
-				    		const newChatButton = document.getElementById('new-chat-button');
-				    		setTimeout(() => {
-				    			newChatButton?.click();
-				    		}, 0);
-				    	}}
-				    >
-				    	<PencilSquare className="size-5" strokeWidth="2" /> 
-				    </button>
-				</Tooltip>
 				<div
 					class="{scrollTop > 0
 						? 'visible'
@@ -833,11 +793,11 @@
 				}}
 			>
 				<div class="pb-1.5">
-					<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200 hidden">
+					<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200">
 						<a
 							id="sidebar-new-chat-button"
 							class="group grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition outline-none"
-							href="/kael/"
+							href="/"
 							draggable="false"
 							on:click={newChatHandler}
 							aria-label={$i18n.t('New Chat')}
@@ -854,20 +814,7 @@
 						</a>
 					</div>
 
-					<div class="px-[7px] justify-center text-gray-800 dark:text-gray-200">
-						{#if $temporaryChatEnabled}
-							<div class="absolute z-40 w-full h-full flex justify-center"></div>
-						{/if}
-
-						<SearchInput
-							bind:value={search}
-							on:input={searchDebounceHandler}
-							placeholder={$i18n.t('Search')}
-							showClearButton={true}
-						/>
-					</div>
-
-					<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200 hidden">
+					<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200">
 						<button
 							id="sidebar-search-button"
 							class="group grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition outline-none"
@@ -889,11 +836,11 @@
 					</div>
 
 					{#if ($config?.features?.enable_notes ?? false) && ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))}
-						<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200 hidden">
+						<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200">
 							<a
 								id="sidebar-notes-button"
 								class="grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-								href="/kael/notes"
+								href="/notes"
 								on:click={itemClickHandler}
 								draggable="false"
 								aria-label={$i18n.t('Notes')}
@@ -910,11 +857,11 @@
 					{/if}
 
 					{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools}
-						<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200 hidden">
+						<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200">
 							<a
 								id="sidebar-workspace-button"
 								class="grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-								href="/kael/workspace"
+								href="/workspace"
 								on:click={itemClickHandler}
 								draggable="false"
 								aria-label={$i18n.t('Workspace')}
@@ -985,7 +932,7 @@
 
 				{#if folders}
 					<Folder
-						className="px-2 mt-0.5 hidden"
+						className="px-2 mt-0.5"
 						name={$i18n.t('Folders')}
 						chevron={false}
 						onAdd={() => {
@@ -1037,8 +984,8 @@
 
 				<Folder
 					className="px-2 mt-0.5"
-					name={$i18n.t('Your chats')}
-					chevron={true}
+					name={$i18n.t('Chats')}
+					chevron={false}
 					on:change={async (e) => {
 						selectedFolder.set(null);
 					}}
@@ -1195,8 +1142,8 @@
 										<div
 											class="w-full pl-2.5 text-xs text-gray-500 dark:text-gray-500 font-medium {idx ===
 											0
-												? 'hidden'
-												: 'pt-3'} pb-1.5"
+												? ''
+												: 'pt-5'} pb-1.5"
 										>
 											{$i18n.t(chat.time_range)}
 											<!-- localisation keys for time_range to be recognized from the i18next parser (so they don't get automatically removed):
@@ -1286,7 +1233,7 @@
 							}}
 						>
 							<div
-								class=" flex items-center rounded-xl py-2 px-2  w-full hover:bg-gray-100 dark:hover:bg-gray-900/50 transition"
+								class=" flex items-center rounded-2xl py-2 px-1.5 w-full hover:bg-gray-100/50 dark:hover:bg-gray-900/50 transition"
 							>
 								<div class=" self-center mr-3">
 									<img

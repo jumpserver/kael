@@ -67,7 +67,7 @@
 				}
 			}
 		} else {
-			goto('/kael');
+			goto('/');
 		}
 	};
 

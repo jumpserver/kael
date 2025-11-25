@@ -143,7 +143,7 @@
 			<a
 				class=" w-full flex justify-between items-center rounded-lg text-sm py-2 px-3 hover:bg-gray-50 dark:hover:bg-gray-850"
 				draggable="false"
-				href={`/kael/c/${chat.id}`}
+				href={`/c/${chat.id}`}
 				on:click={() => (show = false)}
 			>
 				<div class="text-ellipsis line-clamp-1 w-full sm:basis-3/5">

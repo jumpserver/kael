@@ -23,19 +23,19 @@
 	onMount(async () => {
 		if ($user?.role !== 'admin') {
 			if ($page.url.pathname.includes('/models') && !$user?.permissions?.workspace?.models) {
-				goto('/kael');
+				goto('/');
 			} else if (
 				$page.url.pathname.includes('/knowledge') &&
 				!$user?.permissions?.workspace?.knowledge
 			) {
-				goto('/kael');
+				goto('/');
 			} else if (
 				$page.url.pathname.includes('/prompts') &&
 				!$user?.permissions?.workspace?.prompts
 			) {
-				goto('/kael');
+				goto('/');
 			} else if ($page.url.pathname.includes('/tools') && !$user?.permissions?.workspace?.tools) {
-				goto('/kael');
+				goto('/');
 			}
 		}
 
@@ -87,7 +87,7 @@
 								class="min-w-fit p-1.5 {$page.url.pathname.includes('/workspace/models')
 									? ''
 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
-								href="/kael/workspace/models">{$i18n.t('Models')}</a
+								href="/workspace/models">{$i18n.t('Models')}</a
 							>
 						{/if}
 
@@ -96,7 +96,7 @@
 								class="min-w-fit p-1.5 {$page.url.pathname.includes('/workspace/knowledge')
 									? ''
 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
-								href="/kael/workspace/knowledge"
+								href="/workspace/knowledge"
 							>
 								{$i18n.t('Knowledge')}
 							</a>
@@ -107,7 +107,7 @@
 								class="min-w-fit p-1.5 {$page.url.pathname.includes('/workspace/prompts')
 									? ''
 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
-								href="/kael/workspace/prompts">{$i18n.t('Prompts')}</a
+								href="/workspace/prompts">{$i18n.t('Prompts')}</a
 							>
 						{/if}
 
@@ -116,7 +116,7 @@
 								class="min-w-fit p-1.5 {$page.url.pathname.includes('/workspace/tools')
 									? ''
 									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
-								href="/kael/workspace/tools"
+								href="/workspace/tools"
 							>
 								{$i18n.t('Tools')}
 							</a>

@@ -23,10 +23,10 @@
 			});
 
 			if (!model) {
-				goto('/kael/workspace/models');
+				goto('/workspace/models');
 			}
 		} else {
-			goto('/kael/workspace/models');
+			goto('/workspace/models');
 		}
 	});
 

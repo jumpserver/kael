@@ -213,7 +213,7 @@ class TestChats(AbstractPostgresTest):
         assert response.status_code == 200
 
         chat = self.chats.get_chat_by_id(chat_id)
-        assert chat['archived'] is True
+        assert chat.archived is True
 
     def test_share_chat_by_id(self):
         chat_id = self.chats.get_chats()[0].id
@@ -222,7 +222,7 @@ class TestChats(AbstractPostgresTest):
         assert response.status_code == 200
 
         chat = self.chats.get_chat_by_id(chat_id)
-        assert chat['share_id'] is not None
+        assert chat.share_id is not None
 
     def test_delete_shared_chat_by_id(self):
         chat_id = self.chats.get_chats()[0].id
@@ -233,4 +233,4 @@ class TestChats(AbstractPostgresTest):
         assert response.status_code
 
         chat = self.chats.get_chat_by_id(chat_id)
-        assert chat['share_id'] is None
+        assert chat.share_id is None
