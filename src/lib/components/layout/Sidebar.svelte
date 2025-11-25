@@ -598,8 +598,16 @@
 					</Tooltip>
 				</div>
 
-				<div class="">
-					<Tooltip content={$i18n.t('Search')} placement="right">
+				<div class={$showSidebar ? '' : 'hidden'}>
+					<div class="relative {$temporaryChatEnabled ? 'opacity-20' : ''}">
+						<SearchInput
+							bind:value={search}
+							on:input={searchDebounceHandler}
+							placeholder={$i18n.t('Search')}
+							showClearButton={true}
+						/>
+					</div>
+					<Tooltip content={$i18n.t('Search 123')} placement="right" className="hidden">
 						<button
 							class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
 							on:click={(e) => {
@@ -734,21 +742,7 @@
 			<div
 				class="sidebar px-2 pt-2 pb-1.5 flex justify-between space-x-1 text-gray-600 dark:text-gray-400 sticky top-0 z-10 -mb-3"
 			>
-				<a
-					class="flex items-center rounded-xl size-8.5 h-full justify-center hover:bg-gray-100/50 dark:hover:bg-gray-850/50 transition no-drag-region"
-					href="/"
-					draggable="false"
-					on:click={newChatHandler}
-				>
-					<img
-						crossorigin="anonymous"
-						src="{WEBUI_BASE_URL}/static/favicon.png"
-						class="sidebar-new-chat-icon size-6 rounded-full"
-						alt=""
-					/>
-				</a>
-
-				<a href="/" class="flex flex-1 px-1.5" on:click={newChatHandler}>
+				<a href="/" class="flex flex-1 px-1.5 hidden" on:click={newChatHandler}>
 					<div
 						id="sidebar-webui-name"
 						class=" self-center font-medium text-gray-850 dark:text-white font-primary"
@@ -775,6 +769,21 @@
 					</button>
 				</Tooltip>
 
+				<Tooltip content={$i18n.t('New Chat')} placement="bottom">
+					<button
+						class="cursor-pointer p-[7px] flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+						on:click={async () => {
+							selectedChatId = null;
+							await goto('/kael/');
+							const newChatButton = document.getElementById('new-chat-button');
+							setTimeout(() => {
+								newChatButton?.click();
+							}, 0);
+						}}
+					>
+						<PencilSquare className="size-5" strokeWidth="2" />
+					</button>
+				</Tooltip>
 				<div
 					class="{scrollTop > 0
 						? 'visible'
@@ -1218,7 +1227,7 @@
 				</Folder>
 			</div>
 
-			<div class="px-1.5 pt-1.5 pb-2 sticky bottom-0 z-10 -mt-3 sidebar">
+			<div class="px-1.5 pt-1.5 pb-3 sticky bottom-0 z-10 -mt-3 sidebar">
 				<div
 					class=" sidebar-bg-gradient-to-t bg-linear-to-t from-gray-50 dark:from-gray-950 to-transparent from-50% pointer-events-none absolute inset-0 -z-10 -mt-6"
 				></div>
@@ -1233,7 +1242,7 @@
 							}}
 						>
 							<div
-								class=" flex items-center rounded-2xl py-2 px-1.5 w-full hover:bg-gray-100/50 dark:hover:bg-gray-900/50 transition"
+								class=" flex items-center rounded-xl py-2 px-2 w-full hover:bg-gray-100 dark:hover:bg-gray-900/50 transition"
 							>
 								<div class=" self-center mr-3">
 									<img
