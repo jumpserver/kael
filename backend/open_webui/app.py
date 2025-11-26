@@ -14,11 +14,13 @@ from open_webui.config import (
     ENABLE_OLLAMA_API,
     OLLAMA_BASE_URLS,
     OLLAMA_API_CONFIGS,
+    OLLAMA_API_PROXYS,
     # OpenAI
     ENABLE_OPENAI_API,
     OPENAI_API_BASE_URLS,
     OPENAI_API_KEYS,
     OPENAI_API_CONFIGS,
+    OPENAI_API_PROXYS,
     # Direct Connections
     ENABLE_DIRECT_CONNECTIONS,
     # Model list
@@ -372,6 +374,7 @@ def init_app_config(app):
     app.state.config.ENABLE_OLLAMA_API = ENABLE_OLLAMA_API
     app.state.config.OLLAMA_BASE_URLS = OLLAMA_BASE_URLS
     app.state.config.OLLAMA_API_CONFIGS = OLLAMA_API_CONFIGS
+    app.state.config.OLLAMA_API_PROXYS = OLLAMA_API_PROXYS
 
     app.state.OLLAMA_MODELS = {}
 
@@ -384,6 +387,7 @@ def init_app_config(app):
     app.state.config.ENABLE_OPENAI_API = ENABLE_OPENAI_API
     app.state.config.OPENAI_API_BASE_URLS = OPENAI_API_BASE_URLS
     app.state.config.OPENAI_API_KEYS = OPENAI_API_KEYS
+    app.state.config.OPENAI_API_PROXYS = OPENAI_API_PROXYS
     app.state.config.OPENAI_API_CONFIGS = OPENAI_API_CONFIGS
 
     app.state.OPENAI_MODELS = {}
