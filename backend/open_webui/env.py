@@ -204,18 +204,17 @@ CHANGELOG = changelog_json
 
 SAFE_MODE = os.environ.get("SAFE_MODE", "false").lower() == "true"
 
-
 ####################################
 # ENABLE_FORWARD_USER_INFO_HEADERS
 ####################################
 
 ENABLE_FORWARD_USER_INFO_HEADERS = (
-    os.environ.get("ENABLE_FORWARD_USER_INFO_HEADERS", "False").lower() == "true"
+        os.environ.get("ENABLE_FORWARD_USER_INFO_HEADERS", "False").lower() == "true"
 )
 
 # Experimental feature, may be removed in future
 ENABLE_STAR_SESSIONS_MIDDLEWARE = (
-    os.environ.get("ENABLE_STAR_SESSIONS_MIDDLEWARE", "False").lower() == "true"
+        os.environ.get("ENABLE_STAR_SESSIONS_MIDDLEWARE", "False").lower() == "true"
 )
 
 ####################################
@@ -346,7 +345,7 @@ else:
         DATABASE_POOL_RECYCLE = 3600
 
 DATABASE_ENABLE_SQLITE_WAL = (
-    os.environ.get("DATABASE_ENABLE_SQLITE_WAL", "False").lower() == "true"
+        os.environ.get("DATABASE_ENABLE_SQLITE_WAL", "False").lower() == "true"
 )
 
 DATABASE_USER_ACTIVE_STATUS_UPDATE_INTERVAL = os.environ.get(
@@ -361,11 +360,11 @@ if DATABASE_USER_ACTIVE_STATUS_UPDATE_INTERVAL is not None:
         DATABASE_USER_ACTIVE_STATUS_UPDATE_INTERVAL = 0.0
 
 RESET_CONFIG_ON_START = (
-    os.environ.get("RESET_CONFIG_ON_START", "False").lower() == "true"
+        os.environ.get("RESET_CONFIG_ON_START", "False").lower() == "true"
 )
 
 ENABLE_REALTIME_CHAT_SAVE = (
-    os.environ.get("ENABLE_REALTIME_CHAT_SAVE", "False").lower() == "true"
+        os.environ.get("ENABLE_REALTIME_CHAT_SAVE", "False").lower() == "true"
 )
 
 ENABLE_QUERIES_CACHE = os.environ.get("ENABLE_QUERIES_CACHE", "False").lower() == "true"
@@ -412,10 +411,10 @@ except ValueError:
 WEBUI_AUTH = os.environ.get("WEBUI_AUTH", "True").lower() == "true"
 
 ENABLE_INITIAL_ADMIN_SIGNUP = (
-    os.environ.get("ENABLE_INITIAL_ADMIN_SIGNUP", "False").lower() == "true"
+        os.environ.get("ENABLE_INITIAL_ADMIN_SIGNUP", "False").lower() == "true"
 )
 ENABLE_SIGNUP_PASSWORD_CONFIRMATION = (
-    os.environ.get("ENABLE_SIGNUP_PASSWORD_CONFIRMATION", "False").lower() == "true"
+        os.environ.get("ENABLE_SIGNUP_PASSWORD_CONFIRMATION", "False").lower() == "true"
 )
 
 WEBUI_AUTH_TRUSTED_EMAIL_HEADER = os.environ.get(
@@ -426,9 +425,8 @@ WEBUI_AUTH_TRUSTED_GROUPS_HEADER = os.environ.get(
     "WEBUI_AUTH_TRUSTED_GROUPS_HEADER", None
 )
 
-
 BYPASS_MODEL_ACCESS_CONTROL = (
-    os.environ.get("BYPASS_MODEL_ACCESS_CONTROL", "False").lower() == "true"
+        os.environ.get("BYPASS_MODEL_ACCESS_CONTROL", "False").lower() == "true"
 )
 
 WEBUI_AUTH_SIGNOUT_REDIRECT_URL = os.environ.get(
@@ -449,7 +447,7 @@ WEBUI_SECRET_KEY = os.environ.get(
 WEBUI_SESSION_COOKIE_SAME_SITE = os.environ.get("WEBUI_SESSION_COOKIE_SAME_SITE", "lax")
 
 WEBUI_SESSION_COOKIE_SECURE = (
-    os.environ.get("WEBUI_SESSION_COOKIE_SECURE", "false").lower() == "true"
+        os.environ.get("WEBUI_SESSION_COOKIE_SECURE", "false").lower() == "true"
 )
 
 WEBUI_AUTH_COOKIE_SAME_SITE = os.environ.get(
@@ -457,29 +455,29 @@ WEBUI_AUTH_COOKIE_SAME_SITE = os.environ.get(
 )
 
 WEBUI_AUTH_COOKIE_SECURE = (
-    os.environ.get(
-        "WEBUI_AUTH_COOKIE_SECURE",
-        os.environ.get("WEBUI_SESSION_COOKIE_SECURE", "false"),
-    ).lower()
-    == "true"
+        os.environ.get(
+            "WEBUI_AUTH_COOKIE_SECURE",
+            os.environ.get("WEBUI_SESSION_COOKIE_SECURE", "false"),
+        ).lower()
+        == "true"
 )
 
 if WEBUI_AUTH and WEBUI_SECRET_KEY == "":
     raise ValueError(ERROR_MESSAGES.ENV_VAR_NOT_FOUND)
 
 ENABLE_COMPRESSION_MIDDLEWARE = (
-    os.environ.get("ENABLE_COMPRESSION_MIDDLEWARE", "True").lower() == "true"
+        os.environ.get("ENABLE_COMPRESSION_MIDDLEWARE", "True").lower() == "true"
 )
 
 ####################################
 # OAUTH Configuration
 ####################################
 ENABLE_OAUTH_EMAIL_FALLBACK = (
-    os.environ.get("ENABLE_OAUTH_EMAIL_FALLBACK", "False").lower() == "true"
+        os.environ.get("ENABLE_OAUTH_EMAIL_FALLBACK", "False").lower() == "true"
 )
 
 ENABLE_OAUTH_ID_TOKEN_COOKIE = (
-    os.environ.get("ENABLE_OAUTH_ID_TOKEN_COOKIE", "True").lower() == "true"
+        os.environ.get("ENABLE_OAUTH_ID_TOKEN_COOKIE", "True").lower() == "true"
 )
 
 OAUTH_CLIENT_INFO_ENCRYPTION_KEY = os.environ.get(
@@ -523,7 +521,6 @@ if LICENSE_PUBLIC_KEY:
         )
     )
 
-
 ####################################
 # MODELS
 ####################################
@@ -536,7 +533,6 @@ else:
         MODELS_CACHE_TTL = int(MODELS_CACHE_TTL)
     except Exception:
         MODELS_CACHE_TTL = 1
-
 
 ####################################
 # CHAT
@@ -556,7 +552,6 @@ else:
     except Exception:
         CHAT_RESPONSE_STREAM_DELTA_CHUNK_SIZE = 1
 
-
 CHAT_RESPONSE_MAX_TOOL_CALL_RETRIES = os.environ.get(
     "CHAT_RESPONSE_MAX_TOOL_CALL_RETRIES", "30"
 )
@@ -569,21 +564,19 @@ else:
     except Exception:
         CHAT_RESPONSE_MAX_TOOL_CALL_RETRIES = 30
 
-
 ####################################
 # WEBSOCKET SUPPORT
 ####################################
 
 ENABLE_WEBSOCKET_SUPPORT = (
-    os.environ.get("ENABLE_WEBSOCKET_SUPPORT", "True").lower() == "true"
+        os.environ.get("ENABLE_WEBSOCKET_SUPPORT", "True").lower() == "true"
 )
-
 
 WEBSOCKET_MANAGER = os.environ.get("WEBSOCKET_MANAGER", "")
 
 WEBSOCKET_REDIS_URL = os.environ.get("WEBSOCKET_REDIS_URL", REDIS_URL)
 WEBSOCKET_REDIS_CLUSTER = (
-    os.environ.get("WEBSOCKET_REDIS_CLUSTER", str(REDIS_CLUSTER)).lower() == "true"
+        os.environ.get("WEBSOCKET_REDIS_CLUSTER", str(REDIS_CLUSTER)).lower() == "true"
 )
 
 websocket_redis_lock_timeout = os.environ.get("WEBSOCKET_REDIS_LOCK_TIMEOUT", "60")
@@ -596,7 +589,6 @@ except ValueError:
 WEBSOCKET_SENTINEL_HOSTS = os.environ.get("WEBSOCKET_SENTINEL_HOSTS", "")
 WEBSOCKET_SENTINEL_PORT = os.environ.get("WEBSOCKET_SENTINEL_PORT", "26379")
 
-
 AIOHTTP_CLIENT_TIMEOUT = os.environ.get("AIOHTTP_CLIENT_TIMEOUT", "")
 
 if AIOHTTP_CLIENT_TIMEOUT == "":
@@ -607,9 +599,8 @@ else:
     except Exception:
         AIOHTTP_CLIENT_TIMEOUT = 300
 
-
 AIOHTTP_CLIENT_SESSION_SSL = (
-    os.environ.get("AIOHTTP_CLIENT_SESSION_SSL", "True").lower() == "true"
+        os.environ.get("AIOHTTP_CLIENT_SESSION_SSL", "True").lower() == "true"
 )
 
 AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST = os.environ.get(
@@ -625,7 +616,6 @@ else:
     except Exception:
         AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST = 10
 
-
 AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA = os.environ.get(
     "AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA", "10"
 )
@@ -640,11 +630,9 @@ else:
     except Exception:
         AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA = 10
 
-
 AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL = (
-    os.environ.get("AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL", "True").lower() == "true"
+        os.environ.get("AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL", "True").lower() == "true"
 )
-
 
 ####################################
 # SENTENCE TRANSFORMERS
@@ -654,7 +642,6 @@ AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL = (
 SENTENCE_TRANSFORMERS_BACKEND = os.environ.get("SENTENCE_TRANSFORMERS_BACKEND", "")
 if SENTENCE_TRANSFORMERS_BACKEND == "":
     SENTENCE_TRANSFORMERS_BACKEND = "torch"
-
 
 SENTENCE_TRANSFORMERS_MODEL_KWARGS = os.environ.get(
     "SENTENCE_TRANSFORMERS_MODEL_KWARGS", ""
@@ -669,13 +656,11 @@ else:
     except Exception:
         SENTENCE_TRANSFORMERS_MODEL_KWARGS = None
 
-
 SENTENCE_TRANSFORMERS_CROSS_ENCODER_BACKEND = os.environ.get(
     "SENTENCE_TRANSFORMERS_CROSS_ENCODER_BACKEND", ""
 )
 if SENTENCE_TRANSFORMERS_CROSS_ENCODER_BACKEND == "":
     SENTENCE_TRANSFORMERS_CROSS_ENCODER_BACKEND = "torch"
-
 
 SENTENCE_TRANSFORMERS_CROSS_ENCODER_MODEL_KWARGS = os.environ.get(
     "SENTENCE_TRANSFORMERS_CROSS_ENCODER_MODEL_KWARGS", ""
@@ -695,9 +680,9 @@ else:
 ####################################
 
 ENABLE_VERSION_UPDATE_CHECK = (
-    os.environ.get("ENABLE_VERSION_UPDATE_CHECK", "true").lower() == "true"
+        os.environ.get("ENABLE_VERSION_UPDATE_CHECK", "true").lower() == "true"
 )
-OFFLINE_MODE = os.environ.get("OFFLINE_MODE", "false").lower() == "true"
+OFFLINE_MODE = os.environ.get("OFFLINE_MODE", "false").lower() == "false"
 
 if OFFLINE_MODE:
     os.environ["HF_HUB_OFFLINE"] = "1"
@@ -732,7 +717,6 @@ AUDIT_EXCLUDED_PATHS = os.getenv("AUDIT_EXCLUDED_PATHS", "/chats,/chat,/folders"
 AUDIT_EXCLUDED_PATHS = [path.strip() for path in AUDIT_EXCLUDED_PATHS]
 AUDIT_EXCLUDED_PATHS = [path.lstrip("/") for path in AUDIT_EXCLUDED_PATHS]
 
-
 ####################################
 # OPENTELEMETRY
 ####################################
@@ -752,19 +736,19 @@ OTEL_LOGS_EXPORTER_OTLP_ENDPOINT = os.environ.get(
     "OTEL_LOGS_EXPORTER_OTLP_ENDPOINT", OTEL_EXPORTER_OTLP_ENDPOINT
 )
 OTEL_EXPORTER_OTLP_INSECURE = (
-    os.environ.get("OTEL_EXPORTER_OTLP_INSECURE", "False").lower() == "true"
+        os.environ.get("OTEL_EXPORTER_OTLP_INSECURE", "False").lower() == "true"
 )
 OTEL_METRICS_EXPORTER_OTLP_INSECURE = (
-    os.environ.get(
-        "OTEL_METRICS_EXPORTER_OTLP_INSECURE", str(OTEL_EXPORTER_OTLP_INSECURE)
-    ).lower()
-    == "true"
+        os.environ.get(
+            "OTEL_METRICS_EXPORTER_OTLP_INSECURE", str(OTEL_EXPORTER_OTLP_INSECURE)
+        ).lower()
+        == "true"
 )
 OTEL_LOGS_EXPORTER_OTLP_INSECURE = (
-    os.environ.get(
-        "OTEL_LOGS_EXPORTER_OTLP_INSECURE", str(OTEL_EXPORTER_OTLP_INSECURE)
-    ).lower()
-    == "true"
+        os.environ.get(
+            "OTEL_LOGS_EXPORTER_OTLP_INSECURE", str(OTEL_EXPORTER_OTLP_INSECURE)
+        ).lower()
+        == "true"
 )
 OTEL_SERVICE_NAME = os.environ.get("OTEL_SERVICE_NAME", "open-webui")
 OTEL_RESOURCE_ATTRIBUTES = os.environ.get(
@@ -807,7 +791,6 @@ OTEL_LOGS_OTLP_SPAN_EXPORTER = os.environ.get(
 
 PIP_OPTIONS = os.getenv("PIP_OPTIONS", "").split()
 PIP_PACKAGE_INDEX_OPTIONS = os.getenv("PIP_PACKAGE_INDEX_OPTIONS", "").split()
-
 
 ####################################
 # PROGRESSIVE WEB APP OPTIONS

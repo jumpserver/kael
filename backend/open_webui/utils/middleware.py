@@ -3113,6 +3113,7 @@ async def process_chat_response(
                 command_handler.command_record = CommandRecord(
                     input=user_message, output=data['content']
                 )
+                asyncio.create_task(command_handler.record_command())
                 asyncio.create_task(ReplayHandler(chat_id).write_input(data['content']))
 
                 if not ENABLE_REALTIME_CHAT_SAVE:
