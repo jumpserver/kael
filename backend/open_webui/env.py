@@ -695,7 +695,7 @@ else:
 ####################################
 
 ENABLE_VERSION_UPDATE_CHECK = (
-    os.environ.get("ENABLE_VERSION_UPDATE_CHECK", "true").lower() == "true"
+    os.environ.get("ENABLE_VERSION_UPDATE_CHECK", "false").lower() == "true"
 )
 OFFLINE_MODE = os.environ.get("OFFLINE_MODE", "false").lower() == "true"
 

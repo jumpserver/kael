@@ -1289,12 +1289,12 @@
 								<div class=" self-center mr-3">
 									<img
 										src={generateInitialsImage($user?.name)}
-										class=" size-6 object-cover rounded-full"
+										class=" size-7 object-cover rounded-full"
 										alt={$i18n.t('Open User Profile Menu')}
 										aria-label={$i18n.t('Open User Profile Menu')}
 									/>
 								</div>
-								<div class=" self-center font-medium">{$user?.name}</div>
+								<div class=" self-center font-normal">{$user?.name}</div>
 							</div>
 						</UserMenu>
 					{/if}
