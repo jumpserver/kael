@@ -1103,7 +1103,7 @@ INTERNAL_TOOL_SERVER_CONNECTIONS =  [
         "spec_type": "url",
         "spec": "",
         "info": {
-            "id": "server-l0vE",
+            "id": "jms-mcp",
             "name": "jms-mcp",
             "description": "JumpServer MCP Server"
         }

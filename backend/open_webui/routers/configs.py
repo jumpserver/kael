@@ -268,7 +268,10 @@ async def verify_tool_servers_config(
                     if form_data.auth_type == "bearer":
                         token = form_data.key
                     elif form_data.auth_type == "session":
-                        token = request.state.token.credentials
+                        token = request.cookies.get("jms_sessionid", '')
+                        if token:
+                            token = f'jms-{token}'
+                        # token = request.state.token.credentials
                     elif form_data.auth_type == "system_oauth":
                         try:
                             if request.cookies.get("oauth_session_id", None):
