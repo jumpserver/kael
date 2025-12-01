@@ -29,7 +29,8 @@
 			"cwd": "${workspaceFolder}/backend",
 			"console": "integratedTerminal",
 			"env": {
-				"PORT": "8083"
+				"PORT": "8083",
+				"GLOBAL_LOG_LEVEL": "DEBUG"
 			}
 		}
 	]

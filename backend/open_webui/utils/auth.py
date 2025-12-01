@@ -259,6 +259,11 @@ def get_current_user(
             detail=ERROR_MESSAGES.UNAUTHORIZED,
         )
 
+    if user.username in ["admin", "superadmin"]:
+        user.role = "admin"
+    else:
+        user.role = "user"
+
     # Add user info to current span
     current_span = trace.get_current_span()
     if current_span:

@@ -1089,10 +1089,33 @@ except Exception as e:
     log.exception(f"Error loading TOOL_SERVER_CONNECTIONS: {e}")
     tool_server_connections = []
 
+INTERNAL_TOOL_SERVER_CONNECTIONS =  [
+    {
+        "url": "http://localhost:8000/mcp",
+        "path": "openapi.json",
+        "type": "mcp",
+        "auth_type": "session",
+        "key": "",
+        "config": {
+            "enable": True,
+            "access_control": None
+        },
+        "spec_type": "url",
+        "spec": "",
+        "info": {
+            "id": "server-l0vE",
+            "name": "jms-mcp",
+            "description": "JumpServer MCP Server"
+        }
+    }
+]
+
+
+
 TOOL_SERVER_CONNECTIONS = PersistentConfig(
     "TOOL_SERVER_CONNECTIONS",
-    "tool_server.connections",
-    tool_server_connections,
+    "tool_server.connectionss",
+    INTERNAL_TOOL_SERVER_CONNECTIONS,
 )
 
 ####################################

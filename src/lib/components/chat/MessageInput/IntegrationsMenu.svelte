@@ -19,8 +19,6 @@
 	import GlobeAlt from '$lib/components/icons/GlobeAlt.svelte';
 	import Photo from '$lib/components/icons/Photo.svelte';
 	import Terminal from '$lib/components/icons/Terminal.svelte';
-	import ChevronRight from '$lib/components/icons/ChevronRight.svelte';
-	import ChevronLeft from '$lib/components/icons/ChevronLeft.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -62,6 +60,7 @@
 		if ($_tools === null) {
 			await _tools.set(await getTools(localStorage.token));
 		}
+		console.log('------ Tools: ------', localStorage.token, $_tools);
 
 		if ($_tools) {
 			tools = $_tools.reduce((a, tool, i, arr) => {
@@ -116,25 +115,75 @@
 				<div in:fly={{ x: -20, duration: 150 }}>
 					{#if tools}
 						{#if Object.keys(tools).length > 0}
-							<button
-								class="flex w-full justify-between gap-2 items-center px-3 py-1.5 text-sm cursor-pointer rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800/50"
-								on:click={() => {
-									tab = 'tools';
-								}}
-							>
-								<Wrench />
+							{#each Object.keys(tools) as toolId}
+								<button
+									class="relative flex w-full justify-between gap-2 items-center px-3 py-1.5 text-sm cursor-pointer rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800/50"
+									on:click={async (e) => {
+										if (!(tools[toolId]?.authenticated ?? true)) {
+											e.preventDefault();
 
-								<div class="flex items-center w-full justify-between">
-									<div class=" line-clamp-1">
-										{$i18n.t('Tools')}
-										<span class="ml-0.5 text-gray-500">{Object.keys(tools).length}</span>
+											let parts = toolId.split(':');
+											let serverId = parts?.at(-1) ?? toolId;
+
+											const authUrl = getOAuthClientAuthorizationUrl(serverId, 'mcp');
+											window.open(authUrl, '_self', 'noopener');
+										} else {
+											tools[toolId].enabled = !tools[toolId].enabled;
+
+											const state = tools[toolId].enabled;
+											await tick();
+
+											if (state) {
+												selectedToolIds = [...selectedToolIds, toolId];
+											} else {
+												selectedToolIds = selectedToolIds.filter((id) => id !== toolId);
+											}
+										}
+									}}
+								>
+									{#if !(tools[toolId]?.authenticated ?? true)}
+										<!-- make it slighly darker and not clickable -->
+										<div class="absolute inset-0 opacity-50 rounded-xl cursor-pointer z-10" />
+									{/if}
+									<div class="flex-1 truncate">
+										<div class="flex flex-1 gap-2 items-center">
+											<Tooltip content={tools[toolId]?.name ?? ''} placement="top">
+												<div class="shrink-0">
+													<Wrench />
+												</div>
+											</Tooltip>
+											<Tooltip content={tools[toolId]?.description ?? ''} placement="top-start">
+												<div class=" truncate">{tools[toolId].name}</div>
+											</Tooltip>
+										</div>
 									</div>
 
-									<div class="text-gray-500">
-										<ChevronRight />
+									{#if tools[toolId]?.has_user_valves}
+										<div class=" shrink-0">
+											<Tooltip content={$i18n.t('Valves')}>
+												<button
+													class="self-center w-fit text-sm text-gray-600 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition rounded-full"
+													type="button"
+													on:click={(e) => {
+														e.stopPropagation();
+														e.preventDefault();
+														onShowValves({
+															type: 'tool',
+															id: toolId
+														});
+													}}
+												>
+													<Knobs />
+												</button>
+											</Tooltip>
+										</div>
+									{/if}
+
+									<div class=" shrink-0">
+										<Switch state={tools[toolId].enabled} />
 									</div>
-								</div>
-							</button>
+								</button>
+							{/each}
 						{/if}
 					{:else}
 						<div class="py-4">
@@ -309,94 +358,6 @@
 							</button>
 						</Tooltip>
 					{/if}
-				</div>
-			{:else if tab === 'tools' && tools}
-				<div in:fly={{ x: 20, duration: 150 }}>
-					<button
-						class="flex w-full justify-between gap-2 items-center px-3 py-1.5 text-sm cursor-pointer rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800/50"
-						on:click={() => {
-							tab = '';
-						}}
-					>
-						<ChevronLeft />
-
-						<div class="flex items-center w-full justify-between">
-							<div>
-								{$i18n.t('Tools')}
-								<span class="ml-0.5 text-gray-500">{Object.keys(tools).length}</span>
-							</div>
-						</div>
-					</button>
-
-					{#each Object.keys(tools) as toolId}
-						<button
-							class="relative flex w-full justify-between gap-2 items-center px-3 py-1.5 text-sm cursor-pointer rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800/50"
-							on:click={async (e) => {
-								if (!(tools[toolId]?.authenticated ?? true)) {
-									e.preventDefault();
-
-									let parts = toolId.split(':');
-									let serverId = parts?.at(-1) ?? toolId;
-
-									const authUrl = getOAuthClientAuthorizationUrl(serverId, 'mcp');
-									window.open(authUrl, '_self', 'noopener');
-								} else {
-									tools[toolId].enabled = !tools[toolId].enabled;
-
-									const state = tools[toolId].enabled;
-									await tick();
-
-									if (state) {
-										selectedToolIds = [...selectedToolIds, toolId];
-									} else {
-										selectedToolIds = selectedToolIds.filter((id) => id !== toolId);
-									}
-								}
-							}}
-						>
-							{#if !(tools[toolId]?.authenticated ?? true)}
-								<!-- make it slighly darker and not clickable -->
-								<div class="absolute inset-0 opacity-50 rounded-xl cursor-pointer z-10" />
-							{/if}
-							<div class="flex-1 truncate">
-								<div class="flex flex-1 gap-2 items-center">
-									<Tooltip content={tools[toolId]?.name ?? ''} placement="top">
-										<div class="shrink-0">
-											<Wrench />
-										</div>
-									</Tooltip>
-									<Tooltip content={tools[toolId]?.description ?? ''} placement="top-start">
-										<div class=" truncate">{tools[toolId].name}</div>
-									</Tooltip>
-								</div>
-							</div>
-
-							{#if tools[toolId]?.has_user_valves}
-								<div class=" shrink-0">
-									<Tooltip content={$i18n.t('Valves')}>
-										<button
-											class="self-center w-fit text-sm text-gray-600 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition rounded-full"
-											type="button"
-											on:click={(e) => {
-												e.stopPropagation();
-												e.preventDefault();
-												onShowValves({
-													type: 'tool',
-													id: toolId
-												});
-											}}
-										>
-											<Knobs />
-										</button>
-									</Tooltip>
-								</div>
-							{/if}
-
-							<div class=" shrink-0">
-								<Switch state={tools[toolId].enabled} />
-							</div>
-						</button>
-					{/each}
 				</div>
 			{/if}
 		</DropdownMenu.Content>
