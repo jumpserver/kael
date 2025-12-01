@@ -338,9 +338,16 @@ async def chat_completion_tools_handler(
     )
 
     try:
+        t1 = time.time()
         response = await generate_chat_completion(request, form_data=payload, user=user)
+        t2 = time.time()
+        delta = round(t2 - t1, 2)
+        log.debug(f"Chat completion tools handler took {delta}s")
         log.debug(f"{response=}")
         content = await get_content_from_response(response)
+        t3 = time.time()
+        delta = round(t3 - t2, 2)
+        log.debug(f"Get content from response took {delta}s")
         log.debug(f"{content=}")
 
         if not content:
@@ -383,6 +390,7 @@ async def chat_completion_tools_handler(
                         if k in allowed_params
                     }
 
+                    t4 = time.time()
                     if tool.get("direct", False):
                         tool_result = await event_caller(
                             {
@@ -399,6 +407,9 @@ async def chat_completion_tools_handler(
                     else:
                         tool_function = tool["callable"]
                         tool_result = await tool_function(**tool_function_params)
+                    t5 = time.time()
+                    delta = round(t5 - t4, 2)
+                    log.info(f"Tool {tool_function_name} took {delta}s")
 
                 except Exception as e:
                     tool_result = str(e)
@@ -437,7 +448,7 @@ async def chat_completion_tools_handler(
                         )
 
                 print(
-                    f"Tool {tool_function_name} result: {tool_result}",
+                    f"Tool {tool_function_name}",
                     tool_result_files,
                     tool_result_embeds,
                 )

@@ -29,6 +29,14 @@ export default defineConfig({
 	},
 	server: {
 		port: 5173,
+		watch: {
+			// Exclude backend files from triggering HMR reloads
+			ignored: [
+				'**/backend/**',
+				'**/backend/open_webui/jms/data/**',
+				'**/*.cast'
+			]
+		},
 		proxy: {
 			'^/kael/api/': {
 				target: 'http://localhost:8083',

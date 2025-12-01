@@ -2,6 +2,7 @@ import time
 import logging
 import asyncio
 import sys
+import copy
 
 from aiocache import cached
 from fastapi import Request
@@ -78,9 +79,25 @@ async def get_all_base_models(request: Request, user: UserModel = None):
 
 
 async def get_all_models(request, refresh: bool = False, user: UserModel = None):
+    t1 = time.time()
+    
+    # Early return if cached final result exists and cache is enabled
     if (
         request.app.state.MODELS
-        and request.app.state.BASE_MODELS
+        and request.app.state.config.ENABLE_BASE_MODELS_CACHE
+        and not refresh
+    ):
+        # Convert cached dict to list format with deep copy and return immediately
+        # This avoids all expensive processing below (lines 107-337)
+        models = [copy.deepcopy(model) for model in request.app.state.MODELS.values()]
+        log.debug(f"get_all_models() returned {len(models)} models from cache")
+        t2 = time.time()
+        log.debug(f"get_all_models() took {t2 - t1} seconds (cached)")
+        return models
+    
+    # Continue with full processing if cache miss or refresh requested
+    if (
+        request.app.state.BASE_MODELS
         and (request.app.state.config.ENABLE_BASE_MODELS_CACHE and not refresh)
     ):
         base_models = request.app.state.BASE_MODELS
@@ -323,6 +340,8 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
     log.debug(f"get_all_models() returned {len(models)} models")
 
     request.app.state.MODELS = {model["id"]: model for model in models}
+    t2 = time.time()
+    log.debug(f"get_all_models() took {t2 - t1} seconds")
     return models
 
 

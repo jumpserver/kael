@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 from typing import Optional
 
 import aiohttp
@@ -488,6 +489,7 @@ async def get_filtered_models(models, user):
 )
 async def get_all_models(request: Request, user: UserModel) -> dict[str, list]:
     log.info("get_all_models()")
+    t1 = time.time()
 
     if not request.app.state.config.ENABLE_OPENAI_API:
         return {"data": []}
@@ -548,6 +550,9 @@ async def get_all_models(request: Request, user: UserModel) -> dict[str, list]:
     models = get_merged_models(map(extract_data, responses))
     log.debug(f"models: {models}")
 
+    t2 = time.time()
+    delta = round(t2 - t1, 2)
+    log.debug(f"OpenAI get_all_models() took {delta}s")
     request.app.state.OPENAI_MODELS = models
     return {"data": list(models.values())}
 
@@ -939,6 +944,7 @@ async def generate_chat_completion(
             trust_env=True, timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
         )
 
+        t1 = time.time()
         r = await session.request(
             method="POST",
             url=request_url,
@@ -947,6 +953,9 @@ async def generate_chat_completion(
             cookies=cookies,
             ssl=AIOHTTP_CLIENT_SESSION_SSL,
         )
+        t2 = time.time()
+        delta = round(t2 - t1, 2)
+        log.debug(f"OpenAI request session.request() took {delta}s")
 
         # Check if response is SSE
         if "text/event-stream" in r.headers.get("Content-Type", ""):
