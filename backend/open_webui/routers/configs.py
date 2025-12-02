@@ -262,8 +262,10 @@ async def verify_tool_servers_config(
             else:
                 try:
                     client = MCPClient()
-                    headers = None
-
+                    headers = {}
+                    print("Cookies: ", request.cookies)
+                    cookies_str = '; '.join([f'{key}={value}' for key, value in request.cookies.items()])
+                    headers.update({'cookie': cookies_str})
                     token = None
                     if form_data.auth_type == "bearer":
                         token = form_data.key
@@ -282,8 +284,9 @@ async def verify_tool_servers_config(
                         except Exception as e:
                             pass
 
+
                     if token:
-                        headers = {"Authorization": f"Bearer {token}"}
+                        headers["Authorization"] = f"Bearer {token}"
 
                     await client.connect(form_data.url, headers=headers)
                     specs = await client.list_tool_specs()

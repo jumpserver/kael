@@ -1324,6 +1324,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     auth_type = mcp_server_connection.get("auth_type", "")
 
                     headers = {}
+                    cookie = '; '.join([f'{key}={value}' for key, value in request.cookies.items()])
+                    headers.update({'cookie': cookie})
+
                     if auth_type == "bearer":
                         headers["Authorization"] = (
                             f"Bearer {mcp_server_connection.get('key', '')}"
@@ -1333,7 +1336,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         pass
                     elif auth_type == "session":
                         headers["Authorization"] = (
-                            f"Bearer {request.state.token.credentials}"
+                            f"Bearer jms-{request.cookies.get('jms_sessionid', '')}"
                         )
                     elif auth_type == "system_oauth":
                         oauth_token = extra_params.get("__oauth_token__", None)
@@ -1397,11 +1400,12 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 "type": "chat:message:error",
                                 "data": {
                                     "error": {
-                                        "content": f"Failed to connect to MCP server '{server_id}'"
+                                        "content": f"Failed to connect to MCP server '{server_id}-{mcp_server_connection.get('url', '')}'"
                                     }
                                 },
                             }
                         )
+                        raise e
                     continue
 
         tools_dict = await get_tools(

@@ -59,8 +59,8 @@
 							</div>
 
 							<!-- <div slot="content">
-							{JSON.stringify(tool, null, 2)}
-						</div> -->
+								{JSON.stringify(tool, null, 2)}
+							</div> -->
 						</Collapsible>
 					{/each}
 				</div>

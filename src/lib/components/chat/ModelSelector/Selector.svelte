@@ -333,6 +333,14 @@
 				$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
 			)
 		);
+
+		console.log('Items: ');
+		console.log(items);
+
+		if (!selectedModel) {
+			selectedModel = items[0];
+			value = selectedModel.value;
+		}
 	});
 
 	$: if (show) {
@@ -404,7 +412,7 @@
 			}}
 		>
 			{#if selectedModel}
-				{selectedModel.label}
+				{selectedModel.label.split('/').slice(-1)}
 			{:else}
 				{placeholder}
 			{/if}
