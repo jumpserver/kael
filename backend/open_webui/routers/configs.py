@@ -263,16 +263,13 @@ async def verify_tool_servers_config(
                 try:
                     client = MCPClient()
                     headers = {}
-                    print("Cookies: ", request.cookies)
-                    cookies_str = '; '.join([f'{key}={value}' for key, value in request.cookies.items()])
-                    headers.update({'cookie': cookies_str})
+                    cookie = '; '.join([f'{key}={value}' for key, value in request.cookies.items()])
+                    headers.update({'cookie': cookie})
                     token = None
                     if form_data.auth_type == "bearer":
                         token = form_data.key
                     elif form_data.auth_type == "session":
-                        token = request.cookies.get("jms_sessionid", '')
-                        if token:
-                            token = f'jms-{token}'
+                        token = 'jms-' + request.cookies.get('jms_sessionid', '')
                         # token = request.state.token.credentials
                     elif form_data.auth_type == "system_oauth":
                         try:

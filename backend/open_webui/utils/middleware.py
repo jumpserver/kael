@@ -1336,7 +1336,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         pass
                     elif auth_type == "session":
                         headers["Authorization"] = (
-                            f"Bearer jms-{request.cookies.get('jms_sessionid', '')}"
+                           f"Bearer jms-{request.cookies.get('jms_sessionid', '')}"
                         )
                     elif auth_type == "system_oauth":
                         oauth_token = extra_params.get("__oauth_token__", None)
