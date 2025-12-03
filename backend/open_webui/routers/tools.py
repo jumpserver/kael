@@ -97,7 +97,7 @@ async def get_tools(request: Request, user=Depends(get_verified_user)):
     # MCP Tool Servers
     for server in request.app.state.config.TOOL_SERVER_CONNECTIONS:
         require_admin = server.get("config", {}).get("require_admin", False)
-        if require_admin and user.role != "admin":
+        if require_admin and "admin" not in user.role:
             continue
 
         if server.get("type", "openapi") == "mcp":

@@ -408,7 +408,7 @@ except ValueError:
 # WEBUI_AUTH (Required for security)
 ####################################
 
-WEBUI_AUTH = os.environ.get("WEBUI_AUTH", "True").lower() == "true"
+WEBUI_AUTH = os.environ.get("WEBUI_AUTH", "False").lower() == "true"
 
 ENABLE_INITIAL_ADMIN_SIGNUP = (
         os.environ.get("ENABLE_INITIAL_ADMIN_SIGNUP", "False").lower() == "true"
@@ -682,7 +682,7 @@ else:
 ENABLE_VERSION_UPDATE_CHECK = (
     os.environ.get("ENABLE_VERSION_UPDATE_CHECK", "false").lower() == "true"
 )
-OFFLINE_MODE = os.environ.get("OFFLINE_MODE", "false").lower() == "false"
+OFFLINE_MODE = os.environ.get("OFFLINE_MODE", "true").lower() == "false"
 
 if OFFLINE_MODE:
     os.environ["HF_HUB_OFFLINE"] = "1"
