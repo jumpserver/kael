@@ -1098,7 +1098,8 @@ INTERNAL_TOOL_SERVER_CONNECTIONS =  [
         "key": "",
         "config": {
             "enable": True,
-            "access_control": None
+            "access_control": None,
+            "require_admin": True
         },
         "spec_type": "url",
         "spec": "",

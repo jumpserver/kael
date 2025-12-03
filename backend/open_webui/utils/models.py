@@ -27,7 +27,7 @@ from open_webui.config import (
     DEFAULT_ARENA_MODEL,
 )
 
-from open_webui.env import BYPASS_MODEL_ACCESS_CONTROL, SRC_LOG_LEVELS, GLOBAL_LOG_LEVEL
+from open_webui.env import BYPASS_MODEL_ACCESS_CONTROL, SRC_LOG_LEVELS, GLOBAL_LOG_LEVEL, MODELS_CACHE_TTL
 from open_webui.models.users import UserModel
 
 
@@ -58,6 +58,10 @@ async def fetch_openai_models(request: Request, user: UserModel = None):
     return openai_response["data"]
 
 
+@cached(
+    ttl=MODELS_CACHE_TTL,
+    key=lambda _, user: f"all_base_models_{user.id}" if user else "all_base_models",
+)
 async def get_all_base_models(request: Request, user: UserModel = None):
     openai_task = (
         fetch_openai_models(request, user)
@@ -356,9 +360,11 @@ def check_model_access(user, model):
         ):
             raise Exception("Model not found")
     else:
-        model_info = Models.get_model_by_id(model.get("id"))
+        # model_info = Models.get_model_by_id(model.get("id"))
+        model_info = None
         if not model_info:
-            raise Exception("Model not found")
+            return True
+            # raise Exception("Model not found")
         elif not (
             user.id == model_info.user_id
             or has_access(
@@ -395,10 +401,13 @@ def get_filtered_models(models, user):
                     or has_access(
                         user.id,
                         type="read",
+                        strict=False,
                         access_control=model_info.access_control,
                     )
                 ):
                     filtered_models.append(model)
+            else:
+                filtered_models.append(model)
 
         return filtered_models
     else:

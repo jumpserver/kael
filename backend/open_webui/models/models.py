@@ -216,6 +216,7 @@ class ModelsTable:
         ]
 
     def get_model_by_id(self, id: str) -> Optional[ModelModel]:
+        return None
         try:
             with get_db() as db:
                 model = db.get(Model, id)

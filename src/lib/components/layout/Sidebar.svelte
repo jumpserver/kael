@@ -1240,6 +1240,12 @@
 										}}
 									/>
 								{/each}
+								
+								{#if $chats.length === 0 && !chatListLoading}
+									<div class="w-full flex justify-center py-1 text-xs items-center gap-2">
+										<div class=" ">{$i18n.t('No chats found')}</div>
+									</div>
+								{/if}
 
 								{#if $scrollPaginationEnabled && !allChatsLoaded}
 									<Loader

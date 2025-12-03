@@ -525,14 +525,14 @@ if LICENSE_PUBLIC_KEY:
 # MODELS
 ####################################
 
-MODELS_CACHE_TTL = os.environ.get("MODELS_CACHE_TTL", "1")
+MODELS_CACHE_TTL = os.environ.get("MODELS_CACHE_TTL", "30")
 if MODELS_CACHE_TTL == "":
     MODELS_CACHE_TTL = None
 else:
     try:
         MODELS_CACHE_TTL = int(MODELS_CACHE_TTL)
     except Exception:
-        MODELS_CACHE_TTL = 1
+        MODELS_CACHE_TTL = 30
 
 ####################################
 # CHAT

@@ -337,7 +337,7 @@
 		console.log('Items: ');
 		console.log(items);
 
-		if (!selectedModel) {
+		if (!selectedModel && items.length > 0) {
 			selectedModel = items[0];
 			value = selectedModel.value;
 		}

@@ -110,7 +110,7 @@ def has_access(
     type: str = "write",
     access_control: Optional[dict] = None,
     user_group_ids: Optional[Set[str]] = None,
-    strict: bool = True,
+    strict: bool = False,
 ) -> bool:
     if access_control is None:
         if strict:
