@@ -12,7 +12,7 @@ BASE_DIR = Path(__file__).parent.parent
 print(f"BASE_DIR: {BASE_DIR}")
 load_dotenv(find_dotenv(str(BASE_DIR / ".env")))
 
-mcp_app = mcp.http_app(transport="streamable-http", path="/mcp")
+mcp_app = mcp.http_app(transport="streamable-http", path="/")
 
 
 @asynccontextmanager
@@ -47,7 +47,7 @@ app = FastAPI(lifespan=merged_lifespan)
 # Mount sub-applications
 # This preserves each app's state, so request.app.state.config works correctly
 # When a request comes to open_webui_app, request.app will point to open_webui_app
-app.mount("/kael", mcp_app)
+app.mount("/kael/mcp", mcp_app)
 app.mount("/", open_webui_app)
 
 # Add CORS middleware

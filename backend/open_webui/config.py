@@ -1091,7 +1091,7 @@ except Exception as e:
 
 INTERNAL_TOOL_SERVER_CONNECTIONS =  [
     {
-        "url": "http://localhost:8000/mcp",
+        "url": "http://localhost:8083/kael/mcp",
         "path": "openapi.json",
         "type": "mcp",
         "auth_type": "session",
