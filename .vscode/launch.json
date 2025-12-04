@@ -17,7 +17,7 @@
 			"module": "uvicorn",
 			"python": "${workspaceFolder}/.venv/bin/python",
 			"args": [
-				"open_webui.main:app",
+				"main:app",
 				"--port",
 				"8083",
 				"--host",
