@@ -7,7 +7,7 @@ from .utils import request_resource, safe_request
 from .permissions import require_role, require_superuser, PermissionDenied
 
 
-@mcp.tool("/admin/get-supported-resources")
+@mcp.tool("get-supported-resources")
 @require_superuser  # Only superusers can access this tool
 async def get_supported_resources() -> Dict[str, Any]:
     """

@@ -30,7 +30,6 @@ token = os.getenv("JUMPSERVER_TOKEN", "")
 
 client = httpx.AsyncClient(
     base_url=host,
-    headers=_build_headers(token),
     timeout=httpx.Timeout(30.0, connect=10.0),
 )
 
@@ -89,6 +88,16 @@ async def safe_request(
     if token.startswith('jms'):
         headers.pop('authorization')
 
+    cookies = {}
+    for cookie in headers.get('cookie', '').split(';'):
+        key, value = cookie.strip().split('=', 1)
+        cookies[key] = value
+
+    cookie_prefix = cookies.get('SESSION_COOKIE_NAME_PREFIX') or 'jms_'
+    csrf_token = cookies.get(f'{cookie_prefix}csrftoken')
+    if csrf_token:
+        headers['X-CSRFToken'] = csrf_token
+    
     if kwargs.get('headers', None):
         headers.update(kwargs['headers'])
 

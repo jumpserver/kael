@@ -3,6 +3,7 @@
 	import Modal from '$lib/components/common/Modal.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import hljs from 'highlight.js';
 
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
@@ -54,6 +55,17 @@
 			return decodeURIComponent(str);
 		} catch (e) {
 			return str;
+		}
+	};
+
+	const highlightJSON = (jsonString: string) => {
+		try {
+			const parsed = JSON.parse(jsonString);
+			const formatted = JSON.stringify(parsed, null, 4);
+			return hljs.highlight(formatted, { language: 'json' }).value;
+		} catch (e) {
+			// If parsing fails, just return the original string
+			return jsonString;
 		}
 	};
 </script>
@@ -168,9 +180,13 @@
 									title={$i18n.t('Content')}
 								></iframe>
 							{:else}
-								<pre class="text-sm dark:text-gray-400 whitespace-pre-line">
-                {document.document}
-              </pre>
+								{#if document.document.startsWith('{')}
+									<pre class="hljs text-sm dark:text-gray-400 p-4 rounded-lg bg-gray-50 !important dark:bg-gray-300 overflow-x-auto">
+										<code class="language-json">{@html highlightJSON(document.document)}</code>
+									</pre>
+								{:else}
+									<pre class="text-sm dark:text-gray-400 whitespace-pre-line p-4 rounded-lg bg-gray-50 dark:bg-gray-900 overflow-x-auto">{document.document}</pre>
+								{/if}
 							{/if}
 						</div>
 					</div>
