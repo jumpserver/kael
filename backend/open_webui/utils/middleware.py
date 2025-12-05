@@ -1366,6 +1366,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         url=mcp_server_connection.get("url", ""),
                         headers=headers if headers else None,
                     )
+                    print(f"mcp_clients[server_id]: {mcp_clients[server_id]}")
 
                     tool_specs = await mcp_clients[server_id].list_tool_specs()
                     for tool_spec in tool_specs:

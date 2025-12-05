@@ -11,9 +11,10 @@ fastapi_app = FastAPI(
     description="api + mcp",
 )
 
-@fastapi_app.get("/")
+@fastapi_app.get("/kael/status")
 async def root():
-    return RedirectResponse(url="/docs")
+    return {"status": "ok"}
+
 
 mcp = FastMCP("JumpServer MCP Server")
 
@@ -51,7 +52,7 @@ async def merged_lifespan(app: FastAPI):
 app = FastAPI(lifespan=merged_lifespan)
 
 # Mount sub-applications
-app.mount("/mcp", mcp_app)
+app.mount("/kael/mcp", mcp_app)
 app.mount("/", fastapi_app)
 
 # Add CORS middleware

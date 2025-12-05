@@ -4,13 +4,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import find_dotenv, load_dotenv
 from pathlib import Path
-
+from fastmcp import FastMCP
 from open_webui.main import app as open_webui_app
 from mcp_server.server import mcp
 
 BASE_DIR = Path(__file__).parent.parent
 print(f"BASE_DIR: {BASE_DIR}")
 load_dotenv(find_dotenv(str(BASE_DIR / ".env")))
+
+# mcp = FastMCP("JumpServer MCP Server")
+
+@mcp.tool("list-users")
+async def list_users():
+    return {"users": ["user1", "user2", "user3"]}
 
 mcp_app = mcp.http_app(transport="streamable-http", path="/")
 
