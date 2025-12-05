@@ -61,7 +61,7 @@ class SessionHandler(BaseWisp):
             asset_id=account_data['asset']['id'],
             asset=account_data['asset']['name'],
             login_from=Session.LoginFrom.WT,
-            protocol=chat_model.split('/')[-1],
+            protocol=chat_model.split('/')[-1][:16],
             date_start=int(datetime.now().timestamp()),
             remote_addr=self.remote_address,
         )
