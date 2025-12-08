@@ -7,7 +7,7 @@ import aiohttp
 from open_webui.models.groups import Groups
 from pydantic import BaseModel, HttpUrl
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-
+from open_webui.utils.mcp.tools import get_mcp_tools_by_server_conn
 
 from open_webui.models.oauth_sessions import OAuthSessions
 from open_webui.models.tools import (
@@ -114,6 +114,13 @@ async def get_tools(request: Request, user=Depends(get_verified_user)):
                         user.id, f"mcp:{server_id}"
                     )
                 )
+            # 想获取 mcp server 的 tools
+            try:
+                mcp_tools_dict = await get_mcp_tools_by_server_conn(server, request, user, {})
+            except Exception as e:
+                mcp_tools_dict = {}
+
+            mcp_tools = list(mcp_tools_dict.keys())
 
             tools.append(
                 ToolUserResponse(
@@ -131,6 +138,7 @@ async def get_tools(request: Request, user=Depends(get_verified_user)):
                         ),
                         "updated_at": int(time.time()),
                         "created_at": int(time.time()),
+                        "tools": mcp_tools,
                         **(
                             {
                                 "authenticated": session_token is not None,

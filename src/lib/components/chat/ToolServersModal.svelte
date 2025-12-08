@@ -45,10 +45,10 @@
 			<div class="px-5 pb-3 w-full flex flex-col justify-center">
 				<div class=" text-sm dark:text-gray-300 mb-1">
 					{#each selectedTools as tool}
-						<Collapsible buttonClassName="w-full mb-0.5">
+						<Collapsible buttonClassName="w-full mb-0.5" chevron>
 							<div class="truncate">
 								<div class="text-sm font-medium dark:text-gray-100 text-gray-800 truncate">
-									{tool?.name}
+									{tool?.name} 123
 								</div>
 
 								{#if tool?.meta?.description}
@@ -56,6 +56,16 @@
 										{tool?.meta?.description}
 									</div>
 								{/if}
+							</div>
+
+							<div slot="content">
+								<div class="text-xs text-gray-500 ml-4">
+									{#each tool?.tools as tool}
+										<li class="text-xs text-gray-500">
+											{tool}
+										</li>
+									{/each}
+								</div>
 							</div>
 
 							<!-- <div slot="content">

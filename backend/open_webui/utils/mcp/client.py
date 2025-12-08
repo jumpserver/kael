@@ -15,10 +15,10 @@ class MCPClient:
         self.session: Optional[ClientSession] = None
         self.exit_stack = None
 
-    async def connect(self, url: str, headers: Optional[dict] = None):
+    async def connect(self, url: str, headers: Optional[dict] = None, timeout: int = 2):
         async with AsyncExitStack() as exit_stack:
             try:
-                self._streams_context = streamablehttp_client(url, headers=headers)
+                self._streams_context = streamablehttp_client(url, headers=headers, timeout=timeout)
 
                 transport = await exit_stack.enter_async_context(self._streams_context)
                 read_stream, write_stream, _ = transport
