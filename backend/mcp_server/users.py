@@ -26,7 +26,6 @@ def _build_user_url(user_id: Optional[str] = None) -> str:
 
 
 @mcp.tool("list-users")
-@require_role("superuser", "admin", "auditor")  # Allow multiple roles to list users
 async def list_users(
     limit: int = 20,
     offset: int = 0,

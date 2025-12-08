@@ -7,7 +7,7 @@ This module contains shared HTTP client and request handling functions.
 from __future__ import annotations
 
 import os
-from fastmcp.server.dependencies import get_http_headers
+from fastmcp.server.dependencies import get_http_headers, get_access_token
 from typing import Any, Dict, Optional
 
 import httpx
@@ -22,6 +22,39 @@ def _build_headers(token: str | None) -> Dict[str, str]:
     if token:
         headers["Authorization"] = f"Token {token}"
     return headers
+
+
+def check_authentication() -> Dict[str, Any] | None:
+    """Check if the current user is authenticated.
+    
+    Returns:
+        None if authenticated, or a dict with error information if anonymous.
+    """
+    try:
+        access_token = get_access_token()
+        if not access_token:
+            return {
+                "error": "Authentication required",
+                "message": "No access token found. Please authenticate first.",
+            }
+        
+        claims = access_token.claims or {}
+        is_anonymous = claims.get("is_anonymous", False)
+        
+        if is_anonymous:
+            auth_error = claims.get("auth_error", "Authentication failed")
+            return {
+                "error": "Authentication failed",
+                "message": f"Authentication failed: {auth_error}",
+                "suggestion": "Use the login tool to authenticate with your username and password.",
+            }
+        
+        return None  # Authenticated
+    except Exception as e:
+        return {
+            "error": "Authentication check failed",
+            "message": str(e),
+        }
 
 
 # Initialize HTTP client
@@ -82,6 +115,7 @@ async def safe_request(
             - "error": Error message (if failed)
             - "error_detail": Detailed error information (if available)
     """
+    
     headers = get_http_headers()
 
     token = headers.get('authorization', '').replace('Bearer', '').strip()

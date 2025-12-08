@@ -1,10 +1,13 @@
+from fastmcp.server.dependencies import get_access_token
+
 from .app import mcp
+from .permissions import require_authentication
 
 
 @mcp.tool
-async def get_user_info() -> dict:
+@require_authentication
+async def get_profile_info() -> dict:
     """Returns information about the authenticated user."""
-    from fastmcp.server.dependencies import get_access_token
 
     token = get_access_token()
     # The GitHubProvider stores user data in token claims

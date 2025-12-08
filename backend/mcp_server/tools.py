@@ -4,11 +4,8 @@ from typing import Any, Dict, Optional
 
 from .app import mcp
 from .utils import request_resource, safe_request
-from .permissions import require_role, require_superuser, PermissionDenied
-
 
 @mcp.tool("get-supported-resources")
-@require_superuser  # Only superusers can access this tool
 async def get_supported_resources() -> Dict[str, Any]:
     """
     Return the JumpServer-supported resource metadata list.
@@ -82,7 +79,7 @@ def _extract_resource_id(result: Dict[str, Any]) -> Optional[str]:
 
 
 @mcp.tool("create-resource")
-@require_role("superuser", "admin")  # Only superuser or admin can create resources
+# Default requires admin role (superuser automatically has admin role)
 async def create_resource(
     resource: str,
     data: Dict[str, Any],
@@ -91,7 +88,7 @@ async def create_resource(
     """
     Create a new resource item and optionally return the latest information.
     
-    Requires superuser or admin role.
+    Requires admin role (superuser automatically has admin role).
     
     Args:
         resource: Resource name (e.g., "users", "user-groups")
@@ -114,7 +111,7 @@ async def create_resource(
 
 
 @mcp.tool("update-resource")
-@require_role("superuser", "admin")  # Only superuser or admin can update resources
+# Default requires admin role (superuser automatically has admin role)
 async def update_resource(
     resource: str,
     resource_id: str,
@@ -124,7 +121,7 @@ async def update_resource(
     """
     Update an existing resource item and optionally return the latest information.
     
-    Requires superuser or admin role.
+    Requires admin role (superuser automatically has admin role).
     
     Args:
         resource: Resource name (e.g., "users", "user-groups")

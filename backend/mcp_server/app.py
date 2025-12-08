@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 from .auth import JumpServerAuthProvider
+from .middleware import ToolFilterMiddleware
 
 
 mcp = FastMCP(
@@ -19,4 +20,5 @@ mcp = FastMCP(
         to list, create, update, or get resource entries.
     """,
     auth=JumpServerAuthProvider(),
+    middleware=[ToolFilterMiddleware()],
 )
