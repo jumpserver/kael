@@ -37,6 +37,7 @@
 	import ChatBubbleOval from '$lib/components/icons/ChatBubbleOval.svelte';
 
 	import ModelItem from './ModelItem.svelte';
+	import { getUserSettings } from '$lib/apis/users';
 
 	const i18n = getContext('i18n');
 	const dispatch = createEventDispatcher();
@@ -334,13 +335,14 @@
 			)
 		);
 
-		console.log('Items: ');
-		console.log(items);
+		const userSettings = await getUserSettings($user?.name);
 
-		if (!selectedModel && items.length > 0) {
-			selectedModel = items[0];
-			value = selectedModel.value;
-		}
+		const userModels = userSettings?.ui?.models ?? [];
+
+		const selectedModel =
+			items.find((item) => userModels.includes(item.value)) || items[0];
+
+		value = selectedModel?.value;
 	});
 
 	$: if (show) {

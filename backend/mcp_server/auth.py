@@ -76,7 +76,7 @@ class JumpServerAuthProvider(TokenVerifier):
             token: Optional bearer token. If None, will try to authenticate using cookies.
         """
         
-        headers = get_http_headers() 
+        headers = get_http_headers()
         headers['Accept'] = 'application/json'
 
         # If token is provided and starts with 'jms', remove authorization header
