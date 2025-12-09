@@ -39,7 +39,7 @@ dependencies = [
     "loguru==0.7.3",
     "asgiref==3.8.1",
     "tiktoken",
-    "mcp==1.14.1",
+    "mcp==1.22.0",
     "openai",
     "anthropic",
     "google-genai==1.38.0",
