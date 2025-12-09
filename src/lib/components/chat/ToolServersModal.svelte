@@ -48,7 +48,7 @@
 						<Collapsible buttonClassName="w-full mb-0.5" chevron>
 							<div class="truncate">
 								<div class="text-sm font-medium dark:text-gray-100 text-gray-800 truncate">
-									{tool?.name} 123
+									{tool?.name}
 								</div>
 
 								{#if tool?.meta?.description}

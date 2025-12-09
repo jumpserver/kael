@@ -73,8 +73,6 @@ async def update_user_status(
         set_is_active: If provided, set `is_active` to this value
     """
     payload: Dict[str, Any] = {}
-    if set_is_login_blocked is not None:
-        payload["is_login_blocked"] = bool(set_is_login_blocked)
     if set_is_active is not None:
         payload["is_active"] = bool(set_is_active)
 
@@ -90,3 +88,13 @@ async def update_user_status(
         json=payload,
     )
 
+
+@mcp.tool("unblock-user")
+@require_role("admin")
+async def unblock_user(user_uuid: str) -> Dict[str, Any]:
+    """
+    Unblock a user's account by user ID, not username.
+    """
+
+    url = _build_user_url(user_uuid) + 'unblock/'
+    return await safe_request("PATCH", url, json={"is_login_blocked": False})

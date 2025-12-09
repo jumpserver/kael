@@ -61,7 +61,7 @@
 	const highlightJSON = (jsonString: string) => {
 		try {
 			const parsed = JSON.parse(jsonString);
-			const formatted = JSON.stringify(parsed, null, 4);
+			const formatted = JSON.stringify(parsed, null, 2);
 			return hljs.highlight(formatted, { language: 'json' }).value;
 		} catch (e) {
 			// If parsing fails, just return the original string
@@ -126,8 +126,13 @@
 									{$i18n.t('Parameters')}
 								</div>
 
-								<Textarea readonly value={JSON.stringify(document.metadata.parameters, null, 2)}
-								></Textarea>
+								<div class="hljs p-4 w-full rounded-lg bg-gray-50 dark:bg-gray-300 overflow-x-auto">
+									<code class="language-json"
+										>{@html highlightJSON(
+											JSON.stringify(document.metadata.parameters, null, 2)
+										)}</code
+									>
+								</div>
 							</div>
 						{/if}
 
@@ -179,14 +184,14 @@
 									srcdoc={document.document}
 									title={$i18n.t('Content')}
 								></iframe>
-							{:else}
-								{#if document.document.startsWith('{')}
-									<pre class="hljs text-sm dark:text-gray-400 p-4 rounded-lg bg-gray-50 !important dark:bg-gray-300 overflow-x-auto">
-										<code class="language-json">{@html highlightJSON(document.document)}</code>
+							{:else if document.document.startsWith('{')}
+								<pre
+									class="hljs text-sm dark:text-gray-400 p-4 rounded-lg bg-gray-50 dark:bg-gray-300 overflow-x-auto">
+<code class="language-json">{@html highlightJSON(document.document)}</code>
 									</pre>
-								{:else}
-									<pre class="text-sm dark:text-gray-400 whitespace-pre-line p-4 rounded-lg bg-gray-50 dark:bg-gray-900 overflow-x-auto">{document.document}</pre>
-								{/if}
+							{:else}
+								<pre
+									class="text-sm dark:text-gray-400 whitespace-pre-line p-4 rounded-lg bg-gray-50 dark:bg-gray-900 overflow-x-auto">{document.document}</pre>
 							{/if}
 						</div>
 					</div>
