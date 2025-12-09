@@ -21,6 +21,7 @@ from open_webui.jms import chat_manager, CommandHandler, CommandRecord, ReplayHa
 from open_webui.models.chats import Chats
 from open_webui.models.folders import Folders
 from open_webui.models.users import Users
+from open_webui.utils.mcp.client import MCPClient
 from open_webui.socket.main import (
     get_event_call,
     get_event_emitter,
@@ -1318,11 +1319,79 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     if not mcp_server_connection:
                         log.error(f"MCP server with id {server_id} not found")
                         continue
-                
-                    mcp_tools_dict = await get_mcp_tools_by_server_conn(mcp_server_connection, request, user, extra_params)
-                except Exception as e:
-                    log.exception(e)
-                    continue
+
+                    auth_type = mcp_server_connection.get("auth_type", "")
+
+                    headers = {}
+                    cookie = '; '.join([f'{key}={value}' for key, value in request.cookies.items()])
+                    headers.update({'cookie': cookie})
+
+                    if auth_type == "bearer":
+                        headers["Authorization"] = (
+                            f"Bearer {mcp_server_connection.get('key', '')}"
+                        )
+                    elif auth_type == "none":
+                        # No authentication
+                        pass
+                    elif auth_type == "session":
+                        headers["Authorization"] = (
+                           f"Bearer jms-{request.cookies.get('jms_sessionid', '')}"
+                        )
+                    elif auth_type == "system_oauth":
+                        oauth_token = extra_params.get("__oauth_token__", None)
+                        if oauth_token:
+                            headers["Authorization"] = (
+                                f"Bearer {oauth_token.get('access_token', '')}"
+                            )
+                    elif auth_type == "oauth_2.1":
+                        try:
+                            splits = server_id.split(":")
+                            server_id = splits[-1] if len(splits) > 1 else server_id
+
+                            oauth_token = await request.app.state.oauth_client_manager.get_oauth_token(
+                                user.id, f"mcp:{server_id}"
+                            )
+
+                            if oauth_token:
+                                headers["Authorization"] = (
+                                    f"Bearer {oauth_token.get('access_token', '')}"
+                                )
+                        except Exception as e:
+                            log.error(f"Error getting OAuth token: {e}")
+                            oauth_token = None
+
+                    mcp_clients[server_id] = MCPClient()
+                    await mcp_clients[server_id].connect(
+                        url=mcp_server_connection.get("url", ""),
+                        headers=headers if headers else None,
+                    )
+                    print(f"mcp_clients[server_id]: {mcp_clients[server_id]}")
+
+                    tool_specs = await mcp_clients[server_id].list_tool_specs()
+                    for tool_spec in tool_specs:
+                        def make_tool_function(client, function_name):
+                            async def tool_function(**kwargs):
+                                return await client.call_tool(
+                                    function_name,
+                                    function_args=kwargs,
+                                )
+
+                            return tool_function
+
+                        tool_function = make_tool_function(
+                            mcp_clients[server_id], tool_spec["name"]
+                        )
+
+                        mcp_tools_dict[f"{server_id}_{tool_spec['name']}"] = {
+                            "spec": {
+                                **tool_spec,
+                                "name": f"{server_id}_{tool_spec['name']}",
+                            },
+                            "callable": tool_function,
+                            "type": "mcp",
+                            "client": mcp_clients[server_id],
+                            "direct": False,
+                        }
                 except Exception as e:
                     log.debug(e)
                     if event_emitter:
