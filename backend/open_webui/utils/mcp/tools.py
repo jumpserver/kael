@@ -10,9 +10,15 @@ log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
 
 
-async def get_mcp_tools_by_server_conn(mcp_server_connection: dict, request: Request, user: UserModel, extra_params: dict) -> list[dict]:
-    mcp_tools_dict = {}
+async def get_mcp_tools_by_server_conn(mcp_server_connection: dict, request: Request, user: UserModel, extra_params: dict) -> list[str]:
+    """
+    Fetch MCP tool names for a server connection.
 
+    We only need the list of tool ids for the tools listing endpoint, so we
+    connect, fetch specs, and immediately disconnect to avoid leaving the
+    streamable-http client running in the background (which can trigger
+    anyio cancel-scope errors later).
+    """
     server_id = mcp_server_connection.get("info", {}).get("id")
     auth_type = mcp_server_connection.get("auth_type", "")
 
@@ -55,41 +61,21 @@ async def get_mcp_tools_by_server_conn(mcp_server_connection: dict, request: Req
             oauth_token = None
 
     mcp_client = MCPClient()
-    await mcp_client.connect(
-        url=mcp_server_connection.get("url", ""),
-        headers=headers if headers else None,
-        timeout=2,
-    )
-    print(f"mcp_client: {mcp_client}")
-
-    tool_specs = await mcp_client.list_tool_specs()
-
-    for tool_spec in tool_specs:
-        def make_tool_function(client, function_name):
-            async def tool_function(**kwargs):
-                return await client.call_tool(
-                    function_name,
-                    function_args=kwargs,
-                )
-
-            return tool_function
-
-        tool_function = make_tool_function(
-            mcp_client, tool_spec["name"]
+    try:
+        await mcp_client.connect(
+            url=mcp_server_connection.get("url", ""),
+            headers=headers if headers else None,
+            timeout=2,
         )
+        tool_specs = await mcp_client.list_tool_specs()
 
-
-        mcp_tools_dict[f"{server_id}_{tool_spec['name']}"] = {
-            "spec": {
-                **tool_spec,
-                "name": f"{server_id}_{tool_spec['name']}",
-            },
-            "callable": tool_function,
-            "type": "mcp",
-            "client": mcp_client,
-            "direct": False,
-        }
-    return mcp_tools_dict
+        return [
+            f"{server_id}_{tool_spec['name']}"
+            for tool_spec in tool_specs
+        ]
+    finally:
+        # Ensure the streamable-http transport is torn down promptly.
+        await mcp_client.disconnect()
 
 
 

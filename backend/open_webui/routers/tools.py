@@ -1,5 +1,4 @@
 import logging
-from pathlib import Path
 from typing import Optional
 import time
 import re
@@ -9,7 +8,6 @@ from pydantic import BaseModel, HttpUrl
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from open_webui.utils.mcp.tools import get_mcp_tools_by_server_conn
 
-from open_webui.models.oauth_sessions import OAuthSessions
 from open_webui.models.tools import (
     ToolForm,
     ToolModel,
@@ -116,11 +114,9 @@ async def get_tools(request: Request, user=Depends(get_verified_user)):
                 )
             # 想获取 mcp server 的 tools
             try:
-                mcp_tools_dict = await get_mcp_tools_by_server_conn(server, request, user, {})
+                mcp_tools = await get_mcp_tools_by_server_conn(server, request, user, {})
             except Exception as e:
-                mcp_tools_dict = {}
-
-            mcp_tools = list(mcp_tools_dict.keys())
+                mcp_tools = []
 
             tools.append(
                 ToolUserResponse(
