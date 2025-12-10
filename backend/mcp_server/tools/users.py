@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from .app import mcp
-from .utils import safe_request
-from .permissions import require_role, require_superuser
+from ..app import mcp
+from ..utils import safe_request
+from ..permissions import require_role, require_superuser
 
 USERS_ENDPOINT = "/api/v1/users/users/"
 

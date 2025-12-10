@@ -24,11 +24,8 @@ def register_all():
     """
     # Import order matters - resources should be registered first
     from . import resources  # Register MCP resources
-    from . import login  # Register login tool (accessible when not authenticated)
     from . import tools  # Register MCP tools
-    from . import users  # Register user-specific MCP tools
     from . import prompts  # Register MCP prompts
-    from . import profile  # Register MCP profile
 
 
 # Register all components

@@ -488,7 +488,7 @@ async def get_filtered_models(models, user):
     key=lambda _, user: f"openai_all_models_{user.id}" if user else "openai_all_models",
 )
 async def get_all_models(request: Request, user: UserModel) -> dict[str, list]:
-    log.info("get_all_models()")
+    log.info("openapi: get_all_models()")
     t1 = time.time()
 
     if not request.app.state.config.ENABLE_OPENAI_API:

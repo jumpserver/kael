@@ -1,7 +1,7 @@
 from fastmcp.server.dependencies import get_access_token
 
-from .app import mcp
-from .permissions import require_authentication
+from ..app import mcp
+from ..permissions import require_authentication
 
 
 @mcp.tool("get-profile-info")

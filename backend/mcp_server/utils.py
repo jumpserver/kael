@@ -116,27 +116,8 @@ async def safe_request(
             - "error_detail": Detailed error information (if available)
     """
     
-    headers = get_http_headers()
-
-    token = headers.get('authorization', '').replace('Bearer', '').strip()
-    if token.startswith('jms'):
-        headers.pop('authorization')
-
-    cookies = {}
-    for cookie in headers.get('cookie', '').split(';'):
-        key, value = cookie.strip().split('=', 1)
-        cookies[key] = value
-
-    cookie_prefix = cookies.get('SESSION_COOKIE_NAME_PREFIX') or 'jms_'
-    csrf_token = cookies.get(f'{cookie_prefix}csrftoken')
-    if csrf_token:
-        headers['X-CSRFToken'] = csrf_token
-    
-    if kwargs.get('headers', None):
-        headers.update(kwargs['headers'])
-
     try:
-        response = await client.request(method, url, params=params, json=json, headers=headers, **kwargs)
+        response = await client.request(method, url, params=params, json=json, **kwargs)
         response.raise_for_status()
         
         return {
