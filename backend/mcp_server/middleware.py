@@ -230,6 +230,5 @@ class ToolFilterMiddleware(Middleware):
             else:
                 logger.info(f"Filtered out tool {tool.name} - user lacks required permissions")
         
-        logger.info(f"Filtered {len(filtered_tools)} tools from {len(all_tools)} total tools")
         return filtered_tools
 

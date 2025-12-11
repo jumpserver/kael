@@ -7,7 +7,8 @@ This module contains shared HTTP client and request handling functions.
 from __future__ import annotations
 
 import os
-from fastmcp.server.dependencies import get_http_headers, get_access_token
+import copy
+from fastmcp.server.dependencies import get_access_token
 from typing import Any, Dict, Optional
 
 import httpx
@@ -174,4 +175,104 @@ async def request_resource(
         result["resource_id"] = resource_id
     
     return result
+
+
+def resolve_openapi_refs(spec: Dict[str, Any], base_path: str = "#") -> Dict[str, Any]:
+    """
+    Recursively resolve all $ref references in an OpenAPI spec.
+    
+    This function replaces all $ref references with their actual definitions,
+    which helps avoid issues with strict schema validators that can't resolve
+    references properly.
+    
+    Args:
+        spec: The OpenAPI specification dictionary
+        base_path: The base path for resolving references (used internally)
+        
+    Returns:
+        A new OpenAPI spec with all $ref references resolved
+    """
+    if not isinstance(spec, dict):
+        return spec
+    
+    # Create a deep copy to avoid modifying the original
+    resolved = copy.deepcopy(spec)
+    
+    # Extract components for reference resolution
+    components = resolved.get("components", {})
+    schemas = components.get("schemas", {})
+    
+    def _resolve_ref(obj: Any, visited: set[str] = None) -> Any:
+        """Internal function to recursively resolve references."""
+        if visited is None:
+            visited = set()
+            
+        if isinstance(obj, dict):
+            # Handle allOf, anyOf, oneOf - resolve refs inside them
+            if "allOf" in obj or "anyOf" in obj or "oneOf" in obj:
+                result = {}
+                # Copy non-composition keys first
+                for key in obj:
+                    if key not in ("allOf", "anyOf", "oneOf"):
+                        result[key] = _resolve_ref(obj[key], visited)
+                
+                # Resolve composition schemas
+                for comp_key in ("allOf", "anyOf", "oneOf"):
+                    if comp_key in obj:
+                        resolved_items = []
+                        for item in obj[comp_key]:
+                            resolved_item = _resolve_ref(item, visited)
+                            resolved_items.append(resolved_item)
+                        result[comp_key] = resolved_items
+                
+                return result
+            
+            # Check if this is a $ref
+            if "$ref" in obj:
+                ref_path = obj["$ref"]
+                
+                # Handle OpenAPI 3.0 format: #/components/schemas/SchemaName
+                if ref_path.startswith("#/components/schemas/"):
+                    schema_name = ref_path.split("/")[-1]
+                    
+                    # Prevent infinite recursion
+                    if schema_name in visited:
+                        # Return a placeholder to break the cycle
+                        return {"type": "object", "description": f"Circular reference to {schema_name}"}
+                    
+                    if schema_name in schemas:
+                        visited.add(schema_name)
+                        resolved_schema = _resolve_ref(schemas[schema_name], visited)
+                        visited.remove(schema_name)
+                        
+                        # If there are other keys besides $ref, merge them
+                        other_keys = {k: v for k, v in obj.items() if k != "$ref"}
+                        if other_keys:
+                            if isinstance(resolved_schema, dict):
+                                # Merge resolved schema with other properties
+                                resolved_schema = {**resolved_schema, **other_keys}
+                            else:
+                                # Fallback: keep original structure
+                                return obj
+                        
+                        return resolved_schema
+                    else:
+                        # Schema not found, return original ref
+                        return obj
+            
+            # Recursively process all values in the dict
+            return {k: _resolve_ref(v, visited) for k, v in obj.items()}
+        
+        elif isinstance(obj, list):
+            # Recursively process all items in the list
+            return [_resolve_ref(item, visited) for item in obj]
+        
+        else:
+            # Primitive type, return as-is
+            return obj
+    
+    # Resolve all references in the spec
+    resolved = _resolve_ref(resolved)
+    
+    return resolved
 
