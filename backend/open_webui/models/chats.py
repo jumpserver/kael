@@ -564,14 +564,14 @@ class ChatTable:
 
     @staticmethod
     def get_chats(skip: int = 0, limit: int = 50):
-        return chat_manager.list()
+        return chat_manager.list()['results']
 
     @staticmethod
     def get_chats_by_user_id(user_id: str):
         query = {
             'user_id': user_id,
         }
-        return chat_manager.list(query=query)
+        return chat_manager.list(query=query)['results']
 
     @staticmethod
     def get_pinned_chats_by_user_id(user_id: str):
@@ -580,7 +580,7 @@ class ChatTable:
             'pinned': True,
             'archived': False,
         }
-        return chat_manager.list(query=query)
+        return chat_manager.list(query=query)['results']
 
     @staticmethod
     def get_archived_chats_by_user_id(user_id: str):
@@ -588,7 +588,7 @@ class ChatTable:
             'user_id': user_id,
             'archived': True,
         }
-        return chat_manager.list(query=query)
+        return chat_manager.list(query=query)['results']
 
     def get_chats_by_user_id_and_search_text(
             self,
