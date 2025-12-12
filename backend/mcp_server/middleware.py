@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import inspect
 from typing import Sequence
+from datetime import datetime
 from fastmcp.server.middleware.middleware import (
     CallNext,
     Middleware,

@@ -9,12 +9,15 @@ from __future__ import annotations
 import os
 import copy
 from fastmcp.server.dependencies import get_access_token
+from fastmcp.utilities.logging import get_logger
 from typing import Any, Dict, Optional
 
 import httpx
 import dotenv
 
 dotenv.load_dotenv()
+
+logger = get_logger(__name__)
 
 
 def _build_headers(token: str | None) -> Dict[str, str]:

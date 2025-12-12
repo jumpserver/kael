@@ -43,6 +43,17 @@ else:
     openapi_spec = openapi_spec_raw
 
 
+def disable_output_schema_validation(route, component):
+    """
+    Component function to disable strict output schema validation.
+    
+    This sets output_schema to None for all tools, which disables
+    strict type validation and allows flexible response formats.
+    """
+    if hasattr(component, 'output_schema'):
+        component.output_schema = None
+
+
 mcp = FastMCP.from_openapi(
     name="JumpServer MCP Server",
     openapi_spec=openapi_spec,
@@ -54,5 +65,6 @@ mcp = FastMCP.from_openapi(
         to list, create, update, or get resource entries.
     """,
     auth=JumpServerAuthProvider(),
-    middleware=[ToolFilterMiddleware()],
+    middleware=[ToolFilterMiddleware(),],
+    mcp_component_fn=disable_output_schema_validation,
 )
