@@ -305,7 +305,7 @@
 			>
 				<div
 					class=" absolute -left-1.5 -right-1.5 -top-0 -bottom-0 z-20 cursor-col-resize bg-transparent"
-				/>
+				></div>
 			</PaneResizer>
 
 			<Pane defaultSize={50} minSize={30} class="h-full w-full">

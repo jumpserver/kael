@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
+# Basic env
+export PATH="/usr/local/bin:${PATH}"
+
+log "Container starting..."
+log "User: $(id -u):$(id -g)"
+log "Workdir: $(pwd)"
+
+# Sanity checks
+if ! command -v wisp >/dev/null 2>&1; then
+  log "ERROR: wisp not found in PATH"
+  log "PATH=${PATH}"
+  ls -la /usr/local/bin || true
+  exit 127
+fi
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd "$SCRIPT_DIR" || exit
-
-# Add conditional Playwright browser installation
-if [[ "${WEB_LOADER_ENGINE,,}" == "playwright" ]]; then
-    if [[ -z "${PLAYWRIGHT_WS_URL}" ]]; then
-        echo "Installing Playwright browsers..."
-        playwright install chromium
-        playwright install-deps chromium
-    fi
-
-    python -c "import nltk; nltk.download('punkt_tab')"
-fi
 
 if [ -n "${WEBUI_SECRET_KEY_FILE}" ]; then
     KEY_FILE="${WEBUI_SECRET_KEY_FILE}"
@@ -35,39 +40,6 @@ if test "$WEBUI_SECRET_KEY $WEBUI_JWT_SECRET_KEY" = " "; then
   WEBUI_SECRET_KEY=$(cat "$KEY_FILE")
 fi
 
-if [[ "${USE_OLLAMA_DOCKER,,}" == "true" ]]; then
-    echo "USE_OLLAMA is set to true, starting ollama serve."
-    ollama serve &
-fi
-
-if [[ "${USE_CUDA_DOCKER,,}" == "true" ]]; then
-  echo "CUDA is enabled, appending LD_LIBRARY_PATH to include torch/cudnn & cublas libraries."
-  export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/usr/local/lib/python3.11/site-packages/torch/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib"
-fi
-
-# Check if SPACE_ID is set, if so, configure for space
-if [ -n "$SPACE_ID" ]; then
-  echo "Configuring for HuggingFace Space deployment"
-  if [ -n "$ADMIN_USER_EMAIL" ] && [ -n "$ADMIN_USER_PASSWORD" ]; then
-    echo "Admin user configured, creating"
-    WEBUI_SECRET_KEY="$WEBUI_SECRET_KEY" uvicorn open_webui.main:app --host "$HOST" --port "$PORT" --forwarded-allow-ips '*' &
-    webui_pid=$!
-    echo "Waiting for webui to start..."
-    while ! curl -s "http://localhost:${PORT}/health" > /dev/null; do
-      sleep 1
-    done
-    echo "Creating admin user..."
-    curl \
-      -X POST "http://localhost:${PORT}/api/v1/auths/signup" \
-      -H "accept: application/json" \
-      -H "Content-Type: application/json" \
-      -d "{ \"email\": \"${ADMIN_USER_EMAIL}\", \"password\": \"${ADMIN_USER_PASSWORD}\", \"name\": \"Admin\" }"
-    echo "Shutting down webui..."
-    kill $webui_pid
-  fi
-
-  export WEBUI_URL=${SPACE_HOST}
-fi
 
 PYTHON_CMD=$(command -v python3 || command -v python)
 UVICORN_WORKERS="${UVICORN_WORKERS:-1}"
@@ -79,8 +51,12 @@ else
     ARGS=(--workers "$UVICORN_WORKERS")
 fi
 
+# Start main process
+log "Starting wisp..."
+exec wisp
+
 # Run uvicorn
-WEBUI_SECRET_KEY="$WEBUI_SECRET_KEY" exec "$PYTHON_CMD" -m uvicorn open_webui.main:app \
+WEBUI_SECRET_KEY="$WEBUI_SECRET_KEY" exec "$PYTHON_CMD" -m uvicorn main:app \
     --host "$HOST" \
     --port "$PORT" \
     --forwarded-allow-ips '*' \

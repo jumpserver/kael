@@ -77,7 +77,7 @@
 							rows="6"
 							style="resize: vertical;"
 							placeholder={$i18n.t('Enter a detail about yourself for your LLMs to recall')}
-						/>
+						></textarea>
 
 						<div class="text-xs text-gray-500">
 							ⓘ {$i18n.t('Refer to yourself as "User" (e.g., "User is learning Spanish")')}

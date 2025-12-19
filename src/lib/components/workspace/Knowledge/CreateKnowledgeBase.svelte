@@ -105,7 +105,7 @@
 							bind:value={description}
 							placeholder={$i18n.t('Describe your knowledge base and objectives')}
 							required
-						/>
+						></textarea>
 					</div>
 				</div>
 			</div>
