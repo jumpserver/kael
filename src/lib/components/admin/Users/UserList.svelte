@@ -158,7 +158,7 @@
 			<div class="flex-shrink-0">
 				{$i18n.t('Users')}
 			</div>
-			<div class="flex self-center w-[1px] h-6 mx-2.5 bg-gray-50 dark:bg-gray-850" />
+			<div class="flex self-center w-[1px] h-6 mx-2.5 bg-gray-50 dark:bg-gray-850" ></div>
 
 			{#if ($config?.license_metadata?.seats ?? null) !== null}
 				{#if total > $config?.license_metadata?.seats}
@@ -337,7 +337,7 @@
 						</div>
 					</th>
 
-					<th scope="col" class="px-2.5 py-2 text-right" />
+					<th scope="col" class="px-2.5 py-2 text-right" ></th>
 				</tr>
 			</thead>
 			<tbody class="">

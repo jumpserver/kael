@@ -29,8 +29,8 @@
 						<span class="relative flex size-2">
 							<span
 								class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"
-							/>
-							<span class="relative inline-flex rounded-full size-2 bg-green-500" />
+							></span>
+							<span class="relative inline-flex rounded-full size-2 bg-green-500" ></span>
 						</span>
 					</div>
 
@@ -38,7 +38,7 @@
 				{:else}
 					<div>
 						<span class="relative flex size-2">
-							<span class="relative inline-flex rounded-full size-2 bg-gray-500" />
+							<span class="relative inline-flex rounded-full size-2 bg-gray-500" ></span>
 						</span>
 					</div>
 

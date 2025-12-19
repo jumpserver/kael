@@ -486,7 +486,7 @@
 											)}
 											rows="3"
 											bind:value={prompt.content}
-										/>
+										></textarea>
 									</div>
 
 									<div class="">
