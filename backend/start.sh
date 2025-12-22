@@ -4,6 +4,11 @@ set -euo pipefail
 # Basic env
 export PATH="/usr/local/bin:${PATH}"
 
+log() {
+  # 带时间戳，输出到 stderr，容器里更好看
+  echo "[$(date -Iseconds)] $*" >&2
+}
+
 log "Container starting..."
 log "User: $(id -u):$(id -g)"
 log "Workdir: $(pwd)"

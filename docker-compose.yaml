@@ -15,6 +15,8 @@ services:
       - "8083:8083"
     environment:
       - 'WEBUI_SECRET_KEY='
+      - 'WEBUI_SECRET_KEY_FILE='
+      - 'WEBUI_JWT_SECRET_KEY='
     extra_hosts:
       - host.docker.internal:host-gateway
     restart: unless-stopped
