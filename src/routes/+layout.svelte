@@ -650,7 +650,7 @@
 			}
 		} else {
 			// Redirect to /error when Backend Not Detected
-			await goto(`/kael/error`);
+			await goto(`/core/auth/login/?next=/kael`);
 		}
 
 		await tick();
