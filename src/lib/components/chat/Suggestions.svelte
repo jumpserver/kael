@@ -65,7 +65,7 @@
 </script>
 
 <div
-	class="mb-1 flex gap-1 text-xs font-medium items-center text-gray-600 dark:text-gray-400 hidden"
+	class="mb-1 flex gap-1 text-xs font-medium items-center text-gray-600 dark:text-gray-400"
 >
 	{#if filteredPrompts.length > 0}
 		<Bolt />
@@ -83,7 +83,7 @@
 	{/if}
 </div>
 
-<div class="h-40 w-full hidden">
+<div class="h-40 w-full">
 	{#if filteredPrompts.length > 0}
 		<div role="list" class="max-h-40 overflow-auto scrollbar-none items-start {className}">
 			{#each filteredPrompts as prompt, idx (prompt.id || `${prompt.content}-${idx}`)}
