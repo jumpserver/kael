@@ -11,7 +11,7 @@
 	import { flyAndScale } from '$lib/utils/transitions';
 	import { createEventDispatcher, onMount, getContext, tick } from 'svelte';
 	import { goto } from '$app/navigation';
-
+	import { updateUserSettings } from '$lib/apis/users';
 	import ModelIcon from '$lib/components/icons/models/ModelIcon.svelte';
 
 	import { deleteModel, getOllamaVersion, pullModel, unloadModel } from '$lib/apis/ollama';
@@ -107,6 +107,11 @@
 				})
 			);
 		}
+	};
+
+	const saveDefaultModel = async (modelId: string) => {
+		settings.set({ ...$settings, models: [modelId] });
+		await updateUserSettings({ ui: $settings }, $user?.name);
 	};
 
 	$: if (items) {
@@ -575,6 +580,7 @@
 						onClick={() => {
 							value = item.value;
 							selectedModelIdx = index;
+							saveDefaultModel(item.value);
 
 							show = false;
 						}}
