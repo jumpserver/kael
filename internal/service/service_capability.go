@@ -17,10 +17,15 @@ func (s *Service) callServiceCapability(ctx context.Context, run *domain.Run, re
 	if s.capability == nil {
 		return agentruntime.ToolObservation{}, serviceError(Unavailable, "service_capability_unavailable", "service capability provider is unavailable", nil)
 	}
-	principal := domain.Principal{SubjectID: run.SubjectID, OrganizationID: run.OrganizationID}
+	principal := domain.Principal{SubjectID: run.SubjectID, OrganizationID: run.OrganizationID, IsSuperuser: run.AuthorizationSuperuser, IsOrgAdmin: run.AuthorizationOrgAdmin, Permissions: append([]string(nil), run.AuthorizationPermissions...)}
 	request := ports.CapabilityRequest{Principal: principal, ConversationID: run.ConversationID, RunID: run.ID, Profile: run.Profile, Registration: registration, Arguments: arguments}
 	capabilityPolicy, err := s.capability.Prepare(ctx, request)
 	if err != nil {
+		var invalidArguments *ports.InvalidCapabilityArgumentsError
+		if errors.As(err, &invalidArguments) {
+			encoded, _ := json.Marshal(map[string]any{"code": "invalid_operation_arguments", "message": "The operation arguments did not match the Core request schema.", "detail": invalidArguments.Detail})
+			return agentruntime.ToolObservation{Status: "error", Error: encoded}, nil
+		}
 		return agentruntime.ToolObservation{}, serviceError(Forbidden, "service_capability_denied", "service capability request was denied", err)
 	}
 	now := time.Now().UTC()
@@ -97,14 +102,11 @@ func (s *Service) callServiceCapability(ctx context.Context, run *domain.Run, re
 }
 
 func (s *Service) startServiceCapability(ctx context.Context, run *domain.Run, call *domain.ToolCall, approval *domain.Approval) error {
-	now := time.Now().UTC()
 	var notify []string
+	approvalExpired := false
 	err := s.store.Transaction(ctx, func(tx ports.Tx) error {
+		now := time.Now().UTC()
 		current, err := tx.RunInternal(run.ID, true)
-		if err != nil {
-			return err
-		}
-		panel, err := tx.PanelInternal(run.PanelSessionID, true)
 		if err != nil {
 			return err
 		}
@@ -112,18 +114,47 @@ func (s *Service) startServiceCapability(ctx context.Context, run *domain.Run, c
 		if err != nil {
 			return err
 		}
-		if approval != nil {
-			storedApproval, approvalErr := tx.ApprovalByToolCall(call.ID, true)
+		if err = validateToolCallBinding(current, stored); err != nil {
+			return err
+		}
+		if err = validateDispatchState(current, stored); err != nil {
+			return err
+		}
+		if stored.BindingKind != "service" || stored.ExecutionBindingID == "" || stored.RequiresConfirmation != (approval != nil) {
+			return serviceError(Conflict, "tool_call_binding_mismatch", "service tool call binding is invalid", nil)
+		}
+		if stored.RequiresConfirmation {
+			storedApproval, approvalErr := tx.ApprovalByToolCall(stored.ID, true)
 			if approvalErr != nil {
 				return approvalErr
 			}
-			if storedApproval.State != "approved" {
+			if storedApproval.ID != approval.ID {
+				return serviceError(Conflict, "approval_binding_mismatch", "approval is not bound to the current tool call", nil)
+			}
+			if approvalErr = validateApprovalBinding(storedApproval, current, stored, "service"); approvalErr != nil {
+				return approvalErr
+			}
+			if storedApproval.State != "approved" || storedApproval.ResolvedAt == nil {
 				return serviceError(Conflict, "approval_required", "service capability invocation is not approved", nil)
+			}
+			if storedApproval.ExpiresAt.Before(now) {
+				if approvalErr = expireApproval(tx, storedApproval, now); approvalErr != nil {
+					return approvalErr
+				}
+				approvalExpired = true
+				return nil
 			}
 			storedApproval.State, storedApproval.UpdatedAt = "consumed", now
 			if approvalErr = tx.SaveApproval(storedApproval); approvalErr != nil {
 				return approvalErr
 			}
+		}
+		panel, err := tx.PanelInternal(current.PanelSessionID, true)
+		if err != nil {
+			return err
+		}
+		if panel.ConversationID != current.ConversationID || panel.SubjectID != current.SubjectID || panel.OrganizationID != current.OrganizationID {
+			return serviceError(Conflict, "panel_binding_mismatch", "panel is not bound to the current run", nil)
 		}
 		stored.State, stored.UpdatedAt, current.State, current.UpdatedAt = "running", now, "running", now
 		if err = tx.SaveToolCall(stored); err != nil {
@@ -132,7 +163,7 @@ func (s *Service) startServiceCapability(ctx context.Context, run *domain.Run, c
 		if err = tx.SaveRun(current); err != nil {
 			return err
 		}
-		_, deliveries, err := event.Project(tx, "tool.call", "tool_call", stored.ID, "tool", event.References{ConversationID: run.ConversationID, RunID: run.ID, MessageID: current.OutputMessageID, ToolCallID: stored.ID}, map[string]any{"tool_call_id": stored.ID, "registration_id": stored.RegistrationID, "tool_name": stored.ToolName, "arguments": json.RawMessage(stored.Arguments), "risk": stored.Risk, "binding_kind": "service"}, []domain.PanelSession{*panel}, now)
+		_, deliveries, err := event.Project(tx, "tool.call", "tool_call", stored.ID, "tool", event.References{ConversationID: current.ConversationID, RunID: current.ID, MessageID: current.OutputMessageID, ToolCallID: stored.ID}, map[string]any{"tool_call_id": stored.ID, "registration_id": stored.RegistrationID, "tool_name": stored.ToolName, "arguments": json.RawMessage(stored.Arguments), "risk": stored.Risk, "binding_kind": "service"}, []domain.PanelSession{*panel}, now)
 		if err != nil {
 			return err
 		}
@@ -143,6 +174,9 @@ func (s *Service) startServiceCapability(ctx context.Context, run *domain.Run, c
 	})
 	if err != nil {
 		return translateOrService(err)
+	}
+	if approvalExpired {
+		return context.Canceled
 	}
 	s.bus.Notify(notify...)
 	return nil
@@ -162,13 +196,25 @@ func (s *Service) finishServiceCapability(ctx context.Context, run *domain.Run, 
 		if err != nil {
 			return err
 		}
-		panel, err := tx.PanelInternal(run.PanelSessionID, true)
-		if err != nil {
-			return err
-		}
 		stored, err := tx.ToolCall(call.ID, true)
 		if err != nil {
 			return err
+		}
+		if err = validateToolCallBinding(current, stored); err != nil {
+			return err
+		}
+		if current.Terminal() || current.State == "cancelling" || current.State == "cancelled" || stored.State == "cancelled" || stored.State == "timeout" {
+			return context.Canceled
+		}
+		if current.State != "running" || stored.State != "running" {
+			return serviceError(Conflict, "tool_result_terminal", "service tool call no longer accepts a result", nil)
+		}
+		panel, err := tx.PanelInternal(current.PanelSessionID, true)
+		if err != nil {
+			return err
+		}
+		if panel.ConversationID != current.ConversationID || panel.SubjectID != current.SubjectID || panel.OrganizationID != current.OrganizationID {
+			return serviceError(Conflict, "panel_binding_mismatch", "panel is not bound to the current run", nil)
 		}
 		stored.State, stored.UpdatedAt, stored.FinishedAt = "succeeded", now, &now
 		eventType := "tool.completed"
@@ -178,12 +224,12 @@ func (s *Service) finishServiceCapability(ctx context.Context, run *domain.Run, 
 		if err = tx.SaveToolCall(stored); err != nil {
 			return err
 		}
-		current.State, current.UpdatedAt = "running", now
+		current.UpdatedAt = now
 		if len(result.ResultCards) > 0 {
 			if len(result.ResultCards) > domain.MaxEventPayloadBytes || !json.Valid(result.ResultCards) {
 				return serviceError(Invalid, "capability_result_cards_invalid", "service capability result cards are invalid", nil)
 			}
-			message, messageErr := tx.Message(current.OutputMessageID, domain.Principal{SubjectID: run.SubjectID, OrganizationID: run.OrganizationID}, true)
+			message, messageErr := tx.Message(current.OutputMessageID, domain.Principal{SubjectID: current.SubjectID, OrganizationID: current.OrganizationID}, true)
 			if messageErr != nil {
 				return messageErr
 			}
@@ -208,11 +254,11 @@ func (s *Service) finishServiceCapability(ctx context.Context, run *domain.Run, 
 			return err
 		}
 		payloadDigest, _ := domain.HashValue(result)
-		toolResult := &domain.ToolResult{ID: uuid.NewString(), ToolCallID: call.ID, RunID: run.ID, PanelSessionID: run.PanelSessionID, Sequence: 1, Done: true, Status: result.Status, Result: result.Result, ErrorJSON: result.Error, PayloadDigest: payloadDigest, ExecutorAuditReference: bounded(result.ExecutorAuditReference, 512), CreatedAt: now}
+		toolResult := &domain.ToolResult{ID: uuid.NewString(), ToolCallID: stored.ID, RunID: current.ID, PanelSessionID: stored.PanelSessionID, Sequence: 1, Done: true, Status: result.Status, Result: result.Result, ErrorJSON: result.Error, PayloadDigest: payloadDigest, ExecutorAuditReference: bounded(result.ExecutorAuditReference, 512), CreatedAt: now}
 		if err = tx.CreateToolResult(toolResult); err != nil {
 			return err
 		}
-		payload := map[string]any{"tool_call_id": call.ID, "registration_id": call.RegistrationID, "tool_name": call.ToolName, "seq": 1, "done": true, "status": result.Status, "executor_audit_reference": result.ExecutorAuditReference, "binding_kind": "service"}
+		payload := map[string]any{"tool_call_id": stored.ID, "registration_id": stored.RegistrationID, "tool_name": stored.ToolName, "seq": 1, "done": true, "status": result.Status, "executor_audit_reference": result.ExecutorAuditReference, "binding_kind": "service"}
 		if len(result.Result) > 0 {
 			payload["result"] = json.RawMessage(result.Result)
 		}
@@ -222,14 +268,14 @@ func (s *Service) finishServiceCapability(ctx context.Context, run *domain.Run, 
 		if len(result.ResultCards) > 0 {
 			payload["result_cards"] = json.RawMessage(result.ResultCards)
 		}
-		_, deliveries, err := event.Project(tx, eventType, "tool_call", call.ID, "tool", event.References{ConversationID: run.ConversationID, RunID: run.ID, MessageID: current.OutputMessageID, ToolCallID: call.ID}, payload, []domain.PanelSession{*panel}, now)
+		_, deliveries, err := event.Project(tx, eventType, "tool_call", stored.ID, "tool", event.References{ConversationID: current.ConversationID, RunID: current.ID, MessageID: current.OutputMessageID, ToolCallID: stored.ID}, payload, []domain.PanelSession{*panel}, now)
 		if err != nil {
 			return err
 		}
 		for _, delivery := range deliveries {
 			notify = append(notify, delivery.PanelSessionID)
 		}
-		return s.audit(tx, domain.Principal{SubjectID: run.SubjectID, OrganizationID: run.OrganizationID}, "tool.result", run.ConversationID, run.PanelSessionID, run.ID, map[string]any{"tool_call_id": call.ID, "status": result.Status, "executor_audit_reference": result.ExecutorAuditReference})
+		return s.audit(tx, domain.Principal{SubjectID: current.SubjectID, OrganizationID: current.OrganizationID}, "tool.result", current.ConversationID, current.PanelSessionID, current.ID, map[string]any{"tool_call_id": stored.ID, "status": result.Status, "executor_audit_reference": result.ExecutorAuditReference})
 	})
 	if err != nil {
 		return agentruntime.ToolObservation{}, translateOrService(err)

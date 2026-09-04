@@ -2,15 +2,22 @@ package component
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jumpserver-dev/sdk-go/httplib"
 	kaelmodel "github.com/jumpserver/kael/internal/model"
 	"go.uber.org/zap"
@@ -22,9 +29,17 @@ const (
 	profilePath        = "/api/v1/users/profile/"
 	terminalConfigPath = "/api/v1/terminal/terminals/config/"
 	heartbeatPath      = "/api/v1/terminal/terminals/status/"
+	runtimeStorePath   = "/api/v1/chat-ai/runtime-store/"
+	openAPIPath        = "/api/swagger.json"
+	maxOpenAPIBytes    = int64(32 * 1024 * 1024)
 )
 
 var errInvalidAccessKey = errors.New("component access key file is invalid")
+
+var (
+	ErrRuntimeStoreRevisionConflict = errors.New("runtime store revision conflict")
+	ErrRuntimeStoreCommitUncertain  = errors.New("runtime store commit outcome is uncertain")
+)
 
 type Options struct {
 	CoreURL        string
@@ -36,8 +51,12 @@ type Options struct {
 }
 
 type Client struct {
-	mu     sync.Mutex
-	client *httplib.Client
+	mu              sync.Mutex
+	client          *httplib.Client
+	openAPIClient   *http.Client
+	coreURL         string
+	accessKeyID     string
+	accessKeySecret string
 }
 
 type accessKey struct {
@@ -53,12 +72,42 @@ type registrationResponse struct {
 
 type terminalConfig struct {
 	ChatAIEnabled  *bool  `json:"CHAT_AI_ENABLED"`
-	ChatAIMethod   string `json:"CHAT_AI_METHOD"`
 	ChatAIProvider string `json:"CHAT_AI_PROVIDER"`
 	ChatAIBaseURL  string `json:"CHAT_AI_BASE_URL"`
 	ChatAIAPIKey   string `json:"CHAT_AI_API_KEY"`
 	ChatAIProxy    string `json:"CHAT_AI_PROXY"`
 	ChatAIModel    string `json:"CHAT_AI_MODEL"`
+}
+
+type RuntimeStoreRecord struct {
+	Revision uint64 `json:"revision"`
+	Snapshot bool   `json:"snapshot"`
+	Record   string `json:"record"`
+	CommitID string `json:"commit_id"`
+}
+
+type RuntimeStorePage struct {
+	Revision uint64               `json:"revision"`
+	Nonce    string               `json:"nonce"`
+	Results  []RuntimeStoreRecord `json:"results"`
+	HasMore  bool                 `json:"has_more"`
+	Receipt  string               `json:"receipt"`
+}
+
+type runtimeStoreAppendRequest struct {
+	ExpectedRevision uint64 `json:"expected_revision"`
+	Snapshot         bool   `json:"snapshot"`
+	Record           string `json:"record"`
+	CommitID         string `json:"commit_id"`
+	Integrity        string `json:"integrity"`
+}
+
+type runtimeStoreAppendResponse struct {
+	Revision        uint64 `json:"revision"`
+	CurrentRevision uint64 `json:"current_revision"`
+	Code            string `json:"code"`
+	CommitID        string `json:"commit_id"`
+	Receipt         string `json:"receipt"`
 }
 
 func Connect(options Options) (*Client, error) {
@@ -81,7 +130,7 @@ func Connect(options Options) (*Client, error) {
 			return nil, clientErr
 		}
 		if valid, validationErr := validateAccessKey(client); validationErr == nil && valid {
-			return &Client{client: client}, nil
+			return connectedClient(options, client, key), nil
 		} else if validationErr != nil {
 			return nil, validationErr
 		}
@@ -100,7 +149,17 @@ func Connect(options Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{client: client}, nil
+	return connectedClient(options, client, key), nil
+}
+
+func connectedClient(options Options, client *httplib.Client, key accessKey) *Client {
+	return &Client{
+		client:          client,
+		openAPIClient:   &http.Client{Timeout: options.Timeout, Transport: httplib.NewTransport(!options.TLSVerify)},
+		coreURL:         strings.TrimRight(options.CoreURL, "/"),
+		accessKeyID:     key.ID,
+		accessKeySecret: key.Secret,
+	}
 }
 
 func register(options Options) (accessKey, error) {
@@ -175,9 +234,206 @@ func (c *Client) ModelConfig(ctx context.Context) (kaelmodel.HTTPConfig, error) 
 	return modelConfig(value)
 }
 
+// OpenAPISchema loads Core's API registry with the component identity. Core's
+// schema endpoint is intentionally authenticated, so platform capabilities must
+// not fetch it through an anonymous HTTP client.
+func (c *Client) OpenAPISchema(ctx context.Context) (map[string]any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.coreURL+openAPIPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("load Core OpenAPI schema: create request: %w", err)
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-JMS-ORG", "ROOT")
+	if err = (&httplib.SigAuth{KeyID: c.accessKeyID, SecretID: c.accessKeySecret}).Sign(request); err != nil {
+		return nil, fmt.Errorf("load Core OpenAPI schema: sign request: %w", err)
+	}
+	response, err := c.openAPIClient.Do(request)
+	if err != nil {
+		return nil, responseError("load Core OpenAPI schema", response, err)
+	}
+	if response == nil {
+		return nil, responseError("load Core OpenAPI schema", nil, fmt.Errorf("empty response"))
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, responseError("load Core OpenAPI schema", response, fmt.Errorf("unexpected response"))
+	}
+	content, err := io.ReadAll(io.LimitReader(response.Body, maxOpenAPIBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("load Core OpenAPI schema: read response: %w", err)
+	}
+	if int64(len(content)) > maxOpenAPIBytes {
+		return nil, fmt.Errorf("load Core OpenAPI schema: response exceeds 32 MiB limit")
+	}
+	var value map[string]any
+	if err = json.Unmarshal(content, &value); err != nil {
+		return nil, fmt.Errorf("load Core OpenAPI schema: invalid JSON response: %w", err)
+	}
+	if value == nil {
+		return nil, fmt.Errorf("load Core OpenAPI schema: invalid JSON response")
+	}
+	return value, nil
+}
+
+func (c *Client) LoadRuntimeStore(after uint64, limit int) (RuntimeStorePage, error) {
+	return c.LoadRuntimeStoreContext(context.Background(), after, limit)
+}
+
+func (c *Client) LoadRuntimeStoreContext(ctx context.Context, after uint64, limit int) (RuntimeStorePage, error) {
+	if err := ctx.Err(); err != nil {
+		return RuntimeStorePage{}, err
+	}
+	if limit < 1 || limit > 1000 {
+		return RuntimeStorePage{}, fmt.Errorf("runtime store page limit must be between 1 and 1000")
+	}
+	nonce := uuid.NewString()
+	query := url.Values{
+		"after": []string{fmt.Sprintf("%d", after)},
+		"limit": []string{fmt.Sprintf("%d", limit)},
+		"nonce": []string{nonce},
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.coreURL+runtimeStorePath+"?"+query.Encode(), nil)
+	if err != nil {
+		return RuntimeStorePage{}, fmt.Errorf("load Kael runtime store: create request: %w", err)
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-JMS-ORG", "ROOT")
+	if err = (&httplib.SigAuth{KeyID: c.accessKeyID, SecretID: c.accessKeySecret}).Sign(request); err != nil {
+		return RuntimeStorePage{}, fmt.Errorf("load Kael runtime store: sign request: %w", err)
+	}
+	response, err := c.openAPIClient.Do(request)
+	if err != nil {
+		return RuntimeStorePage{}, responseError("load Kael runtime store", response, err)
+	}
+	if response == nil {
+		return RuntimeStorePage{}, responseError("load Kael runtime store", nil, fmt.Errorf("empty response"))
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return RuntimeStorePage{}, responseError("load Kael runtime store", response, fmt.Errorf("unexpected response"))
+	}
+	var value RuntimeStorePage
+	decoder := json.NewDecoder(response.Body)
+	if err = decoder.Decode(&value); err != nil {
+		return RuntimeStorePage{}, fmt.Errorf("load Kael runtime store: decode response: %w", err)
+	}
+	var extra any
+	if err = decoder.Decode(&extra); err != io.EOF {
+		return RuntimeStorePage{}, fmt.Errorf("load Kael runtime store: response must contain one JSON value")
+	}
+	if value.Nonce != nonce {
+		return RuntimeStorePage{}, fmt.Errorf("load Kael runtime store: Core returned another nonce")
+	}
+	canonical, err := runtimeStorePageCanonical(nonce, after, limit, value)
+	if err != nil {
+		return RuntimeStorePage{}, fmt.Errorf("load Kael runtime store: %w", err)
+	}
+	if !validRuntimeStoreHMAC(c.accessKeySecret, canonical, value.Receipt) {
+		return RuntimeStorePage{}, fmt.Errorf("load Kael runtime store: Core page receipt is invalid")
+	}
+	return value, nil
+}
+
+func (c *Client) AppendRuntimeStore(commitID string, expectedRevision uint64, snapshot bool, record string) (uint64, error) {
+	if _, err := uuid.Parse(commitID); err != nil {
+		return 0, fmt.Errorf("append Kael runtime store: commit ID is invalid")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	integrity := runtimeStoreIntegrity(c.accessKeySecret, commitID, expectedRevision, snapshot, record)
+	request := runtimeStoreAppendRequest{ExpectedRevision: expectedRevision, Snapshot: snapshot, Record: record, CommitID: commitID, Integrity: integrity}
+	var value runtimeStoreAppendResponse
+	response, err := c.client.Post(runtimeStorePath, request, &value)
+	if response == nil {
+		return 0, fmt.Errorf("%w: %v", ErrRuntimeStoreCommitUncertain, err)
+	}
+	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+		if err != nil {
+			return 0, fmt.Errorf("%w: decode Core response: %v", ErrRuntimeStoreCommitUncertain, err)
+		}
+		if response.StatusCode != http.StatusCreated {
+			return 0, fmt.Errorf("%w: Core returned HTTP %d", ErrRuntimeStoreCommitUncertain, response.StatusCode)
+		}
+		if value.Revision != expectedRevision+1 {
+			return 0, fmt.Errorf("%w: Core returned revision %d, expected %d", ErrRuntimeStoreCommitUncertain, value.Revision, expectedRevision+1)
+		}
+		if value.CommitID != commitID {
+			return 0, fmt.Errorf("%w: Core returned another commit ID", ErrRuntimeStoreCommitUncertain)
+		}
+		digest := sha256.Sum256([]byte(record))
+		canonical := fmt.Sprintf("kael-runtime-store-receipt-v1\ndefault\n%s\n%d\n%d\n%d\n%s", commitID, expectedRevision, value.Revision, runtimeStoreBool(snapshot), hex.EncodeToString(digest[:]))
+		if !validRuntimeStoreHMAC(c.accessKeySecret, canonical, value.Receipt) {
+			return 0, fmt.Errorf("%w: Core receipt is invalid", ErrRuntimeStoreCommitUncertain)
+		}
+		return value.Revision, nil
+	}
+	if response.StatusCode == http.StatusConflict {
+		return 0, fmt.Errorf("%w: expected %d, current %d, code %q", ErrRuntimeStoreRevisionConflict, expectedRevision, value.CurrentRevision, value.Code)
+	}
+	if response.StatusCode >= http.StatusInternalServerError {
+		return 0, fmt.Errorf("%w: Core returned HTTP %d", ErrRuntimeStoreCommitUncertain, response.StatusCode)
+	}
+	if err != nil {
+		return 0, responseError("append Kael runtime store", response, err)
+	}
+	return 0, responseError("append Kael runtime store", response, fmt.Errorf("Core returned HTTP %d", response.StatusCode))
+}
+
+func runtimeStoreIntegrity(secret, commitID string, expectedRevision uint64, snapshot bool, record string) string {
+	digest := sha256.Sum256([]byte(record))
+	canonical := fmt.Sprintf("kael-runtime-store-commit-v1\ndefault\n%s\n%d\n%d\n%s", commitID, expectedRevision, runtimeStoreBool(snapshot), hex.EncodeToString(digest[:]))
+	return runtimeStoreHMAC(secret, canonical)
+}
+
+func runtimeStorePageCanonical(nonce string, after uint64, limit int, page RuntimeStorePage) (string, error) {
+	var canonical strings.Builder
+	fmt.Fprintf(&canonical, "kael-runtime-store-page-v1\ndefault\n%s\n%d\n%d\n%d\n%d\n%d", nonce, after, limit, page.Revision, runtimeStoreBool(page.HasMore), len(page.Results))
+	for _, record := range page.Results {
+		if record.Revision == 0 {
+			return "", fmt.Errorf("record revision is invalid")
+		}
+		if _, err := uuid.Parse(record.CommitID); err != nil {
+			return "", fmt.Errorf("record revision %d commit ID is invalid", record.Revision)
+		}
+		digest := sha256.Sum256([]byte(record.Record))
+		fmt.Fprintf(&canonical, "\n%d\n%s\n%d\n%s", record.Revision, record.CommitID, runtimeStoreBool(record.Snapshot), hex.EncodeToString(digest[:]))
+	}
+	return canonical.String(), nil
+}
+
+func runtimeStoreBool(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func runtimeStoreHMAC(secret, canonical string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(canonical))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func validRuntimeStoreHMAC(secret, canonical, provided string) bool {
+	return equalHexDigest(runtimeStoreHMAC(secret, canonical), provided)
+}
+
+func equalHexDigest(expected, provided string) bool {
+	expectedBytes, expectedErr := hex.DecodeString(expected)
+	providedBytes, providedErr := hex.DecodeString(provided)
+	return expectedErr == nil && providedErr == nil && hmac.Equal(expectedBytes, providedBytes)
+}
+
 func modelConfig(value terminalConfig) (kaelmodel.HTTPConfig, error) {
-	if value.ChatAIEnabled == nil || !*value.ChatAIEnabled || !strings.EqualFold(strings.TrimSpace(value.ChatAIMethod), "api") {
-		return kaelmodel.HTTPConfig{}, fmt.Errorf("Chat AI API is disabled in TerminalConfig")
+	if value.ChatAIEnabled == nil || !*value.ChatAIEnabled {
+		return kaelmodel.HTTPConfig{}, fmt.Errorf("Chat AI is disabled in TerminalConfig")
 	}
 	config := kaelmodel.HTTPConfig{
 		Provider:        strings.ToLower(strings.TrimSpace(value.ChatAIProvider)),

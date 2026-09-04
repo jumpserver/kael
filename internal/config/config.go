@@ -24,6 +24,7 @@ type Config struct {
 	AccessKeyFilePath      string
 	ArtifactFolderPath     string
 	RuntimeDataFolderPath  string
+	RuntimeStore           string
 	PlatformGatewayEnabled bool
 	PlatformDelegationKey  string
 	PlatformDelegationID   string
@@ -69,11 +70,12 @@ func Load(path string) (Config, error) {
 		AccessKeyFilePath:      filepath.Join(dataFolder, "keys", ".access_key"),
 		ArtifactFolderPath:     filepath.Join(dataFolder, "artifacts"),
 		RuntimeDataFolderPath:  dataFolder,
+		RuntimeStore:           strings.ToLower(strings.TrimSpace(v.GetString("RUNTIME_STORE"))),
 		PlatformGatewayEnabled: v.GetBool("PLATFORM_GATEWAY_ENABLED"),
-		PlatformDelegationKey:  v.GetString("PLATFORM_DELEGATION_KEY"),
-		PlatformDelegationID:   v.GetString("PLATFORM_DELEGATION_KEY_ID"),
-		PlatformIssuer:         v.GetString("PLATFORM_DELEGATION_ISSUER"),
-		PlatformAudience:       v.GetString("PLATFORM_DELEGATION_AUDIENCE"),
+		PlatformDelegationKey:  strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_KEY")),
+		PlatformDelegationID:   strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_KEY_ID")),
+		PlatformIssuer:         strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_ISSUER")),
+		PlatformAudience:       strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_AUDIENCE")),
 		PlatformCACert:         v.GetString("PLATFORM_CA_CERT"),
 		PlatformClientCert:     v.GetString("PLATFORM_CLIENT_CERT"),
 		PlatformClientKey:      v.GetString("PLATFORM_CLIENT_KEY"),
@@ -123,10 +125,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("BIND_HOST", "0.0.0.0")
 	v.SetDefault("HTTPD_PORT", 8083)
 	v.SetDefault("HTTP_REQUEST_TIMEOUT", 30)
+	v.SetDefault("RUNTIME_STORE", "core")
+	v.SetDefault("PLATFORM_GATEWAY_ENABLED", true)
 	v.SetDefault("PLATFORM_DELEGATION_KEY_ID", "v1")
 	v.SetDefault("PLATFORM_DELEGATION_ISSUER", "jumpserver-ai")
 	v.SetDefault("PLATFORM_DELEGATION_AUDIENCE", "jumpserver-core")
-	v.SetDefault("PLATFORM_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "PATCH", "DELETE"})
+	v.SetDefault("PLATFORM_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "PATCH"})
 	v.SetDefault("PLATFORM_REGISTRY_TTL", "1h")
 	v.SetDefault("PLATFORM_TIMEOUT", "15s")
 	v.SetDefault("PLATFORM_MAX_RESPONSE_BYTES", 1024*1024)
@@ -154,10 +158,24 @@ func (c Config) Validate() error {
 	if c.HTTPRequestTimeout < time.Second || c.HTTPRequestTimeout > 5*time.Minute {
 		return fmt.Errorf("HTTP_REQUEST_TIMEOUT must be between 1 and 300 seconds")
 	}
-	if c.PlatformGatewayEnabled && (len(c.PlatformDelegationKey) < 32 || c.PlatformRegistryTTL <= 0 || c.PlatformTimeout <= 0 || c.PlatformMaxResponse < 1) {
-		return fmt.Errorf("Platform gateway configuration is incomplete")
+	for _, origin := range c.AllowedOrigins {
+		if !validOrigin(origin) {
+			return fmt.Errorf("ALLOWED_ORIGINS contains an invalid HTTP/HTTPS origin")
+		}
 	}
-	if c.PlatformGatewayEnabled && (c.PlatformClientCert == "") != (c.PlatformClientKey == "") {
+	if c.RuntimeStore != "core" && c.RuntimeStore != "jsonl" {
+		return fmt.Errorf("RUNTIME_STORE must be core or jsonl")
+	}
+	if !c.PlatformGatewayEnabled {
+		return fmt.Errorf("PLATFORM_GATEWAY_ENABLED must be true because the default general assistant requires the Platform Gateway")
+	}
+	if len(c.PlatformDelegationKey) < 32 {
+		return fmt.Errorf("PLATFORM_DELEGATION_KEY must contain at least 32 characters after trimming surrounding whitespace and match Core")
+	}
+	if c.PlatformDelegationID == "" || c.PlatformIssuer == "" || c.PlatformAudience == "" || c.PlatformRegistryTTL <= 0 || c.PlatformTimeout <= 0 || c.PlatformMaxResponse < 1 {
+		return fmt.Errorf("Platform Gateway configuration is incomplete")
+	}
+	if (c.PlatformClientCert == "") != (c.PlatformClientKey == "") {
 		return fmt.Errorf("PLATFORM_CLIENT_CERT and PLATFORM_CLIENT_KEY must be configured together")
 	}
 	return nil
@@ -166,4 +184,9 @@ func (c Config) Validate() error {
 func validEndpoint(value string) bool {
 	parsed, err := url.Parse(value)
 	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == ""
+}
+
+func validOrigin(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && parsed.User == nil && (parsed.Path == "" || parsed.Path == "/") && parsed.RawQuery == "" && parsed.Fragment == ""
 }

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -149,7 +151,10 @@ func (s *Service) CreateRun(ctx context.Context, principal domain.Principal, req
 			approvalScope = "service"
 		}
 		approvalPolicyJSON, _ := json.Marshal(map[string]any{"version": "1", "scope": approvalScope, "risk_confirmation": []string{"write", "dangerous"}})
-		run = &domain.Run{ID: uuid.NewString(), ConversationID: conversation.ID, InputMessageID: message.ID, RegeneratedFromID: request.RegeneratedFromID, PanelSessionID: panel.ID, SubjectID: principal.SubjectID, OrganizationID: principal.OrganizationID, Profile: profile.ID, ProfileVersion: profile.Version, ExecutionMode: request.ExecutionMode, CapabilityMode: request.CapabilityMode, ContextVersion: contextVersion, ContextDigest: contextDigest, RegistryRevision: panel.RegistryRevision, RegistrationSnapshot: registrationJSON, ModelPolicy: modelPolicyJSON, ApprovalPolicy: approvalPolicyJSON, State: "queued", IdempotencyKey: key, IdempotencyDigest: digest, CreatedAt: now, UpdatedAt: now}
+		permissions := append([]string(nil), principal.Permissions...)
+		sort.Strings(permissions)
+		permissions = slices.Compact(permissions)
+		run = &domain.Run{ID: uuid.NewString(), ConversationID: conversation.ID, InputMessageID: message.ID, RegeneratedFromID: request.RegeneratedFromID, PanelSessionID: panel.ID, SubjectID: principal.SubjectID, OrganizationID: principal.OrganizationID, AuthorizationSuperuser: principal.IsSuperuser, AuthorizationOrgAdmin: principal.IsOrgAdmin, AuthorizationPermissions: permissions, Profile: profile.ID, ProfileVersion: profile.Version, ExecutionMode: request.ExecutionMode, CapabilityMode: request.CapabilityMode, ContextVersion: contextVersion, ContextDigest: contextDigest, RegistryRevision: panel.RegistryRevision, RegistrationSnapshot: registrationJSON, ModelPolicy: modelPolicyJSON, ApprovalPolicy: approvalPolicyJSON, State: "queued", IdempotencyKey: key, IdempotencyDigest: digest, CreatedAt: now, UpdatedAt: now}
 		if err = tx.CreateRun(run); err != nil {
 			return err
 		}
@@ -289,6 +294,9 @@ func (s *Service) ResumeRun(ctx context.Context, principal domain.Principal, id 
 		if run.State != "interrupted" {
 			return serviceError(Conflict, "run_not_resumable", "run is not interrupted", nil)
 		}
+		if run.ModelRequestCount > 0 {
+			return serviceError(Conflict, "execution_rebind_required", "run started model execution before interruption and cannot be replayed safely", nil)
+		}
 		toolCallCount, err := tx.RunToolCallCount(run.ID)
 		if err != nil {
 			return err
@@ -306,6 +314,7 @@ func (s *Service) ResumeRun(ctx context.Context, principal domain.Principal, id 
 			}
 		}
 		run.State, run.ErrorCode, run.ErrorDetail, run.ClaimOwner, run.ClaimExpiresAt, run.UpdatedAt = "queued", "", "", "", nil, now
+		run.FinishedAt = nil
 		if err = tx.SaveRun(run); err != nil {
 			return err
 		}
@@ -327,6 +336,9 @@ func (s *Service) ResumeRun(ctx context.Context, principal domain.Principal, id 
 }
 
 func translateOrService(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
 	var value *Error
 	if errors.As(err, &value) {
 		return err
@@ -407,11 +419,28 @@ func (s *Service) execute(run *domain.Run) {
 		s.finishFailed(run, outputMessage, err)
 		return
 	}
+	deltas := newMessageDeltaCoalescer(ctx, s, run, outputMessage)
 	completion, err := s.loop.Execute(ctx, input, agentruntime.Callbacks{ModelStarted: func(sequence int) error { return s.modelStarted(ctx, run, sequence) }, ModelCompleted: func(sequence int, result model.Result, duration time.Duration) error {
+		if flushErr := deltas.Flush(ctx, false); flushErr != nil {
+			return flushErr
+		}
 		return s.modelCompleted(ctx, run, sequence, result, duration)
-	}, MessageDelta: func(text string) error { return s.messageDelta(ctx, run, outputMessage, text) }, CallTool: func(toolCtx context.Context, registration domain.Registration, arguments json.RawMessage, modelDurationMS int64) (agentruntime.ToolObservation, error) {
+	}, MessageDelta: func(text string) error { return deltas.Add(ctx, text) }, CallTool: func(toolCtx context.Context, registration domain.Registration, arguments json.RawMessage, modelDurationMS int64) (agentruntime.ToolObservation, error) {
+		if flushErr := deltas.Flush(toolCtx, false); flushErr != nil {
+			return agentruntime.ToolObservation{}, flushErr
+		}
 		return s.callTool(toolCtx, run, registration, arguments, modelDurationMS)
 	}})
+	flushCtx, cancelFlush := context.WithTimeout(context.Background(), 10*time.Second)
+	flushErr := deltas.Close(flushCtx, true)
+	cancelFlush()
+	if flushErr != nil {
+		if err == nil {
+			err = flushErr
+		} else {
+			s.logger.Error("flush message delta", zap.String("run_id", run.ID), zap.Error(flushErr))
+		}
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			s.finishCancelled(run, outputMessage, err)

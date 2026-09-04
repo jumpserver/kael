@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"sort"
@@ -82,6 +84,7 @@ func (s *Server) routes() {
 	api.POST("/conversations/:id/branches", s.branch)
 	api.POST("/messages/:id/regenerations", s.regenerate)
 	api.POST("/artifacts", s.createArtifact)
+	api.GET("/artifacts/:id", s.getArtifact)
 	api.GET("/artifacts/:id/content", s.artifactContent)
 	api.DELETE("/artifacts/:id", s.deleteArtifact)
 	api.POST("/transcriptions", func(c *gin.Context) { s.writeError(c, s.service.UnsupportedTranscription()) })
@@ -135,13 +138,32 @@ func (s *Server) authorize() gin.HandlerFunc {
 		}
 		principal, err := s.authenticator.Authenticate(c.Request.Context(), c.Request)
 		if err != nil {
-			s.writePublicError(c, http.StatusUnauthorized, "unauthenticated", "authentication is required", false)
+			if errors.Is(err, identity.ErrUnauthenticated) {
+				s.writePublicError(c, http.StatusUnauthorized, "unauthenticated", "authentication is required", false)
+			} else {
+				s.logger.Warn("identity provider unavailable", zap.String("request_id", c.Writer.Header().Get("X-Request-ID")), zap.Error(err))
+				s.writePublicError(c, http.StatusServiceUnavailable, "identity_unavailable", "identity service is temporarily unavailable", true)
+			}
+			c.Abort()
+			return
+		}
+		if !principal.IsSuperuser && !hasPermission(principal, "chat_ai.use_chatai") {
+			s.writePublicError(c, http.StatusForbidden, "permission_denied", "chat AI permission is required", false)
 			c.Abort()
 			return
 		}
 		c.Set(principalKey, principal)
 		c.Next()
 	}
+}
+
+func hasPermission(principal domain.Principal, required string) bool {
+	for _, permission := range principal.Permissions {
+		if permission == required {
+			return true
+		}
+	}
+	return false
 }
 
 func principal(c *gin.Context) domain.Principal {
@@ -155,15 +177,28 @@ func (s *Server) bind(c *gin.Context, target any) bool {
 	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
+		if requestTooLarge(err) {
+			s.writePublicError(c, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the configured size limit", false)
+			return false
+		}
 		s.writePublicError(c, http.StatusBadRequest, "invalid_json", "request body is invalid", false)
 		return false
 	}
 	var extra any
-	if decoder.Decode(&extra) == nil {
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if requestTooLarge(err) {
+			s.writePublicError(c, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the configured size limit", false)
+			return false
+		}
 		s.writePublicError(c, http.StatusBadRequest, "invalid_json", "request body must contain one JSON value", false)
 		return false
 	}
 	return true
+}
+
+func requestTooLarge(err error) bool {
+	var maxBytesError *http.MaxBytesError
+	return errors.As(err, &maxBytesError) || errors.Is(err, multipart.ErrMessageTooLarge)
 }
 
 func pagination(c *gin.Context) (int, int) {
@@ -288,6 +323,10 @@ func (s *Server) createArtifact(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, s.service.MaxArtifactBytes()+1024*1024)
 	file, err := c.FormFile("file")
 	if err != nil {
+		if requestTooLarge(err) {
+			s.writePublicError(c, http.StatusRequestEntityTooLarge, "request_too_large", "multipart request exceeds the configured size limit", false)
+			return
+		}
 		s.writePublicError(c, http.StatusBadRequest, "file_required", "artifact file is required", false)
 		return
 	}
@@ -298,6 +337,15 @@ func (s *Server) createArtifact(c *gin.Context) {
 	}
 	c.Header("Location", "/kael/api/v1/artifacts/"+value.ID+"/content")
 	c.JSON(http.StatusCreated, value)
+}
+
+func (s *Server) getArtifact(c *gin.Context) {
+	artifact, _, err := s.service.Artifact(c, principal(c), c.Param("id"))
+	if err != nil {
+		s.writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, artifact)
 }
 
 func (s *Server) artifactContent(c *gin.Context) {
@@ -641,7 +689,14 @@ func (s *Server) assistants(c *gin.Context) {
 }
 
 func (s *Server) adminStats(c *gin.Context) {
-	value, err := s.service.AdminStats(c, principal(c))
+	days := 30
+	if raw := strings.TrimSpace(c.Query("days")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err == nil {
+			days = min(365, max(1, parsed))
+		}
+	}
+	value, err := s.service.AdminStats(c, principal(c), days)
 	if err != nil {
 		s.writeError(c, err)
 		return
@@ -739,6 +794,9 @@ func (s *Server) writeError(c *gin.Context, err error) {
 	switch serviceErr.Kind {
 	case service.Invalid:
 		status = http.StatusBadRequest
+		if serviceErr.Code == "artifact_too_large" {
+			status = http.StatusRequestEntityTooLarge
+		}
 	case service.NotFound:
 		status = http.StatusNotFound
 	case service.Conflict:

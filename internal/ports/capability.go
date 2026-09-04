@@ -24,6 +24,14 @@ type CapabilityPolicy struct {
 	Preview              json.RawMessage
 }
 
+type InvalidCapabilityArgumentsError struct {
+	Detail string
+}
+
+func (e *InvalidCapabilityArgumentsError) Error() string {
+	return "capability arguments are invalid: " + e.Detail
+}
+
 type CapabilityResult struct {
 	Status                 string
 	Result                 json.RawMessage

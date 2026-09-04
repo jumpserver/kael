@@ -6,14 +6,14 @@
 |---|---|
 | 状态 | 设计基线 |
 | 日期 | 2026-09-04 |
-| 目标仓库 | Kael、Luna |
-| 参考 | 《JumpServer AI Native Agent Runtime 完整方案》与 Koko/Luna/Kael 当前实现 |
-| 本期代码范围 | 只修改 Kael 和 Luna |
-| 实施状态 | ADR 0002/0004 范围内的代码级逻辑和 Kael JSONL Store 已完成；生产切流 Gate 见 `MIGRATION_STATUS.md` |
+| 目标仓库 | Kael、Luna、Lina、JumpServer Core（仅保留 ChatAI Runtime Store） |
+| 参考 | 《JumpServer AI Native Agent Runtime 完整方案》与 Koko/Luna/Lina/Kael 当前实现 |
+| 本期代码范围 | Kael、Luna、Lina，以及 JumpServer Core 的旧 Runtime 删除与组件持久化接口 |
+| 实施状态 | ADR 0002/0004/0006 范围内的代码级逻辑、Lina 原生协议切换和 Core-backed Runtime Journal 已完成；生产切流 Gate 见 `MIGRATION_STATUS.md` |
 
 本文是后续 AI 改造的实现、评审和验收基线。若代码与本文冲突，应先明确并记录新的架构决策，再修改本文和代码。
 
-[ADR 0002](./adr/0002-core-component-and-store-port.md) 与 [ADR 0004](./adr/0004-jsonl-store-and-event-protocol.md) 已冻结本期运行形态：Kael 与 Koko 一样注册为 Core Terminal component，模型配置来自 TerminalConfig；Kael 不连接数据库，当前使用本地 JSONL Store 保留由 Kael 创建的历史和 DomainEvent，但不读取或导入 Koko `data/agent/events/*.jsonl`。后台 Run、多实例共享、活动 Panel 能力和未决 Approval 的跨重启续接仍禁用。
+[ADR 0002](./adr/0002-core-component-and-store-port.md)、[ADR 0004](./adr/0004-jsonl-store-and-event-protocol.md) 与 [ADR 0006](./adr/0006-core-backed-runtime-journal.md) 已冻结当前运行形态：Kael 与 Koko 一样注册为 Core Terminal component，模型配置来自 TerminalConfig，只有 `CHAT_AI_ENABLED` 控制启停；`CHAT_AI_METHOD` 和 `CHAT_AI_EMBED_URL` 已删除。Kael 不连接数据库，默认通过组件签名 API 把 Runtime snapshot/delta Journal 保存到 Core，`RUNTIME_STORE=jsonl` 仅为显式回退。Core 旧 ChatAI Runtime/API/models/worker 已删除，`/api/v1/chat-ai/` 下只保留 `runtime-store/`。Kael 不读取或导入 Koko `data/agent/events/*.jsonl`，也不导入旧 Platform 数据。功能尚未上线；使用过旧开发分支的环境应清理旧 AI 表或重建开发库。后台 Run、多实例共享、活动 Panel 能力和未决 Approval 的跨重启续接仍禁用。
 
 长期稳定的组件边界、所有权和协议不变量见 [Kael AI Runtime Architecture](./ARCHITECTURE.md)。
 
@@ -44,7 +44,7 @@ Kael 不建设两套 Conversation、两套 Run 状态机或两套模型调用链
 
 两类对话通过产品类型、可信 Profile、本次 Run 的能力模式以及有效 Registration 区分，而不是通过不同 Runtime 分叉。
 
-### 2.3 本期只改 Luna 和 Kael
+### 2.3 当前改造范围
 
 本期允许：
 
@@ -52,6 +52,8 @@ Kael 不建设两套 Conversation、两套 Run 状态机或两套模型调用链
 - 将 Koko agentd 的通用 AI 能力迁入 Kael；
 - 将 Platform AI 的对话能力迁入 Kael；
 - 修改 Luna，使普通对话和 Luna 能力对话都连接 Kael；
+- 修改 Lina，使会话、消息、Artifact、前台 Run/SSE、审批和 audit 直接使用 Kael 原生 DTO 与 PanelDelivery dot 事件，并删除 iframe/embed、旧 DTO/SSE adapter、background/Web Search/服务端 STT 请求和旧 stats 面板；
+- 删除 Core 旧 ChatAI Runtime/API/models/worker，只保留供 Kael 组件签名访问的 Runtime Store Journal API；
 - 在 Luna 中建立 Platform/Luna Capability Adapter；
 - 保持 Luna 到 Koko、Chen 和本地工具的既有执行链。
 
@@ -59,11 +61,11 @@ Kael 不建设两套 Conversation、两套 Run 状态机或两套模型调用链
 
 - 修改或删除 Koko 中现有 agentd 代码；
 - 修改 Koko、Chen 的 MCP/会话工具协议；
-- 修改 Lina、Core、Magnus 或 Lion；
+- 修改 Magnus 或 Lion，或让 Core 执行 Kael Runtime；
 - 让 Kael 直接执行终端、文件、数据库或页面操作；
 - 让 Kael 持有资源连接凭据。
 
-因此本期是“在 Kael 重建并由 Luna 切流”的逻辑迁移。Koko 中旧 agentd 的物理删除或启动开关调整属于后续独立变更。
+因此本期是“在 Kael 重建、由 Core 持久化 Runtime Journal 并由前端单向切换”的逻辑迁移。Koko 中旧 agentd 的物理删除或启动开关调整属于后续独立变更；旧 agentd 不作为 Luna/Lina 客户端的回退服务。Koko 的 Terminal、MCP、WebSocket 等非 AI 路由不在本期范围。
 
 ## 3. 架构原则
 
@@ -78,18 +80,19 @@ AI Panel Host + Headless Agent Runtime + Local Capability Gateway
 ```text
 User
   |
-  v
-Luna AI Panel
-  |  Agent Runtime Protocol: HTTP + SSE
-  v
-Kael Agent Runtime
-  |
-  +-- panel binding --> 原 Luna PanelSession
-  |                       +-- Luna MCP Adapter --> Koko / Chen
-  |                       +-- Luna Local Adapter --> Script / UI
-  |                       +------------- tool.result --> Kael
-  |
-  +-- service binding --> Headless Platform Gateway --> Core API（当前用户权限）
+  +--> Luna AI Panel -- HTTP + SSE ---------------------+
+  |                                                     |
+  +--> Lina AI Panel -- HTTP + native PanelDelivery ----+
+                                                        |
+                                                        v
+                                             Kael Agent Runtime
+                                                        |
+                 +--------------------------------------+------------------+
+                 |                                                         |
+                 +-- panel binding --> 原 Luna PanelSession                +-- service binding --> Headless Platform Gateway --> Core API
+                                         +-- Luna MCP Adapter --> Koko / Chen                                        （当前用户权限）
+                                         +-- Luna Local Adapter --> Script / UI
+                                         +------------- tool.result --> Kael
 ```
 
 必须始终满足：
@@ -101,7 +104,7 @@ Kael Agent Runtime
 5. AI 不获得当前用户之外的任何权限。
 6. Registration 只描述能力；真正执行时仍由 Core、Koko 或 Chen 复验权限。
 7. ToolCall 必须回到发起 Run 的准确 PanelSession，禁止广播或跨 Tab 自动转移。
-8. Conversation 历史可跨同一数据目录的 Kael 重启存在；PanelSession 与 executor 不可跨进程恢复，正在执行的 Run 不能在环境之间漂移或自动重放。
+8. Conversation 历史可从 Core Runtime Journal 跨 Kael 节点恢复；PanelSession 与 executor 不可跨进程恢复，正在执行的 Run 不能在环境之间漂移或自动重放。
 
 ## 4. 组件职责
 
@@ -159,25 +162,25 @@ Koko 和 Chen 保持现有 Session Capability Provider 身份，继续负责：
 
 这些行为不得迁入 Kael。
 
-### 4.4 Platform Capability 的过渡责任
+### 4.4 Platform Capability 边界
 
-目标方案中，Platform Capability 最终适合由 Lina AI Panel 承载。但本期只能修改 Luna 和 Kael，必须区分前台过渡和完整 Platform 兼容：
+当前 Platform Capability 使用与 Runtime core 隔离的 Headless Gateway，Lina 已原生切换到 Kael，Capability Provider 边界如下：
 
 - Kael 仓库内的隔离 Headless Gateway 提供 Platform Capability；
 - Gateway 使用请求绑定的一次性 HMAC 委托传递当前 user/org，Core 执行最终 RBAC；
 - 动态 OpenAPI 只通过受控 operation registry 暴露，并按 Profile、HTTP method、schema 和敏感路径限制；
 - Kael Runtime core 只识别通用 Registration、ExecutionBinding 和 ToolResult；
-- 未来 Lina 接管同名或新版语义能力时，只替换 Capability Provider，不改变 Kael Runtime。
+- 后续如替换同名或新版语义能力的 Provider，不改变 Kael Runtime 协议。
 
-该过渡方案与 Legacy 只读策略已由 [ADR 0001](./adr/0001-headless-platform-gateway.md) 冻结。站内信、STT 和 Web Search 仍按 bootstrap feature 明确关闭，旧 Lina 对应能力继续由旧服务承接。
+Headless Gateway 已由 [ADR 0001](./adr/0001-headless-platform-gateway.md) 选定并实现。Core 旧 ChatAI Runtime/API/models/worker 已删除，只保留 Runtime Store 和所需的组件身份、配置、委托校验边界。Lina 只调用 `/kael/api/v1` 并直接消费 PanelDelivery dot 事件；iframe/embed、Legacy DTO/SSE adapter、background、Web Search、服务端 STT UI/请求和旧 stats 面板均已删除。浏览器支持时仍可使用不经过 Kael 的原生 `SpeechRecognition`。
 
 ## 5. 当前能力基线
 
-“完整迁移”以当前 Koko agentd、Platform AI 服务端代码以及 Luna/Lina 实际调用为准，不以旧 Kael 实现或已漂移文档为准。
+迁移行为基线来自删除前冻结的 Koko agentd/Platform AI fixture 与当前 Luna/Lina/Kael 协议，不以已漂移的旧文档为准。旧服务只提供历史语义参考，不是当前可调用或可回退实现。
 
 ### 5.1 Koko agentd Runtime
 
-必须迁移并保持的核心语义：
+Kael 已迁移并保留的核心语义：
 
 - 串行 Run 队列、队列上限、Run 超时和关闭语义；
 - 每 Run 的轮次与模型请求预算；
@@ -243,26 +246,26 @@ Koko/Chen 的执行协议和 Luna 当前安全检查保持不变。
 
 ### 5.4 Platform AI
 
-普通对话必须承接当前 Platform AI 的产品能力：
+普通对话当前承接的 Platform AI 产品能力：
 
 - Conversation 列表、新建、详情、改名、Assistant 切换和删除；
 - 分页消息历史、图片和文件附件；
 - assistant/preset 与 starter prompts；
-- 流式回答、后台运行、取消和运行恢复；
+- 前台流式回答、取消和运行恢复；
 - regenerate 和 branch；
 - pending Approval 恢复；
 - activity/result card 展示；
-- 当前已有的 API search、API call、Web search 和安全策略；
-- STT、用户/全局限流和部署依赖；
-- 管理员 stats 和脱敏 Conversation audit；
+- API search、API call 和安全策略；
+- 用户/全局限流和部署依赖；
+- 服务端管理员 stats API 和脱敏 Conversation audit；
 - Run/Token/API 审计、数据保留和僵尸状态清理；
 - `general`、`management`、`asset`、`session_audit`、`ops` preset。
 
 这些 preset 是模型策略和能力组合，不是新的 Conversation 类型。
 
-当前 `general` 是 chat-only；`management` 才是管理员范围内的动态 Core 管理能力。旧 Platform 文档对此描述相反，迁移以实际代码为准。Scheduled Report 当前没有代码实现，不纳入现状基线。
+Kael 的默认 `general` 恢复旧统一 JumpServer Assistant 语义：产品问答与迁移时旧源码默认 operation allowlist 等价的编译期固定范围内的授权 Core 搜索/调用。Kael 不读取旧 Chat AI operation IDs、allowed/blocked paths/tags 或 method policies 配置；功能尚未上线，旧开发分支的自定义配置不迁移，当前编译期策略是唯一生效配置。`management` 是管理员专用、范围更宽的静态权限能力；asset、session_audit、ops 继续使用更窄 scope。所有 operation 都必须具有可静态解析的 OpenAPI 权限元数据，创建 Run 的 Principal 必须拥有全部 required permissions；Core 执行 delegated request 时再按实时权限复核。Scheduled Report 当前没有代码实现，不纳入现状基线。
 
-Luna 现有 Platform Panel 只使用上述能力的一个子集；Lina 已使用附件、联网、branch、regenerate、后台、STT、stats 和 audit。本期不修改 Lina，生产网关继续把它的旧路径流量留在 Platform AI；Kael 仍必须按 Lina 已使用的完整能力设计 `/kael/api/v1`，供未来 Lina 直接切换，不能只迁移 Luna 子集。
+Luna 现有 Platform Panel 只使用上述能力的一个子集。旧 Lina 曾使用附件、联网、branch、regenerate、后台、STT、stats 和 audit；当前 Lina 只保留会话、消息、Artifact、前台 Run/SSE、cancel、Approval、branch、regenerate、result card 和 audit，并直接使用 `/kael/api/v1` 原生资源与 PanelDelivery dot 事件。background、服务端 STT、Web Search 的 UI/状态/请求及旧 stats 面板已经删除，不再以“请求后返回 unsupported”维持兼容；浏览器原生 `SpeechRecognition` 保留且不属于 Kael 服务端 STT。
 
 ## 6. 产品模型
 
@@ -273,7 +276,7 @@ Luna 现有 Platform Panel 只使用上述能力的一个子集；Lina 已使用
 - 长生命周期，可在没有资源会话时创建、查看和继续；
 - 不隐式绑定当前 Terminal、File、SQL 或 Script；
 - 支持 assistant/preset；
-- `general` 首期可采用纯模型模式；
+- `general` 是 Lina 默认的旧统一 JumpServer Assistant，使用受控 Platform service capability；Platform Gateway 默认且必须启用，关闭或缺少与 Core 匹配的 delegation secret 时 Kael 启动失败；
 - 其他 preset 可绑定明确授权的 Platform Capability；
 - 当前 Luna 恰好打开某个 SSH Tab，不会使普通对话自动获得 SSH 工具；
 - 页面焦点变化不能改变既有 Conversation 的类型。
@@ -421,7 +424,7 @@ Kael 只保存定义和路由信息，不保存浏览器 executor 句柄或资�
 
 普通纯聊天 Run 使用 disabled capability mode。需要 Luna 在线能力时使用 panel mode。Capability mode 必须显式保存，不能通过“当前工具列表是否为空”推断。
 
-当前允许 foreground+disabled、foreground+panel 和 foreground+service；所有 background 组合返回 `background_requires_durable_store`。当前本地 JSONL 的 durable 只表示历史落盘，不代表具备后台 ownership 或安全续跑条件；未来接入支持分布式 claim 与工具恢复的外部 Store 后，background+disabled 和 background+service 可重新评估，background+panel 始终非法。service mode 已按 ADR 0001 绑定可信 Headless Provider，不能伪装成浏览器 Panel。
+当前允许 foreground+disabled、foreground+panel 和 foreground+service；所有 background 组合返回 `background_requires_durable_store`。默认 Core-backed Journal 的 durable 只表示历史已持久提交，不代表具备后台 ownership 或安全续跑条件；未来补齐分布式 claim、状态同步与工具恢复后，background+disabled 和 background+service 可重新评估，background+panel 始终非法。service mode 已按 ADR 0001 绑定可信 Headless Provider，不能伪装成浏览器 Panel。
 
 ### 7.8 ToolCall 与 ToolResult
 
@@ -452,7 +455,7 @@ ToolResult 必须校验完整归属链，支持：
 - DomainEvent 包含 event ID、aggregate、type、timestamp、schema version 和有界 payload，并与状态同事务提交；
 - PanelDelivery 包含 PanelSession ID、该 stream 内严格递增的 sequence、event ID、audience 和投影 payload；
 - 同一 DomainEvent 可以投影到多个 Panel，各自拥有独立 sequence；
-- DomainEvent 使用 Conversation 内递增 `seq` 写入 `data/events/<conversation-id>.jsonl`；PanelDelivery 另有 PanelSession 内 sequence；
+- DomainEvent 使用 Conversation 内递增 `seq` 写入 Runtime Journal；`RUNTIME_STORE=jsonl` 回退时另写 `data/events/<conversation-id>.jsonl`，PanelDelivery 仍有 PanelSession 内 sequence；
 - PanelDelivery 在 SSE 发布前写入同一 Store 事务，并允许客户端忽略未知事件类型；旧 PanelSession 重启后失效，其 cursor 不能被新 Panel 继承。
 
 ## 8. Run 与能力规则
@@ -616,7 +619,7 @@ Context 变化应通过独立版本更新，不要求销毁 Conversation。
 - `/tenant-a/luna/...` 页面请求 `/tenant-a/kael/api/v1/...`；
 - 禁止生成 `/luna/kael/...` 或 `/tenant-a/luna/kael/...`。
 
-### 11.2 目标 API
+### 11.2 当前 API
 
 | 方法 | 路由 | 作用 |
 |---|---|---|
@@ -627,7 +630,7 @@ Context 变化应通过独立版本更新，不要求销毁 Conversation。
 | GET | `/kael/api/v1/conversations?kind={general|capability}` | 按当前 Principal 和可选 Kind 分页查询 Conversation |
 | GET | `/kael/api/v1/conversations/{id}` | 获取 Conversation |
 | PATCH | `/kael/api/v1/conversations/{id}` | 改名、归档等元数据操作 |
-| DELETE | `/kael/api/v1/conversations/{id}` | 删除或软删除 Conversation |
+| DELETE | `/kael/api/v1/conversations/{id}` | 软删除 Conversation；当前不会物理清除关联 Journal 数据，边界见 ADR 0006 |
 | GET | `/kael/api/v1/conversations/{id}/messages` | 分页读取消息 |
 | GET | `/kael/api/v1/conversations/{id}/runs` | 分页读取 Run，并发现 active、interrupted 等可恢复状态 |
 | GET | `/kael/api/v1/conversations/{id}/approvals` | 查询当前 Principal 可见的 pending 或历史 Approval |
@@ -635,9 +638,10 @@ Context 变化应通过独立版本更新，不要求销毁 Conversation。
 | POST | `/kael/api/v1/conversations/{id}/branches` | 从指定 Message 创建分支 Conversation |
 | POST | `/kael/api/v1/messages/{id}/regenerations` | 基于指定用户问题创建新的回答版本 |
 | POST | `/kael/api/v1/artifacts` | 上传经限制和校验的图片或文件 |
+| GET | `/kael/api/v1/artifacts/{id}` | 所有权校验后读取 Artifact 元数据 |
 | GET | `/kael/api/v1/artifacts/{id}/content` | 所有权校验后读取 Artifact |
 | DELETE | `/kael/api/v1/artifacts/{id}` | 删除未引用或允许删除的 Artifact |
-| POST | `/kael/api/v1/transcriptions` | 语音转写 |
+| POST | `/kael/api/v1/transcriptions` | 禁用占位端点；bootstrap `transcription=false` 且固定返回 unavailable，Lina 不调用 |
 | POST | `/kael/api/v1/panel-sessions` | 创建 PanelSession |
 | POST | `/kael/api/v1/panel-sessions/{id}/heartbeat` | 续租 |
 | POST | `/kael/api/v1/panel-sessions/{id}/resume` | 使用 resume token 恢复 |
@@ -645,7 +649,7 @@ Context 变化应通过独立版本更新，不要求销毁 Conversation。
 | PUT | `/kael/api/v1/panel-sessions/{id}/context` | 原子更新 Context version |
 | PUT | `/kael/api/v1/panel-sessions/{id}/registrations` | 原子替换 Registry |
 | DELETE | `/kael/api/v1/registrations/{id}` | 撤销 Registration |
-| POST | `/kael/api/v1/runs` | 为已有输入 Message 创建前台或后台 Run |
+| POST | `/kael/api/v1/runs` | 为已有输入 Message 创建 Run；当前只允许 foreground，background 被拒绝且 Lina 不提交 |
 | GET | `/kael/api/v1/runs/{id}` | 获取 Run 状态与可用恢复动作 |
 | POST | `/kael/api/v1/runs/{id}/cancel` | 幂等取消 Run |
 | POST | `/kael/api/v1/runs/{id}/resume` | 显式恢复允许恢复的 Run |
@@ -654,18 +658,18 @@ Context 变化应通过独立版本更新，不要求销毁 Conversation。
 | GET | `/kael/api/v1/approvals/{id}` | 获取当前 Principal 可见的安全审批预览 |
 | POST | `/kael/api/v1/approvals/{id}/decisions` | 提交 Approval 决定 |
 | POST | `/kael/api/v1/admin/platform-registry/refresh` | 管理员刷新 Platform Registry |
-| GET | `/kael/api/v1/admin/stats` | 管理员统计 |
+| GET | `/kael/api/v1/admin/stats?days={1..365}` | 服务端管理员统计；默认 30 天，数值范围 clamp 到 1..365，非法文本回退默认值；Lina 无 stats 面板 |
 | GET | `/kael/api/v1/admin/audit/conversations` | 管理员分页查询脱敏会话审计 |
 | GET | `/kael/api/v1/admin/audit/conversations/{id}` | 管理员查看单个脱敏会话审计 |
 
-Message 与 Run 为独立对象，以支持重试、重新运行、未来模型切换和评估。兼容层可以保留“发消息即运行”的旧行为，但内部必须拆分。
+Message 与 Run 为独立对象，以支持重试、重新运行、未来模型切换和评估。Lina 按原生 Message -> Run -> PanelSession SSE 顺序调用，不提供“发消息即运行”的旧 DTO 兼容层。
 
 健康与运维路径不放入 API 版本，但仍统一在 `/kael` 下：
 
 | 方法 | 路由 | 作用 |
 |---|---|---|
 | GET | `/kael/health/live` | 只检查进程和 HTTP Server 存活，不访问外部依赖 |
-| GET | `/kael/health/ready` | 检查必要配置、Store 和 Worker 是否可服务 |
+| GET | `/kael/health/ready` | 检查进程内 Store 与持久化 adapter；Core 模式在 2 秒超时内轻量探测 Runtime Store，不检查 Worker 或模型端点 |
 | GET | `/kael/health/startup` | 初始化或恢复扫描较慢时用于启动探针 |
 | GET | `/kael/internal/metrics` | 由网络策略保护的指标入口 |
 | GET | `/kael/openapi.json` | 当前稳定 API 描述 |
@@ -675,7 +679,7 @@ Message 与 Run 为独立对象，以支持重试、重新运行、未来模型�
 Canonical 路径和版本规则：
 
 - Canonical 路径不带尾斜杠。
-- 迁移期可以同时接受带尾斜杠形式，但必须直接处理，不能依赖 HTTP Redirect，尤其是 POST、上传和 SSE。
+- 调用方只使用 canonical 路径；不为尾斜杠变体或 Redirect 行为提供迁移兼容承诺。
 - `/kael/api/v1` 的破坏性变更必须进入新 path version；新增可选字段和事件使用向前兼容规则。
 - Event payload、Registration definition 和 Profile 各自保留独立 schema/version，不能只依赖 URL 版本。
 - 不创建按产品或对话类型拆分的业务根路径；Conversation、Run 和 Event 只能从 `/kael/api/v1` 访问。
@@ -684,16 +688,16 @@ Canonical 路径和版本规则：
 
 ### 11.4 旧路径退出
 
-| 现有 Luna 调用 | 目标 |
+| 已退出路径 | 当前规则 |
 |---|---|
-| `/api/v1/chat-ai/...` | `/kael/api/v1/...`，由 Luna 普通对话 Adapter 映射 |
-| `/koko/agent/sessions/...` | `/kael/api/v1/...`，由 Luna 能力对话 Adapter 映射 |
+| `/api/v1/chat-ai/...` | Core 业务路由已删除；仅保留组件签名的 `/api/v1/chat-ai/runtime-store/` |
+| `/koko/agent/sessions/...` | Luna/Lina 不再调用，不作为客户端回退；Koko 仓库内物理清理另行处理 |
 
-Kael 不新增 `/api/v1/chat-ai` 或 `/koko/agent` 顶级路由。迁移期内，未修改的 Lina 继续访问旧 Platform AI；未来修改 Lina 时再切换到 `/kael/api/v1`。Koko 的旧 agentd 路由可以暂时保留供旧客户端回滚，但新 Luna 对它的业务流量必须归零。兼容层不得让 Kael 保留第二套状态模型。
+Kael 不新增 `/api/v1/chat-ai` 或 `/koko/agent` 顶级路由。Luna 与 Lina 都直接使用 `/kael/api/v1`。旧 Platform 数据不自动进入 Kael，也没有内置只读入口、read-through 或可写兼容 API；Lina 的旧 path、iframe/embed 和 DTO/SSE adapter 均已删除。Kael 只保留一套状态模型。
 
-Luna Web 与 Electron 的 JSON、上传和 SSE 请求统一使用逻辑服务名 `kael`。Web 只保留不 rewrite 的 `/kael` 开发代理；Electron 的 `kael` 服务依次使用 `JMS_KAEL_DESKTOP_URL`、`JMS_KAEL_DEV_URL`，本地开发默认端口为 8083，生产环境无专用地址时使用当前 JumpServer origin。旧 `chat-ai`、`agent` 服务名及 `JMS_AI_*`、`JMS_AGENT_*` 环境变量只能作为有期限的弃用别名，且必须指向同一 Kael 服务，禁止回退到旧 8088 或 5050 服务。
+Luna Web 与 Electron 的 JSON、上传和 SSE 请求统一使用逻辑服务名 `kael`。Web 只保留不 rewrite 的 `/kael` 开发代理；Electron 的 `kael` 服务依次使用 `JMS_KAEL_DESKTOP_URL`、`JMS_KAEL_DEV_URL`，本地开发默认端口为 8083，生产环境无专用地址时使用当前 JumpServer origin。旧 `chat-ai`、`agent` 服务名及 `JMS_AI_*`、`JMS_AGENT_*` 环境变量不再支持，也不能作为别名指向新旧服务。
 
-切换完成后，Luna 删除 `/api/v1/chat-ai/` 和 `/koko/agent/` 的开发代理与客户端常量；`/koko/` 下 Terminal、MCP 和 WebSocket 等非 agentd 路由继续保留。
+Koko 的 Terminal、MCP、WebSocket 等非 AI 路由不在本次迁移范围，保持原有调用关系；这不构成对旧 agentd 的保留或回退承诺。
 
 生产网关必须把 site prefix 下完整的 `/kael/` 路径同源转发给 Kael，且不剥离 `/kael`；Kael 原生处理完整路径。开发代理与生产网关必须保持这一语义一致。
 
@@ -711,6 +715,8 @@ Luna Web 与 Electron 的 JSON、上传和 SSE 请求统一使用逻辑服务名
 - approval.required、resolved；
 - stream.reset、error。
 
+Lina 直接消费上述 dot 命名的 PanelDelivery 及其 `payload`，不映射为 `message_delta`、`message_done`、`approval_required` 等 Legacy event，也不维护旧字段别名 DTO。Luna 自身的产品适配边界与此分开。
+
 Heartbeat 是无 ID 的 SSE comment，只属于传输保活，不是 DomainEvent 或 PanelDelivery，不分配 sequence，也不持久化。
 
 要求：
@@ -721,10 +727,10 @@ Heartbeat 是无 ID 的 SSE comment，只属于传输保活，不是 DomainEvent
 - 支持 query cursor 与 `Last-Event-ID`；
 - 建连时 cursor 过期返回 `410 cursor_expired`；连接中要求重同步时发送 `stream.reset` 后关闭；
 - DomainEvent 与状态同 Store 事务，PanelDelivery 先写入 Store 再发布；
-- 未知事件对旧客户端可忽略；
+- 当前协议客户端应忽略未知事件；
 - ToolCall 与 Approval 只投递给 Run 的 PanelSession。
 
-现有 Luna 单事件与缓冲区上限在兼容阶段保持不变；调整必须作为协议版本变更。
+当前 Luna 单事件与缓冲区上限属于协议基线；调整必须作为协议版本变更。
 
 ## 12. Approval、安全与审计
 
@@ -769,9 +775,11 @@ Kael 需要支持这两种产品形态，但 Runtime 核心只能接收已经验
 - 浏览器写请求必须继续有 CSRF 防护；
 - Origin/Referer 必须按可信站点检查；
 - 不允许 wildcard Origin 配合 credentials；
+- 浏览器标准部署通过 Lina 站点同源反向代理 `/kael/`；`ALLOWED_ORIGINS` 只参与服务端 Origin 校验，不发送 CORS 响应头，直接跨域时由外部代理负责完整的 credentialed CORS；
+- HTTPS 在网关终止 TLS 时优先把精确外部 Lina origin 配入 `ALLOWED_ORIGINS`；无法固定外部 origin 时才在受信网关后设置 `TRUST_FORWARDED_HEADERS=true`，并由网关删除或覆盖客户端同名头、提供真实 forwarded host/proto；Kael 端口不得直接暴露到不可信网络；
 - token 不放 URL query；
 - Electron renderer 不能自行注入 Authorization/Cookie；
-- 兼容旧 CSRF header 时，应记录废弃计划。
+- 浏览器和 Electron 只发送当前协议明确支持的 CSRF header，不保留旧 header 别名。
 
 ### 12.5 审计链
 
@@ -795,22 +803,22 @@ Principal
 
 ### 13.1 当前 Store
 
-Runtime 只依赖 `ports.Store` 和 `ports.Tx`。当前 adapter 是单进程本地 JSONL Store，为 Conversation、Message、Run、ToolCall、ToolResult、Approval、DomainEvent、PanelDelivery、Profile 和审计索引提供事务与查询语义。`data/store/runtime.jsonl` 保存带校验的状态 journal；`data/events/<conversation-id>.jsonl` 保存可读的 Conversation DomainEvent 归档。Kael 不包含 DSN、数据库 driver、ORM、schema 或 migration。
+Runtime 只依赖 `ports.Store` 和 `ports.Tx`。默认 adapter 仍以单进程 Memory 执行事务，但在发布 next state 前，通过组件签名把与 JSONL 相同的 snapshot/delta Journal CAS 追加到 Core `/api/v1/chat-ai/runtime-store/`。启动时分页重放最新 snapshot 与后续 delta，达到 4096 条 delta 后提交新 snapshot。`RUNTIME_STORE=jsonl` 才使用 `data/store/runtime.jsonl` 和 `data/events/<conversation-id>.jsonl`。Kael 不包含 DSN、数据库 driver、ORM、schema 或 migration。
 
-Artifact 内容和组件 AccessKey 是独立的私有文件，不属于 Runtime Store。旧 Koko `data/agent/events` 不属于 Kael Runtime Store，也不由 Kael 启动流程读取。
+Artifact 元数据和有界提取文本进入 Runtime Journal，但原始文件内容目前仍保存在 Kael 私有 `data/artifacts`；组件 AccessKey 位于 `data/keys/.access_key`。这两个目录必须使用服务账号私有持久卷，节点替换或故障切换时重新挂载或迁移 Artifact 卷，否则只能恢复元数据和提取文本。旧 Koko `data/agent/events` 和旧 Platform ORM 数据不属于新 Journal，也不由 Kael 启动流程读取。
 
 ### 13.2 当前生命周期限制
 
 - Kael 重启后恢复 Conversation、Message、终态 Run、DomainEvent、幂等索引和审计状态；
 - 活动 Run 收敛为 `interrupted`，活动 ToolCall 收敛为 `cancelled`，未决 Approval 收敛为 `expired`，不得自动重复执行；
 - PanelSession、Registration、Run claim、活动 cursor 和 executor owner 只在当前进程内有效；
-- 不同 Kael 实例不共享本地 JSONL 状态，入口必须保持单写实例和会话粘性；
-- 后台 Run 仍被禁用；本地 durable history 不等于可安全恢复后台执行；
+- 不同 Kael 实例可以读取同一 Core Journal，但内存状态不实时同步，revision 冲突不自动重载；生产必须设置 `replicas=1`，使用 `Recreate` 或严格的先停旧实例、fencing 后再启动新实例流程，会话粘性不能代替单 writer；开发、预发和生产不得让不同 Kael 同时写同一 Core `default` store；
+- 后台 Run 仍被禁用；Core-backed durable history 不等于可安全恢复后台执行；
 - 浏览器 executor 连接只存在于当前拥有该 PanelSession 的 Kael 实例内。
 
-### 13.3 未来外部 adapter
+### 13.3 后续分布式执行
 
-需要跨重启续跑、后台执行或多实例共享时，通过同一 Store port 新增外部 adapter。该 adapter 可以使用任意合适的外部存储，但不得把产品、数据库 driver 或 ORM 细节泄漏到 Runtime、领域对象、HTTP API、Event schema 或 Luna 协议。启用相关能力前必须另外验证分布式 ownership、非幂等 ToolCall 恢复、Approval 绑定和 cursor 保留策略。
+Core-backed Journal 已解决权威持久化位置，但没有提供分布式 claim、事件唤醒或 Panel 路由。需要跨重启续跑、后台执行或多实例并发时，必须在 Store port 后增加相应协调语义；不得把产品、数据库 driver 或 ORM 细节泄漏到 Runtime、领域对象、HTTP API、Event schema 或 Luna 协议。启用前必须另外验证分布式 ownership、非幂等 ToolCall 恢复、Approval 绑定和 cursor 保留策略。
 
 ## 14. Luna 改造范围
 
@@ -833,7 +841,7 @@ Luna 显式呈现：
 
 ### 14.2 首期适配策略
 
-为控制改动规模，可以暂时保留当前 Platform Panel 和 Workspace Panel 的内部 Controller，但二者都连接 Kael，并通过 Adapter 映射到统一模型。
+本节只描述 Luna 的两个 Panel Controller。为控制 Luna 改动规模，可以暂时保留 Platform Panel 和 Workspace Panel 的内部 Controller，但二者都连接 Kael，并通过 Luna Adapter 映射到统一模型。Lina 不在该 Compatibility Adapter 内，已经直接使用 Kael DTO 和 PanelDelivery。
 
 首期不强行合并：
 
@@ -874,7 +882,7 @@ Luna 显式呈现：
 
 ## 15. Kael 推荐模块边界
 
-Kael 当前是清空后的服务骨架，应建立清晰的内部模块，而不是恢复旧聊天代理：
+Kael 当前按下列边界组织模块，不恢复旧聊天代理：
 
 | 模块 | 职责 |
 |---|---|
@@ -887,14 +895,16 @@ Kael 当前是清空后的服务骨架，应建立清晰的内部模块，而不
 | model | Provider、模型路由、预算和错误分类 |
 | capability | Registration、lease、invocation 和 result |
 | policy | Profile、Prompt、风险与 Approval policy |
-| store | Store/Tx port、本地 JSONL adapter 和未来外部 adapter 边界 |
+| store | Store/Tx port、Core Journal adapter、本地 JSONL 回退和未来分布式协调边界 |
 | event | 持久 DomainEvent log、SSE 和 PanelSession replay |
 | audit | 审计关联与脱敏 |
 | observability | 日志、指标和 tracing |
 
 模块命名和核心接口不得以 Luna、Koko 或 MCP 为中心。产品适配只允许出现在 API/adapter 边界。
 
-## 16. 迁移阶段
+## 16. 迁移实施记录
+
+阶段 0 至阶段 3 的代码改造已完成。以下条目记录已落地范围和发布前仍需执行的环境验证，不表示继续保留旧接口或双栈回退。
 
 ### 阶段 0：冻结基线
 
@@ -903,9 +913,9 @@ Kael 当前是清空后的服务骨架，应建立清晰的内部模块，而不
 - 盘点现有 Platform AI 服务端的准确语义工具；
 - 冻结 Luna HTTP/SSE/MCP 兼容输入；
 - 从当前 Platform Handler、Serializer、Runner 生成兼容 fixture，不能直接使用已漂移的旧文档和 SSE Schema；
-- 在严格目标架构、过渡 Headless Platform Gateway、保留旧 Platform 服务三条路径中明确选择；
+- 冻结选择为过渡 Headless Platform Gateway 承接前台 Platform Capability，同时保持 Runtime core 的长期业务无关边界；
 - 确认组件注册、Core identity adapter、TerminalConfig 模型配置和 Store 方案；
-- 定义灰度和回滚开关。
+- 确认新客户端只使用 `/kael/api/v1`，不建立旧 Runtime 或 agentd 回退开关。
 
 ### 阶段 1：Kael 基础与普通对话
 
@@ -913,8 +923,8 @@ Kael 当前是清空后的服务骨架，应建立清晰的内部模块，而不
 - 建立组件注册、Identity、Config、Store、Event 和 Model 基础；
 - 建立统一 Conversation/Message/Run；
 - 迁移普通对话、持久历史、流式输出和取消；
-- 通过 `/kael/api/v1` 和 Luna Compatibility Adapter 无损承接当前 Platform Panel 协议，不在 Kael 暴露旧顶级路由；
-- 迁移附件、branch/regenerate、stats/audit 等已确认范围；后台、Web Search、STT 和通知保持禁用并由 bootstrap 明示；
+- 通过 `/kael/api/v1` 和 Luna Compatibility Adapter 承接 Luna Platform Panel；Lina 直接消费 Kael 原生 DTO/PanelDelivery，不在 Kael 暴露旧顶级路由；
+- 迁移附件、branch/regenerate 和 audit；Kael 保留服务端 stats API 但 Lina 删除旧 stats 面板；Lina 删除 background、Web Search、服务端 STT、通知请求，bootstrap 仍明示这些服务端能力不可用，浏览器原生语音识别不计入服务端能力；
 - 按阶段 0 的决定承接前台 Platform 动态 OpenAPI、Core Tool 和进程内 Approval；旧 Koko Agent Session JSONL 不导入 Kael；
 - 将 Platform 能力改造成受控 Registration，或在明确的过渡 Gateway 中隔离；
 - Luna Platform Panel 切换到 Kael。
@@ -932,24 +942,24 @@ Kael 当前是清空后的服务骨架，应建立清晰的内部模块，而不
 
 - 对普通对话和四个 Luna 能力域做行为级回归；
 - 验证多 Tab、断线、重连、Approval、cancel 和非幂等安全；
-- 按用户或组织灰度；
+- 在未上线环境完成用户、组织和权限组合验证；
 - 观测成功率、首 token 延迟、Tool 失败率、恢复率和审计完整度；
 - Luna 停止访问 Koko agentd；
-- 保留快速回滚开关。
+- 发布失败时停止创建新 Kael Run，排空或取消在途 Run/Approval，再部署相互匹配的 Lina/Luna/Kael 构建并保留 Core Journal 与 Artifact 卷；不得恢复旧 Core ChatAI Runtime、旧客户端路径或 Koko agentd。
 
 ### 阶段 4：未来设计演进
 
 - Lina 接管 Platform Capability；
 - 普通对话显式连接/断开 Capability；
-- Capability 对话跨环境重新绑定；历史持久化已由当前 JSONL Store 提供；
+- Capability 对话跨环境重新绑定；历史持久化已由当前 Core-backed Journal 提供；
 - 增加 Magnus、Lion、RDP 和 UI Action；
 - 统一 Luna/Lina AI SDK；
 - 在不改变 Conversation/Run 协议的前提下增加新 Profile 和 Capability Provider。
-- 通过 Store port 增加外部 adapter 后，再评估后台 Run、跨重启续跑和多实例共享。
+- 在现有 Core-backed adapter 之外补齐分布式 claim/ownership、状态同步、事件唤醒、准确 Panel 路由和安全工具恢复后，再评估后台 Run、跨重启续跑和多实例共享。
 
 Koko 旧 agentd 的物理删除必须在允许修改 Koko 后另立阶段。
 
-本期阶段 0 至阶段 3 的代码实现状态与尚需环境执行的发布 Gate，统一记录在 [迁移实施状态](./MIGRATION_STATUS.md)。阶段 4 与 Koko 旧代码物理删除仍是后续工作，不能混入本期改动。
+本期阶段 0 至阶段 3 已完成的代码状态与尚需环境执行的发布 Gate，统一记录在 [迁移实施状态](./MIGRATION_STATUS.md)。阶段 4 与 Koko 旧代码物理删除仍是后续工作，不能混入本期改动；旧 agentd 在此期间也不是客户端回退路径。
 
 ## 17. 精简测试策略
 
@@ -975,13 +985,13 @@ Koko 旧 agentd 的物理删除必须在允许修改 Koko 后另立阶段。
 | ID | 主题 | 必须覆盖 |
 |---|---|---|
 | T1 | 架构守卫 | Kael Runtime 不依赖 Koko/MCP/Core 业务包；Luna 不再访问 Koko agentd |
-| T2 | 普通对话完整链路 | Conversation、附件、stream、branch/regenerate、cancel、持久 history/进程内 Approval、stats/audit，以及 background 的明确拒绝 |
+| T2 | 普通对话完整链路 | Conversation、附件、stream、branch/regenerate、cancel、持久 history/进程内 Approval、audit，以及 Lina 不发 background/Web Search/服务端 STT/stats 请求 |
 | T3 | Run 与 Provider | 状态机、预算、partial answer；OpenAI、compatible、DeepSeek 能力协商和 fallback |
 | T4 | Panel 精确路由 | 同用户多 Panel、同名工具、lease/revision、跨 Tab/组织拒绝 |
 | T5 | Tool 与 Approval | schema、argument repair、写防重、读刷新、digest、approve/reject、result/cancel 幂等 |
-| T6 | Store 与 Event | JSONL 事务恢复、先写 Store 后发布、Panel cursor replay/过期、重启安全收敛和非幂等不重放 |
+| T6 | Store 与 Event | Core Journal 分页/CAS 与 JSONL 回退恢复、先写 Store 后发布、Panel cursor replay/过期、重启安全收敛和非幂等不重放 |
 | T7 | Luna Adapter | Terminal、File、SQL、Script 的最小 manifest fixture 与一条代表性完整执行链 |
-| T8 | 身份与切流 | 浏览器 Cookie/CSRF、Electron Bearer/Org、旧 Platform 数据与零旧 runtime 流量 |
+| T8 | 身份与环境边界 | 浏览器 Cookie/CSRF、Electron Bearer/Org、Luna/Lina 零旧 Runtime/agentd 流量，以及旧 AI 表已清理或开发库已重建 |
 
 同一不变量只在最低层测试一次；API 层只验证边界和映射，不重复 Runtime 内部全部分支。不测试纯展示 class、文案、第三方组件内部行为或重复的 domain adapter 样板。
 
@@ -989,7 +999,7 @@ Koko 旧 agentd 的物理删除必须在允许修改 Koko 后另立阶段。
 
 - 不原样迁移旧测试文件；先抽取行为矩阵，再选择最少场景覆盖不变量。
 - 共享 fixture 只保留协议级最小对象，避免庞大通用 mock framework。
-- 优先真实 Store adapter 和本地 HTTP handler，减少层层接口 mock；JSONL 恢复使用临时目录验证。
+- 优先真实 Store adapter 和本地 HTTP handler，减少层层接口 mock；Core adapter 验证分页、snapshot 和 revision conflict，JSONL 回退恢复使用临时目录验证。
 - Provider 使用小型确定性 fake，只覆盖能力协商和异常边界。
 - UI 测试以 Controller/Adapter 为主，不重复验证 Vue 框架渲染。
 - Bug 回归测试必须对应明确不变量；修复后不添加无关组合。
@@ -1004,10 +1014,10 @@ Koko 旧 agentd 的物理删除必须在允许修改 Koko 后另立阶段。
 - cancel、Run 和 Approval 状态可从权威快照恢复；Kael 重启时未完成 Run/ToolCall/Approval 收敛为安全终态，不续跑；
 - panel-scoped Approval 只允许同一 PanelSession 在 lease 内 resume 后继续决定；原 Panel 永久失效后只能查看终态；service-scoped Approval 按 ADR 0001 绑定原 ToolCall、operation、definition 和参数 digest；
 - assistant/preset 和 starter prompt 保留；
-- 图片和文件按 feature 正常工作；Web Search 与 STT 当前由 bootstrap 明确标记为不可用；
-- branch 和 regenerate 保留；后台 Run 在具备安全续跑条件的外部 Store adapter 完成前明确禁用；
+- 图片和文件按 feature 正常工作；Lina 不暴露或请求 Web Search、服务端 STT，且没有旧 stats 面板；bootstrap 仍明确标记相关服务端能力不可用，浏览器原生 `SpeechRecognition` 不经过 Kael；
+- branch 和 regenerate 保留；后台 Run 在补齐分布式 ownership、状态同步和安全工具恢复前明确禁用；
 - Platform activity/result 能正常展示；
-- stats、脱敏 audit、清理和 JSONL 数据保留语义明确；
+- 服务端 stats、Lina 脱敏 audit、清理和 Runtime Journal 数据保留语义明确；
 - 普通对话不会因当前 SSH/File/SQL/Script Tab 获得 Session Capability；
 - Platform Tool 使用当前用户权限并产生审计。
 
@@ -1032,39 +1042,41 @@ Koko 旧 agentd 的物理删除必须在允许修改 Koko 后另立阶段。
 - 模型密钥由 Core TerminalConfig 下发，只存在于服务端内存和发往模型 Provider 的请求中；
 - Kael 没有具体业务工具执行代码。
 
-### 18.4 切流
+### 18.4 客户端与发布边界
 
 - Luna 的普通 AI 和 Agent Runtime 请求都进入 Kael；
+- Lina 的 AI Runtime 请求只进入 Kael；直接消费 PanelDelivery dot 事件，不存在 iframe/embed、旧 DTO/SSE adapter、background、服务端 STT、Web Search 请求或 stats 面板；浏览器原生语音识别不属于 Kael Runtime；
 - Luna 到 Koko/Chen 的会话与 MCP 流量保持；
 - Koko `/koko/agent/*` 不再收到 Luna 业务请求；
-- 同一用户消息不会被旧 Koko agentd 与 Kael 双重执行；
-- 灰度期间可以按明确开关回滚；
-- Koko、Chen、Core、Lina 未被本期代码修改。
+- 旧 Koko agentd 不接收 AI 客户端请求，也不作为失败回退；
+- 发布 runbook 必须包含在途 Run/Approval 处置，以及 Core Journal 与 Artifact 卷保留要求；不得恢复旧 Core Runtime、旧客户端路径或服务名别名；
+- Koko、Chen、Magnus 和 Lion 未被本期代码修改；Core 旧 ChatAI Runtime/API/models/worker 已删除，只保留 Runtime Store 及必要的组件支持，Lina 切流不改变 Runtime 协议。
 
 ## 19. 已冻结事项与发布 Gate
 
 以下事项由 ADR 和实施状态共同约束：
 
-1. 生产网关对 `/kael/` 的保留前缀转发、SSE 参数以及探针和 metrics 访问策略；
+1. 生产网关对 `/kael/` 的保留前缀转发和 SSE 参数；`/kael/internal/metrics` 无业务用户认证，必须由网络 ACL 只开放给监控网络；
 2. 浏览器 Cookie 与 Electron Bearer 由 Kael Core identity adapter 实时校验并转换为可信 Principal；
 3. 模型配置、API Key 和 Secret 由 Kael component 使用签名身份从 Core TerminalConfig 读取；
-4. 当前使用本地 JSONL Store 且不连接数据库；未来外部存储只能通过 Store adapter 接入；
-5. Koko Agent Session JSONL 不导入 Kael；旧 Platform Conversation 是否迁移历史数据仍需单独决定；
-6. Platform AI 采用严格目标架构、过渡 Headless Gateway，还是阶段性保留旧服务；
+4. 当前默认使用 Core-backed Runtime Journal 且 Kael 不连接数据库；本地 JSONL 只作为显式回退；
+5. Koko Agent Session JSONL 和旧 Platform 数据均不导入 Kael；使用过旧开发分支的环境必须清理旧 AI 表或重建开发库；
+6. Platform AI 当前已选择过渡 Headless Gateway 承接前台能力；长期 Provider 替换不改变 Runtime 协议；
 7. 当前 Platform AI 只承接前台动态 OpenAPI/Core Tool 和进程内 Approval；后台、站内信及相关跨重启能力不启用；
 8. 当前 Platform AI 服务端语义工具的完整清单；
-9. Luna Compatibility Adapter 的收敛版本，以及旧 Platform/Koko 路由的回滚窗口和停止服务条件；
-10. feature flag、灰度维度、指标阈值和回滚条件。
+9. Luna 当前 Panel Adapter 的收敛版本；Lina 已收敛到原生 Kael DTO/PanelDelivery，旧 Core 路径、旧 DTO/iframe 和 Koko agentd 均不设客户端回退；Koko 非 AI 路由不在本期范围；
+10. feature flag、启用维度和指标阈值必须由部署方结合容量与 SLO 在发布前定义，仓库不臆造统一阈值。
 
 推荐默认值：
 
 - 使用唯一权威业务根路径 `/kael/api/v1`，不提供其它业务根路径或入口别名；
 - 使用调用方已有 Cookie/Bearer，通过 Core profile/permissions 实时解析 Principal；
+- 非 superuser 继续要求 `chat_ai.use_chatai`；Run 固化创建时的最小授权快照用于异步 operation 可见性，Core 在实际调用时实时复核权限；
 - Kael 以 `kael` Terminal component 注册，首次使用 BootstrapToken，后续使用私有 AccessKey；
 - 模型 Secret 来自 Core TerminalConfig，不写入 Kael 部署配置，也不经 Luna；
-- Runtime 当前使用本地 JSONL Store 保留 history/DomainEvent；需要后台续跑或多实例共享时新增外部 Store adapter，不预设数据库产品；
-- 先兼容现有 Luna UI，再逐步统一 Client SDK 与 Event projection；
-- 旧 Platform 历史若无法可靠迁移，应明确只读保留，而不是隐式丢失。
+- Runtime 当前使用 Core-backed Journal 保留 history/DomainEvent；需要后台续跑或多实例共享时另加分布式 ownership，不预设 Kael 直连数据库；
+- Luna 当前 UI 通过单一 Kael Adapter 接入，再逐步统一 Client SDK 与 Event projection；不保留旧后端路由；
+- 使用过旧开发分支的数据库应清理旧 AI 表或直接重建；当前 Runtime 不提供导入、只读入口、read-through 或双写。
 
 ## 20. 文档维护规则
 

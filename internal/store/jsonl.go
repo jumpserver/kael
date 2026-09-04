@@ -3,21 +3,26 @@ package store
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jumpserver/kael/internal/domain"
+	"github.com/jumpserver/kael/internal/ports"
 )
 
 const (
@@ -26,6 +31,8 @@ const (
 	compactJournalBytes   = 64 * 1024 * 1024
 	compactJournalRecords = 4096
 )
+
+var errJournalRecordTooLarge = errors.New("JSONL store transaction exceeds its size limit")
 
 type statePersistence interface {
 	Commit(previous, next *memoryState) error
@@ -88,11 +95,13 @@ type journalRecord struct {
 }
 
 type jsonlPersistence struct {
+	mu          sync.Mutex
 	journalPath string
 	eventDir    string
 	file        *os.File
 	size        int64
 	records     int
+	poisoned    error
 }
 
 func NewJSONL(root string) (*Memory, error) {
@@ -134,10 +143,10 @@ func recoverProcessLocalState(state *memoryState, now time.Time) {
 		}
 		run.State, run.ErrorCode, run.ErrorDetail = "interrupted", "process_restarted", "run interrupted by Kael restart"
 		run.ClaimOwner, run.ClaimExpiresAt, run.UpdatedAt, run.FinishedAt = "", nil, now, cloneValue(now)
-		state.runs[id] = run
+		state.runs[id] = cloneStoredValue(run)
 		if message, exists := state.messages[run.OutputMessageID]; exists && message.Status != "completed" {
 			message.Status, message.ErrorCode, message.ErrorDetail, message.UpdatedAt = "cancelled", "process_restarted", "response interrupted by Kael restart", now
-			state.messages[message.ID] = message
+			state.messages[message.ID] = cloneStoredValue(message)
 		}
 		_ = tx.CreateEvent(&domain.DomainEvent{
 			ID: uuid.NewString(), ConversationID: run.ConversationID, RunID: run.ID, MessageID: run.OutputMessageID,
@@ -145,33 +154,40 @@ func recoverProcessLocalState(state *memoryState, now time.Time) {
 			Payload: json.RawMessage(`{"state":"interrupted","error_code":"process_restarted","reason":"run interrupted by Kael restart"}`), CreatedAt: now,
 		})
 	}
+	for id, call := range state.modelCalls {
+		if call.State != "running" {
+			continue
+		}
+		call.State, call.ErrorCode, call.FinishedAt = "failed", "process_restarted", cloneValue(now)
+		state.modelCalls[id] = cloneStoredValue(call)
+	}
 	for id, call := range state.toolCalls {
 		if call.State != "created" && call.State != "waiting_approval" && call.State != "dispatched" && call.State != "running" {
 			continue
 		}
 		call.State, call.UpdatedAt, call.FinishedAt = "cancelled", now, cloneValue(now)
-		state.toolCalls[id] = call
+		state.toolCalls[id] = cloneStoredValue(call)
 	}
 	for id, approval := range state.approvals {
 		if approval.State != "pending" {
 			continue
 		}
 		approval.State, approval.Reason, approval.UpdatedAt, approval.ResolvedAt = "expired", "Kael restarted", now, cloneValue(now)
-		state.approvals[id] = approval
+		state.approvals[id] = cloneStoredValue(approval)
 	}
 	for id, panel := range state.panels {
 		if panel.State != "active" && panel.State != "disconnected" {
 			continue
 		}
 		panel.State, panel.ConnectionOwner, panel.LeaseExpiresAt, panel.UpdatedAt = "expired", "", now, now
-		state.panels[id] = panel
+		state.panels[id] = cloneStoredValue(panel)
 	}
 	for id, registration := range state.registrations {
 		if registration.State != "active" {
 			continue
 		}
 		registration.State, registration.LeaseExpiresAt, registration.UpdatedAt = "expired", now, now
-		state.registrations[id] = registration
+		state.registrations[id] = cloneStoredValue(registration)
 	}
 }
 
@@ -283,7 +299,7 @@ func encodeJournalRecord(payload journalPayload) ([]byte, error) {
 		return nil, fmt.Errorf("encode JSONL store record: %w", err)
 	}
 	if encoded.Len() > maxJournalRecordBytes/2 {
-		return nil, fmt.Errorf("JSONL store transaction exceeds its size limit")
+		return nil, errJournalRecordTooLarge
 	}
 	digest := sha256.Sum256(encoded.Bytes())
 	record := journalRecord{Version: journalVersion, CreatedAt: time.Now().UTC(), Payload: base64.StdEncoding.EncodeToString(encoded.Bytes()), Checksum: hex.EncodeToString(digest[:])}
@@ -292,7 +308,7 @@ func encodeJournalRecord(payload journalPayload) ([]byte, error) {
 		return nil, fmt.Errorf("marshal JSONL store record: %w", err)
 	}
 	if len(line)+1 > maxJournalRecordBytes {
-		return nil, fmt.Errorf("JSONL store transaction exceeds its size limit")
+		return nil, errJournalRecordTooLarge
 	}
 	return append(line, '\n'), nil
 }
@@ -314,33 +330,99 @@ func decodeJournalPayload(record journalRecord) (journalPayload, error) {
 }
 
 func (p *jsonlPersistence) Commit(previous, next *memoryState) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.poisoned != nil {
+		return p.unavailableLocked()
+	}
 	delta := diffPersistentState(previous, next)
 	if delta.empty() {
 		return nil
 	}
 	if p.size >= compactJournalBytes || p.records >= compactJournalRecords {
 		if err := p.compact(previous); err != nil {
-			return err
+			return p.poisonLocked(err)
 		}
 	}
-	archives, err := p.appendEventArchives(delta.Upserts.Events)
+	line, err := encodeJournalRecord(journalPayload{Delta: &delta})
 	if err != nil {
 		return err
 	}
-	line, err := encodeJournalRecord(journalPayload{Delta: &delta})
-	if err == nil {
-		_, err = p.file.Write(line)
+	archives, err := p.appendEventArchives(delta.Upserts.Events)
+	if err != nil {
+		return p.poisonLocked(err)
 	}
+	if p.file == nil {
+		rollbackErr := rollbackArchives(archives)
+		return p.poisonLocked(errors.Join(fmt.Errorf("JSONL store journal is closed"), rollbackErr))
+	}
+	info, err := p.file.Stat()
+	if err != nil {
+		rollbackErr := rollbackArchives(archives)
+		return p.poisonLocked(errors.Join(fmt.Errorf("inspect JSONL store journal before append: %w", err), rollbackErr))
+	}
+	offset := info.Size()
+	err = writeBytes(p.file, line)
 	if err == nil {
 		err = p.file.Sync()
 	}
 	if err != nil {
-		rollbackArchives(archives)
-		return fmt.Errorf("append JSONL store journal: %w", err)
+		return p.failJournalLocked(offset, archives, err)
 	}
-	p.size += int64(len(line))
+	p.size = offset + int64(len(line))
 	p.records++
 	return nil
+}
+
+func (p *jsonlPersistence) Ready(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.poisoned != nil {
+		return p.unavailableLocked()
+	}
+	if p.file == nil {
+		return fmt.Errorf("%w: JSONL store journal is closed", ports.ErrUnavailable)
+	}
+	return nil
+}
+
+func (p *jsonlPersistence) failJournalLocked(offset int64, archives []archiveOffset, cause error) error {
+	journalErr := p.rollbackJournalLocked(offset)
+	archiveErr := rollbackArchives(archives)
+	return p.poisonLocked(errors.Join(fmt.Errorf("append JSONL store journal: %w", cause), journalErr, archiveErr))
+}
+
+func (p *jsonlPersistence) rollbackJournalLocked(offset int64) error {
+	if p.file == nil {
+		return fmt.Errorf("rollback JSONL store journal: journal is closed")
+	}
+	var rollbackErrs []error
+	if err := p.file.Truncate(offset); err != nil {
+		rollbackErrs = append(rollbackErrs, fmt.Errorf("truncate JSONL store journal to pre-commit offset: %w", err))
+	} else {
+		p.size = offset
+	}
+	if err := p.file.Sync(); err != nil {
+		rollbackErrs = append(rollbackErrs, fmt.Errorf("sync rolled back JSONL store journal: %w", err))
+	}
+	return errors.Join(rollbackErrs...)
+}
+
+func (p *jsonlPersistence) poisonLocked(err error) error {
+	if p.poisoned == nil {
+		p.poisoned = err
+	}
+	return p.unavailableLocked()
+}
+
+func (p *jsonlPersistence) unavailableLocked() error {
+	return fmt.Errorf("%w: JSONL store requires restart: %v", ports.ErrUnavailable, p.poisoned)
 }
 
 func (p *jsonlPersistence) compact(state *memoryState) error {
@@ -356,7 +438,7 @@ func (p *jsonlPersistence) compact(state *memoryState) error {
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
 	if err = temporary.Chmod(0o600); err == nil {
-		_, err = temporary.Write(line)
+		err = writeBytes(temporary, line)
 	}
 	if err == nil {
 		err = temporary.Sync()
@@ -406,8 +488,8 @@ func (p *jsonlPersistence) appendEventArchives(events map[string]domain.DomainEv
 		path := filepath.Join(p.eventDir, eventArchiveName(conversationID)+".jsonl")
 		file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
-			rollbackArchives(written)
-			return nil, fmt.Errorf("open conversation event archive: %w", err)
+			rollbackErr := rollbackArchives(written)
+			return nil, errors.Join(fmt.Errorf("open conversation event archive: %w", err), rollbackErr)
 		}
 		info, err := file.Stat()
 		if err == nil {
@@ -419,7 +501,7 @@ func (p *jsonlPersistence) appendEventArchives(events map[string]domain.DomainEv
 				line, err = json.Marshal(event)
 			}
 			if err == nil {
-				_, err = file.Write(append(line, '\n'))
+				err = writeBytes(file, append(line, '\n'))
 			}
 			if err != nil {
 				break
@@ -432,17 +514,32 @@ func (p *jsonlPersistence) appendEventArchives(events map[string]domain.DomainEv
 			err = closeErr
 		}
 		if err != nil {
-			rollbackArchives(written)
-			return nil, fmt.Errorf("append conversation event archive: %w", err)
+			rollbackErr := rollbackArchives(written)
+			return nil, errors.Join(fmt.Errorf("append conversation event archive: %w", err), rollbackErr)
 		}
 	}
 	return written, nil
 }
 
-func rollbackArchives(written []archiveOffset) {
+func rollbackArchives(written []archiveOffset) error {
+	var rollbackErrs []error
 	for _, archive := range written {
-		_ = os.Truncate(archive.path, archive.size)
+		file, err := os.OpenFile(archive.path, os.O_WRONLY, 0o600)
+		if err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("open conversation event archive for rollback: %w", err))
+			continue
+		}
+		if err = file.Truncate(archive.size); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("truncate conversation event archive: %w", err))
+		}
+		if syncErr := file.Sync(); syncErr != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("sync rolled back conversation event archive: %w", syncErr))
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("close rolled back conversation event archive: %w", closeErr))
+		}
 	}
+	return errors.Join(rollbackErrs...)
 }
 
 func reconcileEventArchives(eventDir string, events map[string]domain.DomainEvent) error {
@@ -472,7 +569,7 @@ func reconcileEventArchives(eventDir string, events map[string]domain.DomainEven
 				var line []byte
 				line, err = json.Marshal(event)
 				if err == nil {
-					_, err = temporary.Write(append(line, '\n'))
+					err = writeBytes(temporary, append(line, '\n'))
 				}
 				if err != nil {
 					break
@@ -515,7 +612,12 @@ func eventArchiveName(conversationID string) string {
 }
 
 func (p *jsonlPersistence) Close() error {
-	if p == nil || p.file == nil {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.file == nil {
 		return nil
 	}
 	if err := p.file.Sync(); err != nil {
@@ -525,6 +627,14 @@ func (p *jsonlPersistence) Close() error {
 	}
 	err := p.file.Close()
 	p.file = nil
+	return err
+}
+
+func writeBytes(file *os.File, value []byte) error {
+	written, err := file.Write(value)
+	if err == nil && written != len(value) {
+		return io.ErrShortWrite
+	}
 	return err
 }
 
@@ -585,7 +695,7 @@ func changedValues[T any](previous, next map[string]T) map[string]T {
 	result := make(map[string]T)
 	for key, value := range next {
 		if old, exists := previous[key]; !exists || !reflect.DeepEqual(old, value) {
-			result[key] = value
+			result[key] = cloneStoredValue(value)
 		}
 	}
 	if len(result) == 0 {
@@ -630,7 +740,7 @@ func applyPersistentDelta(state *memoryState, delta persistentDelta) {
 
 func applyChanges[T any](target, upserts map[string]T, deletes []string) {
 	for key, value := range upserts {
-		target[key] = value
+		target[key] = cloneStoredValue(value)
 	}
 	for _, key := range deletes {
 		delete(target, key)

@@ -12,15 +12,17 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jumpserver/kael/internal/domain"
 )
 
 var (
-	ErrUnauthenticated = errors.New("request is unauthenticated")
-	ErrOriginRejected  = errors.New("request origin is not allowed")
-	ErrCSRFRejected    = errors.New("csrf token is invalid")
+	ErrUnauthenticated     = errors.New("request is unauthenticated")
+	ErrIdentityUnavailable = errors.New("identity provider is unavailable")
+	ErrOriginRejected      = errors.New("request origin is not allowed")
+	ErrCSRFRejected        = errors.New("csrf token is invalid")
 )
 
 type CoreAuthenticator struct {
@@ -42,6 +44,8 @@ func (a *CoreAuthenticator) Authenticate(ctx context.Context, source *http.Reque
 	}
 	var profile struct {
 		ID          string   `json:"id"`
+		Name        string   `json:"name"`
+		Username    string   `json:"username"`
 		IsActive    *bool    `json:"is_active"`
 		IsValid     *bool    `json:"is_valid"`
 		IsExpired   bool     `json:"is_expired"`
@@ -50,14 +54,31 @@ func (a *CoreAuthenticator) Authenticate(ctx context.Context, source *http.Reque
 		Permissions []string `json:"permissions"`
 		Perms       []string `json:"perms"`
 	}
-	if a.coreJSON(ctx, source, organizationID, "/api/v1/users/profile/", &profile) != nil || profile.ID == "" || profile.IsExpired || profile.IsActive != nil && !*profile.IsActive || profile.IsValid != nil && !*profile.IsValid {
-		return domain.Principal{}, ErrUnauthenticated
-	}
 	var permissions struct {
 		ID    string   `json:"id"`
 		Perms []string `json:"perms"`
 	}
-	if a.coreJSON(ctx, source, organizationID, "/api/v1/users/profile/permissions/", &permissions) != nil || permissions.ID != "" && permissions.ID != profile.ID {
+	var profileErr, permissionsErr error
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		profileErr = a.coreJSON(ctx, source, organizationID, "/api/v1/users/profile/", &profile)
+	}()
+	go func() {
+		defer wait.Done()
+		permissionsErr = a.coreJSON(ctx, source, organizationID, "/api/v1/users/profile/permissions/", &permissions)
+	}()
+	wait.Wait()
+	if errors.Is(profileErr, ErrUnauthenticated) || errors.Is(permissionsErr, ErrUnauthenticated) {
+		return domain.Principal{}, ErrUnauthenticated
+	}
+	if profileErr != nil || permissionsErr != nil {
+		return domain.Principal{}, errors.Join(ErrIdentityUnavailable, profileErr, permissionsErr)
+	}
+	if profile.ID == "" || profile.IsExpired ||
+		profile.IsActive != nil && !*profile.IsActive || profile.IsValid != nil && !*profile.IsValid ||
+		permissions.ID != "" && permissions.ID != profile.ID {
 		return domain.Principal{}, ErrUnauthenticated
 	}
 	fingerprintSource := source.Header.Get("Authorization")
@@ -68,13 +89,13 @@ func (a *CoreAuthenticator) Authenticate(ctx context.Context, source *http.Reque
 	}
 	fingerprint := sha256.Sum256([]byte(fingerprintSource))
 	resolvedPermissions := append(append(append([]string(nil), profile.Permissions...), profile.Perms...), permissions.Perms...)
-	return domain.Principal{SubjectID: profile.ID, OrganizationID: organizationID, AuthSource: "core", Fingerprint: hex.EncodeToString(fingerprint[:]), IsSuperuser: profile.IsSuperuser, IsOrgAdmin: profile.IsOrgAdmin, Permissions: uniqueStrings(resolvedPermissions)}, nil
+	return domain.Principal{SubjectID: profile.ID, Name: profile.Name, Username: profile.Username, OrganizationID: organizationID, AuthSource: "core", Fingerprint: hex.EncodeToString(fingerprint[:]), IsSuperuser: profile.IsSuperuser, IsOrgAdmin: profile.IsOrgAdmin, Permissions: uniqueStrings(resolvedPermissions)}, nil
 }
 
 func (a *CoreAuthenticator) coreJSON(ctx context.Context, source *http.Request, organizationID, path string, target any) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, a.BaseURL+path, nil)
 	if err != nil {
-		return err
+		return errors.Join(ErrIdentityUnavailable, err)
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("X-JMS-ORG", organizationID)
@@ -88,16 +109,19 @@ func (a *CoreAuthenticator) coreJSON(ctx context.Context, source *http.Request, 
 	}
 	response, err := a.Client.Do(request)
 	if err != nil {
-		return err
+		return errors.Join(ErrIdentityUnavailable, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.CopyN(io.Discard, response.Body, 4096)
-		return ErrUnauthenticated
+		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+			return ErrUnauthenticated
+		}
+		return ErrIdentityUnavailable
 	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 1024*1024))
 	if err = decoder.Decode(target); err != nil {
-		return err
+		return errors.Join(ErrIdentityUnavailable, err)
 	}
 	return nil
 }

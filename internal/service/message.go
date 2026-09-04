@@ -220,7 +220,7 @@ func (s *Service) Branch(ctx context.Context, principal domain.Principal, conver
 		if boundary.ConversationID != conversationID {
 			return serviceError(Invalid, "message_mismatch", "branch message does not belong to conversation", nil)
 		}
-		branch = &domain.Conversation{ID: uuid.NewString(), SubjectID: principal.SubjectID, OrganizationID: principal.OrganizationID, Kind: source.Kind, Assistant: source.Assistant, Profile: source.Profile, Surface: source.Surface, Title: request.Title, Status: "active", Metadata: source.Metadata, Version: 1, CreatedAt: now, UpdatedAt: now}
+		branch = &domain.Conversation{ID: uuid.NewString(), SubjectID: principal.SubjectID, SubjectName: principal.Name, SubjectUsername: principal.Username, OrganizationID: principal.OrganizationID, Kind: source.Kind, Assistant: source.Assistant, Profile: source.Profile, Surface: source.Surface, Title: request.Title, Status: "active", Metadata: source.Metadata, Version: 1, CreatedAt: now, UpdatedAt: now}
 		if branch.Title == "" {
 			branch.Title = source.Title
 		}
