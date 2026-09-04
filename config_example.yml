@@ -23,6 +23,11 @@ BOOTSTRAP_TOKEN: <PleaseChangeMe>
 # ALLOWED_ORIGINS: [https://jumpserver.example.com]
 # 只有无法固定外部 origin 时才在可信网关后设为 true；网关必须覆盖客户端提供的
 # X-Forwarded-Host/X-Forwarded-Proto，且 Kael 端口不可直接暴露。
+
+# 默认不校验 origin；如需启用校验，列出允许的 origin。
+# ALLOWED_ORIGINS: []
+# 仅在启用 origin 校验时，用于信任反向代理传入的 Host 和协议。
+
 # TRUST_FORWARDED_HEADERS: false
 
 # Platform Gateway 默认且必须启用，因为 Lina 默认 general 依赖它访问授权 Core API；
