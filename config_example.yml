@@ -1,3 +1,31 @@
-Host: 0.0.0.0
-Port: 8083
-LOG_LEVEL: INFO
+# 与 Koko 一致，Kael 只使用平铺配置。
+# 组件名称不能与其它 Terminal component 重复。
+# NAME: "[Kael]-hostname"
+
+CORE_HOST: http://127.0.0.1:8080
+
+# 首次注册使用；AccessKey 写入 data/keys/.access_key 后可以删除。
+BOOTSTRAP_TOKEN: <PleaseChangeMe>
+
+# BIND_HOST: 0.0.0.0
+# HTTPD_PORT: 8083
+# HTTP_REQUEST_TIMEOUT: 30
+# IGNORE_VERIFY_CERTS: false
+
+# 跨域部署时列出允许的 origin；同源部署保持为空。
+# ALLOWED_ORIGINS: []
+# TRUST_FORWARDED_HEADERS: false
+
+# Platform Gateway 默认关闭。启用时使用以下平铺配置。
+# PLATFORM_GATEWAY_ENABLED: false
+# PLATFORM_DELEGATION_KEY: ""
+# PLATFORM_DELEGATION_KEY_ID: v1
+# PLATFORM_DELEGATION_ISSUER: jumpserver-ai
+# PLATFORM_DELEGATION_AUDIENCE: jumpserver-core
+# PLATFORM_CA_CERT: ""
+# PLATFORM_CLIENT_CERT: ""
+# PLATFORM_CLIENT_KEY: ""
+# PLATFORM_ALLOWED_METHODS: [GET, POST, PUT, PATCH, DELETE]
+# PLATFORM_REGISTRY_TTL: 1h
+# PLATFORM_TIMEOUT: 15s
+# PLATFORM_MAX_RESPONSE_BYTES: 1048576
