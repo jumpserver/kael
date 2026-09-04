@@ -27,7 +27,7 @@ func TestLoadFlatKokoStyleEnvironment(t *testing.T) {
 
 func TestLoadDiscoversFlatConfigAndDerivesDataPaths(t *testing.T) {
 	dir := t.TempDir()
-	content := "CORE_HOST: https://core.example.test\nNAME: kael-test\nHTTPD_PORT: 9083\n"
+	content := "CORE_HOST: https://core.example.test\nNAME: kael-test\nHTTPD_PORT: 9083\nPLATFORM_DELEGATION_KEY: test-only-delegation-key-00000000\n"
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +67,7 @@ func TestLoadRejectsNestedConfig(t *testing.T) {
 
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
+	t.Setenv("PLATFORM_DELEGATION_KEY", "test-only-delegation-key-00000000")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)

@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +43,14 @@ type memoryState struct {
 }
 
 type memoryTx struct{ state *memoryState }
+
+type readinessPersistence interface {
+	Ready(context.Context) error
+}
+
+type metricsPersistence interface {
+	RuntimeMetrics() map[string]int64
+}
 
 func NewMemory() *Memory { return &Memory{state: newMemoryState()} }
 
@@ -89,14 +99,100 @@ func (s *memoryState) clone() *memoryState {
 func cloneMap[K comparable, V any](source map[K]V) map[K]V {
 	result := make(map[K]V, len(source))
 	for key, value := range source {
-		result[key] = value
+		result[key] = cloneStoredValue(value)
 	}
 	return result
 }
 
 func cloneValue[T any](value T) *T {
-	result := value
+	result := cloneStoredValue(value)
 	return &result
+}
+
+func cloneStoredValue[T any](value T) T {
+	var cloned any = value
+	switch item := any(value).(type) {
+	case domain.Conversation:
+		item.Metadata = cloneRawMessage(item.Metadata)
+		item.ArchivedAt = cloneTime(item.ArchivedAt)
+		item.DeletedAt = cloneTime(item.DeletedAt)
+		cloned = item
+	case domain.Message:
+		item.Parts = cloneRawMessage(item.Parts)
+		item.ResultCards = cloneRawMessage(item.ResultCards)
+		cloned = item
+	case domain.Artifact:
+		item.DeletedAt = cloneTime(item.DeletedAt)
+		cloned = item
+	case domain.PanelSession:
+		item.ClosedAt = cloneTime(item.ClosedAt)
+		cloned = item
+	case domain.ContextSnapshot:
+		item.Data = cloneRawMessage(item.Data)
+		cloned = item
+	case domain.Registration:
+		item.InputSchema = cloneRawMessage(item.InputSchema)
+		item.OutputSchema = cloneRawMessage(item.OutputSchema)
+		item.AnnotationsJSON = cloneRawMessage(item.AnnotationsJSON)
+		cloned = item
+	case domain.Run:
+		item.AuthorizationPermissions = cloneStrings(item.AuthorizationPermissions)
+		item.RegistrationSnapshot = cloneRawMessage(item.RegistrationSnapshot)
+		item.ModelPolicy = cloneRawMessage(item.ModelPolicy)
+		item.ApprovalPolicy = cloneRawMessage(item.ApprovalPolicy)
+		item.ClaimExpiresAt = cloneTime(item.ClaimExpiresAt)
+		item.StartedAt = cloneTime(item.StartedAt)
+		item.FinishedAt = cloneTime(item.FinishedAt)
+		cloned = item
+	case domain.ModelCall:
+		item.FinishedAt = cloneTime(item.FinishedAt)
+		cloned = item
+	case domain.ToolCall:
+		item.Arguments = cloneRawMessage(item.Arguments)
+		item.FinishedAt = cloneTime(item.FinishedAt)
+		cloned = item
+	case domain.ToolResult:
+		item.Result = cloneRawMessage(item.Result)
+		item.ErrorJSON = cloneRawMessage(item.ErrorJSON)
+		cloned = item
+	case domain.Approval:
+		item.Preview = cloneRawMessage(item.Preview)
+		item.ResolvedAt = cloneTime(item.ResolvedAt)
+		cloned = item
+	case domain.DomainEvent:
+		item.Payload = cloneRawMessage(item.Payload)
+		item.ProjectedAt = cloneTime(item.ProjectedAt)
+		cloned = item
+	case domain.PanelDelivery:
+		item.Payload = cloneRawMessage(item.Payload)
+		cloned = item
+	case domain.AuditRecord:
+		item.Summary = cloneRawMessage(item.Summary)
+		cloned = item
+	}
+	return cloned.(T)
+}
+
+func cloneRawMessage(value json.RawMessage) json.RawMessage {
+	if value == nil {
+		return nil
+	}
+	return append(json.RawMessage(nil), value...)
+}
+
+func cloneStrings(value []string) []string {
+	if value == nil {
+		return nil
+	}
+	return append([]string(nil), value...)
+}
+
+func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func (s *Memory) Ready(ctx context.Context) error {
@@ -104,11 +200,40 @@ func (s *Memory) Ready(ctx context.Context) error {
 		return err
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	if s.closed {
+		s.mu.RUnlock()
 		return errClosed
 	}
-	return nil
+	persistence, ok := s.persistence.(readinessPersistence)
+	s.mu.RUnlock()
+	if ok {
+		return persistence.Ready(ctx)
+	}
+	return ctx.Err()
+}
+
+func (s *Memory) PersistenceMetrics(ctx context.Context) (map[string]int64, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return nil, errClosed
+	}
+	persistence, ok := s.persistence.(metricsPersistence)
+	s.mu.RUnlock()
+	result := map[string]int64{
+		"runtime_store_snapshot_disabled":      0,
+		"runtime_store_revision":               0,
+		"runtime_store_records_since_snapshot": 0,
+	}
+	if ok {
+		for key, value := range persistence.RuntimeMetrics() {
+			result[key] = value
+		}
+	}
+	return result, nil
 }
 
 func (s *Memory) Close() error {
@@ -130,11 +255,17 @@ func (s *Memory) Transaction(ctx context.Context, fn func(ports.Tx) error) error
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.closed {
 		return errClosed
 	}
 	next := s.state.clone()
 	if err := fn(&memoryTx{state: next}); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if s.persistence != nil {
@@ -164,7 +295,7 @@ func create[T any](values map[string]T, id string, value T) error {
 	if _, exists := values[id]; exists {
 		return ports.ErrConflict
 	}
-	values[id] = value
+	values[id] = cloneStoredValue(value)
 	return nil
 }
 
@@ -187,7 +318,11 @@ func page[T any](values []T, offset, limit int) []T {
 	if limit > 0 && offset+limit < end {
 		end = offset + limit
 	}
-	return values[offset:end]
+	result := make([]T, end-offset)
+	for index, value := range values[offset:end] {
+		result[index] = cloneStoredValue(value)
+	}
+	return result
 }
 
 func owns(principal domain.Principal, subjectID, organizationID string) bool {
@@ -219,7 +354,7 @@ func (t *memoryTx) SaveConversation(value *domain.Conversation) error {
 	if _, exists := t.state.conversations[value.ID]; !exists {
 		return ports.ErrNotFound
 	}
-	t.state.conversations[value.ID] = *value
+	t.state.conversations[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -303,7 +438,7 @@ func (t *memoryTx) SaveMessage(value *domain.Message) error {
 	if _, exists := t.state.messages[value.ID]; !exists {
 		return ports.ErrNotFound
 	}
-	t.state.messages[value.ID] = *value
+	t.state.messages[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -374,7 +509,7 @@ func (t *memoryTx) SaveArtifact(value *domain.Artifact) error {
 	if _, exists := t.state.artifacts[value.ID]; !exists {
 		return ports.ErrNotFound
 	}
-	t.state.artifacts[value.ID] = *value
+	t.state.artifacts[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -398,7 +533,7 @@ func (t *memoryTx) SavePanel(value *domain.PanelSession) error {
 	if _, exists := t.state.panels[value.ID]; !exists {
 		return ports.ErrNotFound
 	}
-	t.state.panels[value.ID] = *value
+	t.state.panels[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -406,7 +541,7 @@ func (t *memoryTx) ListConversationPanels(conversationID, organizationID string)
 	values := make([]domain.PanelSession, 0)
 	for _, value := range t.state.panels {
 		if value.ConversationID == conversationID && value.OrganizationID == organizationID && (value.State == "active" || value.State == "disconnected") {
-			values = append(values, value)
+			values = append(values, cloneStoredValue(value))
 		}
 	}
 	return values, nil
@@ -428,7 +563,7 @@ func (t *memoryTx) SupersedeRegistrations(panelID string, revision uint64, now t
 	for id, value := range t.state.registrations {
 		if value.PanelSessionID == panelID && value.RegistryRevision <= revision && value.State == "active" {
 			value.State, value.UpdatedAt = "superseded", now
-			t.state.registrations[id] = value
+			t.state.registrations[id] = cloneStoredValue(value)
 		}
 	}
 	return nil
@@ -446,7 +581,7 @@ func (t *memoryTx) CreateRegistrations(values []domain.Registration) error {
 		}
 	}
 	for _, value := range values {
-		t.state.registrations[value.ID] = value
+		t.state.registrations[value.ID] = cloneStoredValue(value)
 	}
 	return nil
 }
@@ -459,7 +594,7 @@ func (t *memoryTx) SaveRegistration(value *domain.Registration) error {
 	if _, exists := t.state.registrations[value.ID]; !exists {
 		return ports.ErrNotFound
 	}
-	t.state.registrations[value.ID] = *value
+	t.state.registrations[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -467,7 +602,7 @@ func (t *memoryTx) ListRegistrations(panelID string, revision uint64) ([]domain.
 	values := make([]domain.Registration, 0)
 	for _, value := range t.state.registrations {
 		if value.PanelSessionID == panelID && (revision == 0 || value.RegistryRevision == revision) {
-			values = append(values, value)
+			values = append(values, cloneStoredValue(value))
 		}
 	}
 	sort.Slice(values, func(i, j int) bool {
@@ -513,7 +648,7 @@ func (t *memoryTx) SaveRun(value *domain.Run) error {
 	if _, exists := t.state.runs[value.ID]; !exists {
 		return ports.ErrNotFound
 	}
-	t.state.runs[value.ID] = *value
+	t.state.runs[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -565,7 +700,7 @@ func (t *memoryTx) ClaimRun(instanceID string, now, expires time.Time) (*domain.
 		started := now
 		value.StartedAt = &started
 	}
-	t.state.runs[value.ID] = value
+	t.state.runs[value.ID] = cloneStoredValue(value)
 	return cloneValue(value), nil
 }
 
@@ -575,7 +710,7 @@ func (t *memoryTx) InterruptExpiredClaims(now time.Time) (int64, error) {
 		if value.ClaimExpiresAt != nil && value.ClaimExpiresAt.Before(now) && (value.State == "running" || value.State == "waiting_capability" || value.State == "waiting_approval" || value.State == "cancelling") {
 			value.State, value.ErrorCode, value.ErrorDetail = "interrupted", "worker_interrupted", "run worker stopped before completion"
 			value.ClaimOwner, value.ClaimExpiresAt, value.UpdatedAt = "", nil, now
-			t.state.runs[id] = value
+			t.state.runs[id] = cloneStoredValue(value)
 			count++
 		}
 	}
@@ -590,23 +725,26 @@ func (t *memoryTx) Maintain(now, eventCutoff time.Time) error {
 		if value.State == "pending" && value.ExpiresAt.Before(now) {
 			value.State, value.Reason = "expired", "approval expired"
 			value.ResolvedAt, value.UpdatedAt = cloneValue(now), now
-			t.state.approvals[id] = value
-			if call, exists := t.state.toolCalls[value.ToolCallID]; exists && call.State == "waiting_approval" {
-				call.State, call.FinishedAt, call.UpdatedAt = "expired", cloneValue(now), now
-				t.state.toolCalls[call.ID] = call
+			t.state.approvals[id] = cloneStoredValue(value)
+			if call, exists := t.state.toolCalls[value.ToolCallID]; exists {
+				switch call.State {
+				case "created", "waiting_approval", "dispatched", "running":
+					call.State, call.FinishedAt, call.UpdatedAt = "timeout", cloneValue(now), now
+					t.state.toolCalls[call.ID] = cloneStoredValue(call)
+				}
 			}
 		}
 	}
 	for id, value := range t.state.registrations {
 		if value.State == "active" && value.LeaseExpiresAt.Before(now) {
 			value.State, value.UpdatedAt = "expired", now
-			t.state.registrations[id] = value
+			t.state.registrations[id] = cloneStoredValue(value)
 		}
 	}
 	for id, value := range t.state.panels {
 		if (value.State == "active" || value.State == "disconnected") && value.LeaseExpiresAt.Before(now) {
 			value.State, value.ConnectionOwner, value.UpdatedAt = "expired", "", now
-			t.state.panels[id] = value
+			t.state.panels[id] = cloneStoredValue(value)
 		}
 	}
 	for id, value := range t.state.deliveries {
@@ -623,7 +761,7 @@ func (t *memoryTx) CreateModelCall(value *domain.ModelCall) error {
 			return ports.ErrConflict
 		}
 	}
-	t.state.modelCalls[value.ID] = *value
+	t.state.modelCalls[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -640,7 +778,7 @@ func (t *memoryTx) SaveModelCall(value *domain.ModelCall) error {
 	if _, exists := t.state.modelCalls[value.ID]; !exists {
 		return ports.ErrNotFound
 	}
-	t.state.modelCalls[value.ID] = *value
+	t.state.modelCalls[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -650,7 +788,7 @@ func (t *memoryTx) CreateToolCall(value *domain.ToolCall) error {
 			return ports.ErrConflict
 		}
 	}
-	t.state.toolCalls[value.ID] = *value
+	t.state.toolCalls[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -688,7 +826,7 @@ func (t *memoryTx) SaveToolCall(value *domain.ToolCall) error {
 	if _, exists := t.state.toolCalls[value.ID]; !exists {
 		return ports.ErrNotFound
 	}
-	t.state.toolCalls[value.ID] = *value
+	t.state.toolCalls[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -711,7 +849,7 @@ func (t *memoryTx) CreateToolResult(value *domain.ToolResult) error {
 			return ports.ErrConflict
 		}
 	}
-	t.state.toolResults[value.ID] = *value
+	t.state.toolResults[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -721,7 +859,7 @@ func (t *memoryTx) CreateApproval(value *domain.Approval) error {
 			return ports.ErrConflict
 		}
 	}
-	t.state.approvals[value.ID] = *value
+	t.state.approvals[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -763,7 +901,7 @@ func (t *memoryTx) SaveApproval(value *domain.Approval) error {
 	if _, exists := t.state.approvals[value.ID]; !exists {
 		return ports.ErrNotFound
 	}
-	t.state.approvals[value.ID] = *value
+	t.state.approvals[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -796,7 +934,7 @@ func (t *memoryTx) CreateEvent(value *domain.DomainEvent) error {
 		}
 		t.state.eventHighWater[value.ConversationID] = value.Sequence
 	}
-	t.state.events[value.ID] = *value
+	t.state.events[value.ID] = cloneStoredValue(*value)
 	return nil
 }
 
@@ -806,7 +944,7 @@ func (t *memoryTx) CreateDelivery(value *domain.PanelDelivery) error {
 			return ports.ErrConflict
 		}
 	}
-	t.state.deliveries[value.ID] = *value
+	t.state.deliveries[value.ID] = cloneStoredValue(*value)
 	if value.Sequence > t.state.deliveryHighWater[value.PanelSessionID] {
 		t.state.deliveryHighWater[value.PanelSessionID] = value.Sequence
 	}
@@ -850,7 +988,7 @@ func (t *memoryTx) ListAudit(organizationID string, offset, limit int) ([]domain
 }
 
 func (t *memoryTx) Stats(organizationID string, since time.Time) (map[string]int64, error) {
-	result := map[string]int64{"conversations": 0, "runs": 0, "tool_calls": 0, "approvals": 0, "input_tokens": 0, "output_tokens": 0, "model_duration_ms": 0}
+	result := map[string]int64{"conversations": 0, "runs": 0, "runs_queued": 0, "runs_running": 0, "runs_waiting_approval": 0, "runs_completed": 0, "runs_failed": 0, "runs_cancelled": 0, "tool_calls": 0, "core_api_calls": 0, "approvals": 0, "input_tokens": 0, "output_tokens": 0, "model_calls": 0, "model_duration_ms": 0}
 	for _, value := range t.state.conversations {
 		if value.OrganizationID == organizationID && !value.CreatedAt.Before(since) {
 			result["conversations"]++
@@ -859,6 +997,20 @@ func (t *memoryTx) Stats(organizationID string, since time.Time) (map[string]int
 	for _, value := range t.state.runs {
 		if value.OrganizationID == organizationID && !value.CreatedAt.Before(since) {
 			result["runs"]++
+			switch value.State {
+			case "queued":
+				result["runs_queued"]++
+			case "running", "waiting_capability", "cancelling":
+				result["runs_running"]++
+			case "waiting_approval":
+				result["runs_waiting_approval"]++
+			case "completed":
+				result["runs_completed"]++
+			case "failed", "interrupted":
+				result["runs_failed"]++
+			case "cancelled":
+				result["runs_cancelled"]++
+			}
 			result["input_tokens"] += value.InputTokens
 			result["output_tokens"] += value.OutputTokens
 		}
@@ -866,6 +1018,17 @@ func (t *memoryTx) Stats(organizationID string, since time.Time) (map[string]int
 	for _, value := range t.state.toolCalls {
 		if value.OrganizationID == organizationID && !value.CreatedAt.Before(since) {
 			result["tool_calls"]++
+			if value.ToolName == "call_core_api" && (value.State == "succeeded" || value.State == "failed") {
+				var arguments struct {
+					OperationID string `json:"operation_id"`
+				}
+				if json.Unmarshal(value.Arguments, &arguments) == nil {
+					if operationID := strings.TrimSpace(arguments.OperationID); operationID != "" {
+						result["core_api_calls"]++
+						result["operation_count:"+operationID]++
+					}
+				}
+			}
 		}
 	}
 	for _, value := range t.state.approvals {
@@ -876,6 +1039,7 @@ func (t *memoryTx) Stats(organizationID string, since time.Time) (map[string]int
 	for _, value := range t.state.modelCalls {
 		run, exists := t.state.runs[value.RunID]
 		if exists && run.OrganizationID == organizationID && !value.CreatedAt.Before(since) {
+			result["model_calls"]++
 			result["model_duration_ms"] += value.DurationMS
 		}
 	}

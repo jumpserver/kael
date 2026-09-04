@@ -28,6 +28,8 @@ const (
 
 type Principal struct {
 	SubjectID      string   `json:"subject_id"`
+	Name           string   `json:"-"`
+	Username       string   `json:"-"`
 	OrganizationID string   `json:"organization_id"`
 	AuthSource     string   `json:"auth_source"`
 	Fingerprint    string   `json:"fingerprint"`
@@ -41,21 +43,23 @@ func (p Principal) Owns(subjectID, organizationID string) bool {
 }
 
 type Conversation struct {
-	ID             string          `json:"id"`
-	SubjectID      string          `json:"-"`
-	OrganizationID string          `json:"-"`
-	Kind           string          `json:"kind"`
-	Assistant      string          `json:"assistant"`
-	Profile        string          `json:"profile"`
-	Surface        string          `json:"surface,omitempty"`
-	Title          string          `json:"title,omitempty"`
-	Status         string          `json:"status"`
-	Metadata       json.RawMessage `json:"metadata,omitempty"`
-	Version        uint64          `json:"version"`
-	CreatedAt      time.Time       `json:"date_created"`
-	UpdatedAt      time.Time       `json:"date_updated"`
-	ArchivedAt     *time.Time      `json:"archived_at,omitempty"`
-	DeletedAt      *time.Time      `json:"-"`
+	ID              string          `json:"id"`
+	SubjectID       string          `json:"-"`
+	SubjectName     string          `json:"-"`
+	SubjectUsername string          `json:"-"`
+	OrganizationID  string          `json:"-"`
+	Kind            string          `json:"kind"`
+	Assistant       string          `json:"assistant"`
+	Profile         string          `json:"profile"`
+	Surface         string          `json:"surface,omitempty"`
+	Title           string          `json:"title,omitempty"`
+	Status          string          `json:"status"`
+	Metadata        json.RawMessage `json:"metadata,omitempty"`
+	Version         uint64          `json:"version"`
+	CreatedAt       time.Time       `json:"date_created"`
+	UpdatedAt       time.Time       `json:"date_updated"`
+	ArchivedAt      *time.Time      `json:"archived_at,omitempty"`
+	DeletedAt       *time.Time      `json:"-"`
 }
 
 type MessagePart struct {
@@ -199,42 +203,45 @@ type RunRegistrationSnapshot struct {
 }
 
 type Run struct {
-	ID                   string          `json:"id"`
-	ConversationID       string          `json:"conversation_id"`
-	InputMessageID       string          `json:"input_message_id"`
-	OutputMessageID      string          `json:"output_message_id,omitempty"`
-	RegeneratedFromID    string          `json:"regenerated_from_id,omitempty"`
-	PanelSessionID       string          `json:"panel_session_id"`
-	SubjectID            string          `json:"-"`
-	OrganizationID       string          `json:"-"`
-	Profile              string          `json:"profile"`
-	ProfileVersion       string          `json:"profile_version"`
-	ExecutionMode        string          `json:"execution_mode"`
-	CapabilityMode       string          `json:"capability_mode"`
-	ContextVersion       uint64          `json:"context_version"`
-	ContextDigest        string          `json:"context_digest"`
-	RegistryRevision     uint64          `json:"registry_revision"`
-	RegistrationSnapshot json.RawMessage `json:"registration_snapshot"`
-	ModelPolicy          json.RawMessage `json:"model_policy"`
-	ApprovalPolicy       json.RawMessage `json:"approval_policy"`
-	State                string          `json:"state"`
-	CancelReason         string          `json:"cancel_reason,omitempty"`
-	ErrorCode            string          `json:"error_code,omitempty"`
-	ErrorDetail          string          `json:"error,omitempty"`
-	Partial              bool            `json:"partial"`
-	FinishReason         string          `json:"finish_reason,omitempty"`
-	RoundCount           int             `json:"round_count"`
-	ModelRequestCount    int             `json:"model_request_count"`
-	InputTokens          int64           `json:"input_tokens"`
-	OutputTokens         int64           `json:"output_tokens"`
-	ClaimOwner           string          `json:"-"`
-	ClaimExpiresAt       *time.Time      `json:"-"`
-	IdempotencyKey       string          `json:"-"`
-	IdempotencyDigest    string          `json:"-"`
-	CreatedAt            time.Time       `json:"date_created"`
-	UpdatedAt            time.Time       `json:"date_updated"`
-	StartedAt            *time.Time      `json:"started_at,omitempty"`
-	FinishedAt           *time.Time      `json:"finished_at,omitempty"`
+	ID                       string          `json:"id"`
+	ConversationID           string          `json:"conversation_id"`
+	InputMessageID           string          `json:"input_message_id"`
+	OutputMessageID          string          `json:"output_message_id,omitempty"`
+	RegeneratedFromID        string          `json:"regenerated_from_id,omitempty"`
+	PanelSessionID           string          `json:"panel_session_id"`
+	SubjectID                string          `json:"-"`
+	OrganizationID           string          `json:"-"`
+	AuthorizationSuperuser   bool            `json:"-"`
+	AuthorizationOrgAdmin    bool            `json:"-"`
+	AuthorizationPermissions []string        `json:"-"`
+	Profile                  string          `json:"profile"`
+	ProfileVersion           string          `json:"profile_version"`
+	ExecutionMode            string          `json:"execution_mode"`
+	CapabilityMode           string          `json:"capability_mode"`
+	ContextVersion           uint64          `json:"context_version"`
+	ContextDigest            string          `json:"context_digest"`
+	RegistryRevision         uint64          `json:"registry_revision"`
+	RegistrationSnapshot     json.RawMessage `json:"registration_snapshot"`
+	ModelPolicy              json.RawMessage `json:"model_policy"`
+	ApprovalPolicy           json.RawMessage `json:"approval_policy"`
+	State                    string          `json:"state"`
+	CancelReason             string          `json:"cancel_reason,omitempty"`
+	ErrorCode                string          `json:"error_code,omitempty"`
+	ErrorDetail              string          `json:"error,omitempty"`
+	Partial                  bool            `json:"partial"`
+	FinishReason             string          `json:"finish_reason,omitempty"`
+	RoundCount               int             `json:"round_count"`
+	ModelRequestCount        int             `json:"model_request_count"`
+	InputTokens              int64           `json:"input_tokens"`
+	OutputTokens             int64           `json:"output_tokens"`
+	ClaimOwner               string          `json:"-"`
+	ClaimExpiresAt           *time.Time      `json:"-"`
+	IdempotencyKey           string          `json:"-"`
+	IdempotencyDigest        string          `json:"-"`
+	CreatedAt                time.Time       `json:"date_created"`
+	UpdatedAt                time.Time       `json:"date_updated"`
+	StartedAt                *time.Time      `json:"started_at,omitempty"`
+	FinishedAt               *time.Time      `json:"finished_at,omitempty"`
 }
 
 func (r Run) Terminal() bool {

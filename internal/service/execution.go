@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,6 +18,104 @@ import (
 	agentruntime "github.com/jumpserver/kael/internal/runtime"
 	"go.uber.org/zap"
 )
+
+const (
+	messageDeltaFlushInterval = 50 * time.Millisecond
+	messageDeltaFlushBytes    = 1024
+)
+
+type messageDeltaCoalescer struct {
+	service   *Service
+	run       *domain.Run
+	output    *domain.Message
+	mu        sync.Mutex
+	pending   strings.Builder
+	lastFlush time.Time
+	cancel    context.CancelFunc
+	done      chan struct{}
+	err       error
+}
+
+func newMessageDeltaCoalescer(ctx context.Context, service *Service, run *domain.Run, output *domain.Message) *messageDeltaCoalescer {
+	timerContext, cancel := context.WithCancel(ctx)
+	coalescer := &messageDeltaCoalescer{service: service, run: run, output: output, lastFlush: time.Now(), cancel: cancel, done: make(chan struct{})}
+	go coalescer.runTimer(timerContext)
+	return coalescer
+}
+
+func (c *messageDeltaCoalescer) runTimer(ctx context.Context) {
+	defer close(c.done)
+	ticker := time.NewTicker(messageDeltaFlushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.mu.Lock()
+			flushErr := c.flushLocked(ctx, false)
+			if flushErr != nil {
+				if ctx.Err() != nil && (errors.Is(flushErr, context.Canceled) || errors.Is(flushErr, context.DeadlineExceeded)) {
+					c.mu.Unlock()
+					return
+				}
+				c.err = flushErr
+				c.cancel()
+			}
+			c.mu.Unlock()
+			if flushErr != nil {
+				return
+			}
+		}
+	}
+}
+
+func (c *messageDeltaCoalescer) Add(ctx context.Context, text string) error {
+	if text == "" {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return c.err
+	}
+	_, _ = c.pending.WriteString(text)
+	if c.pending.Len() < messageDeltaFlushBytes && time.Since(c.lastFlush) < messageDeltaFlushInterval {
+		return nil
+	}
+	return c.flushLocked(ctx, false)
+}
+
+func (c *messageDeltaCoalescer) Flush(ctx context.Context, allowCancelling bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return c.err
+	}
+	return c.flushLocked(ctx, allowCancelling)
+}
+
+func (c *messageDeltaCoalescer) Close(ctx context.Context, allowCancelling bool) error {
+	c.cancel()
+	<-c.done
+	return c.Flush(ctx, allowCancelling)
+}
+
+func (c *messageDeltaCoalescer) flushLocked(ctx context.Context, allowCancelling bool) error {
+	if c.pending.Len() == 0 {
+		return nil
+	}
+	text := c.pending.String()
+	if err := c.service.persistMessageDelta(ctx, c.run, c.output, text, allowCancelling); err != nil {
+		return err
+	}
+	c.pending.Reset()
+	c.lastFlush = time.Now()
+	return nil
+}
 
 func (s *Service) modelStarted(ctx context.Context, run *domain.Run, sequence int) error {
 	now := time.Now().UTC()
@@ -97,6 +197,10 @@ func (s *Service) modelCompleted(ctx context.Context, run *domain.Run, sequence 
 }
 
 func (s *Service) messageDelta(ctx context.Context, run *domain.Run, output *domain.Message, text string) error {
+	return s.persistMessageDelta(ctx, run, output, text, false)
+}
+
+func (s *Service) persistMessageDelta(ctx context.Context, run *domain.Run, output *domain.Message, text string, allowCancelling bool) error {
 	if text == "" {
 		return nil
 	}
@@ -107,7 +211,7 @@ func (s *Service) messageDelta(ctx context.Context, run *domain.Run, output *dom
 		if err != nil {
 			return err
 		}
-		if current.State == "cancelling" || current.State == "cancelled" {
+		if !allowCancelling && (current.State == "cancelling" || current.State == "cancelled") {
 			return context.Canceled
 		}
 		message, err := tx.Message(output.ID, domain.Principal{SubjectID: run.SubjectID, OrganizationID: run.OrganizationID}, true)
@@ -278,57 +382,141 @@ func (s *Service) approvalState(ctx context.Context, id string) (string, error) 
 			return err
 		}
 		state = value.State
-		if state == "pending" && value.ExpiresAt.Before(time.Now().UTC()) {
-			value.State, value.Reason, value.UpdatedAt = "expired", "approval expired", time.Now().UTC()
+		if state == "pending" {
+			now := time.Now().UTC()
+			if !value.ExpiresAt.Before(now) {
+				return nil
+			}
+			if err = expireApproval(tx, value, now); err != nil {
+				return err
+			}
 			state = value.State
-			return tx.SaveApproval(value)
 		}
 		return nil
 	})
 	return state, err
 }
 
+func expireApproval(tx ports.Tx, approval *domain.Approval, now time.Time) error {
+	approval.State, approval.Reason, approval.UpdatedAt, approval.ResolvedAt = "expired", "approval expired", now, &now
+	if err := tx.SaveApproval(approval); err != nil {
+		return err
+	}
+	call, err := tx.ToolCall(approval.ToolCallID, true)
+	if errors.Is(err, ports.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	switch call.State {
+	case "created", "waiting_approval", "dispatched", "running":
+		call.State, call.UpdatedAt, call.FinishedAt = "timeout", now, &now
+		return tx.SaveToolCall(call)
+	default:
+		return nil
+	}
+}
+
+func validateToolCallBinding(run *domain.Run, call *domain.ToolCall) error {
+	if call.RunID != run.ID || call.ConversationID != run.ConversationID || call.PanelSessionID != run.PanelSessionID ||
+		call.SubjectID != run.SubjectID || call.OrganizationID != run.OrganizationID {
+		return serviceError(Conflict, "tool_call_binding_mismatch", "tool call is not bound to the current run", nil)
+	}
+	return nil
+}
+
+func validateDispatchState(run *domain.Run, call *domain.ToolCall) error {
+	if run.Terminal() || run.State == "cancelling" || run.State == "cancelled" || call.State == "cancelled" || call.State == "timeout" {
+		return context.Canceled
+	}
+	expectedRunState, expectedCallState := "running", "created"
+	if call.RequiresConfirmation {
+		expectedRunState, expectedCallState = "waiting_approval", "waiting_approval"
+	}
+	if run.State != expectedRunState || call.State != expectedCallState {
+		return serviceError(Conflict, "tool_call_not_dispatchable", "tool call is no longer dispatchable", nil)
+	}
+	return nil
+}
+
+func validateApprovalBinding(approval *domain.Approval, run *domain.Run, call *domain.ToolCall, scope string) error {
+	if approval.Scope != scope || approval.ConversationID != run.ConversationID || approval.RunID != run.ID ||
+		approval.ToolCallID != call.ID || approval.RegistrationID != call.RegistrationID ||
+		approval.PanelSessionID != call.PanelSessionID || approval.SubjectID != call.SubjectID ||
+		approval.OrganizationID != call.OrganizationID || approval.DefinitionVersion != call.DefinitionVersion ||
+		approval.ArgumentsDigest != call.ArgumentsDigest || approval.Risk != call.Risk {
+		return serviceError(Conflict, "approval_binding_mismatch", "approval is not bound to the current tool call", nil)
+	}
+	return nil
+}
+
 func (s *Service) dispatchToolCall(ctx context.Context, run *domain.Run, call *domain.ToolCall) error {
-	now := time.Now().UTC()
 	var notify []string
+	approvalExpired := false
 	err := s.store.Transaction(ctx, func(tx ports.Tx) error {
+		now := time.Now().UTC()
 		current, err := tx.RunInternal(run.ID, true)
 		if err != nil {
 			return err
 		}
-		panel, err := tx.PanelInternal(run.PanelSessionID, true)
+		stored, err := tx.ToolCall(call.ID, true)
 		if err != nil {
 			return err
 		}
-		registration, err := tx.Registration(call.RegistrationID, true)
-		if err != nil {
+		if err = validateToolCallBinding(current, stored); err != nil {
 			return err
 		}
-		if validatePanelBinding(panel, run.ConversationID, now) != nil || registration.State != "active" || registration.LeaseExpiresAt.Before(now) || registration.DefinitionDigest != call.DefinitionDigest {
-			return serviceError(Conflict, "capability_expired", "capability expired before invocation", nil)
+		if err = validateDispatchState(current, stored); err != nil {
+			return err
 		}
-		if call.RequiresConfirmation {
-			approval, err := tx.ApprovalByToolCall(call.ID, true)
-			if err != nil {
-				return err
+		if stored.RequiresConfirmation {
+			approval, approvalErr := tx.ApprovalByToolCall(stored.ID, true)
+			if approvalErr != nil {
+				return approvalErr
 			}
-			if approval.State != "approved" {
+			if approvalErr = validateApprovalBinding(approval, current, stored, "panel"); approvalErr != nil {
+				return approvalErr
+			}
+			if approval.State != "approved" || approval.ResolvedAt == nil {
 				return serviceError(Conflict, "approval_required", "capability invocation is not approved", nil)
 			}
+			if approval.ExpiresAt.Before(now) {
+				if approvalErr = expireApproval(tx, approval, now); approvalErr != nil {
+					return approvalErr
+				}
+				approvalExpired = true
+				return nil
+			}
 			approval.State, approval.UpdatedAt = "consumed", now
-			if err = tx.SaveApproval(approval); err != nil {
-				return err
+			if approvalErr = tx.SaveApproval(approval); approvalErr != nil {
+				return approvalErr
 			}
 		}
-		call.State, call.UpdatedAt, current.State, current.UpdatedAt = "dispatched", now, "waiting_capability", now
-		if err = tx.SaveToolCall(call); err != nil {
+		panel, err := tx.PanelInternal(current.PanelSessionID, true)
+		if err != nil {
+			return err
+		}
+		registration, err := tx.Registration(stored.RegistrationID, true)
+		if err != nil {
+			return err
+		}
+		if panel.SubjectID != current.SubjectID || panel.OrganizationID != current.OrganizationID ||
+			validatePanelBinding(panel, current.ConversationID, now) != nil ||
+			registration.PanelSessionID != stored.PanelSessionID || registration.RegistryRevision != current.RegistryRevision ||
+			registration.DefinitionVersion != stored.DefinitionVersion || registration.DefinitionDigest != stored.DefinitionDigest ||
+			registration.State != "active" || registration.LeaseExpiresAt.Before(now) {
+			return serviceError(Conflict, "capability_expired", "capability expired before invocation", nil)
+		}
+		stored.State, stored.UpdatedAt, current.State, current.UpdatedAt = "dispatched", now, "waiting_capability", now
+		if err = tx.SaveToolCall(stored); err != nil {
 			return err
 		}
 		if err = tx.SaveRun(current); err != nil {
 			return err
 		}
-		payload := map[string]any{"tool_call_id": call.ID, "invocation_id": call.InvocationID, "registration_id": call.RegistrationID, "definition_version": call.DefinitionVersion, "definition_digest": call.DefinitionDigest, "tool_name": call.ToolName, "arguments": json.RawMessage(call.Arguments), "risk": call.Risk, "revision": run.RegistryRevision}
-		_, deliveries, err := event.Project(tx, "tool.call", "tool_call", call.ID, "tool", event.References{ConversationID: run.ConversationID, RunID: run.ID, MessageID: current.OutputMessageID, ToolCallID: call.ID}, payload, []domain.PanelSession{*panel}, now)
+		payload := map[string]any{"tool_call_id": stored.ID, "invocation_id": stored.InvocationID, "registration_id": stored.RegistrationID, "definition_version": stored.DefinitionVersion, "definition_digest": stored.DefinitionDigest, "tool_name": stored.ToolName, "arguments": json.RawMessage(stored.Arguments), "risk": stored.Risk, "revision": current.RegistryRevision}
+		_, deliveries, err := event.Project(tx, "tool.call", "tool_call", stored.ID, "tool", event.References{ConversationID: current.ConversationID, RunID: current.ID, MessageID: current.OutputMessageID, ToolCallID: stored.ID}, payload, []domain.PanelSession{*panel}, now)
 		if err != nil {
 			return err
 		}
@@ -339,6 +527,9 @@ func (s *Service) dispatchToolCall(ctx context.Context, run *domain.Run, call *d
 	})
 	if err != nil {
 		return translateOrService(err)
+	}
+	if approvalExpired {
+		return context.Canceled
 	}
 	s.bus.Notify(notify...)
 	return nil
@@ -401,6 +592,21 @@ func (s *Service) finishRun(run *domain.Run, output *domain.Message, state, code
 		if current.Terminal() {
 			return nil
 		}
+		if current.ModelRequestCount > 0 {
+			modelCall, modelErr := tx.ModelCall(current.ID, current.ModelRequestCount, true)
+			if modelErr == nil && modelCall.State == "running" {
+				modelErrorCode := code
+				if modelErrorCode == "" {
+					modelErrorCode = "model_completion_missing"
+				}
+				modelCall.State, modelCall.ErrorCode, modelCall.FinishedAt = "failed", modelErrorCode, &now
+				if modelErr = tx.SaveModelCall(modelCall); modelErr != nil {
+					return modelErr
+				}
+			} else if modelErr != nil && !errors.Is(modelErr, ports.ErrNotFound) {
+				return modelErr
+			}
+		}
 		messageID := current.OutputMessageID
 		if messageID == "" && output != nil {
 			messageID = output.ID
@@ -411,6 +617,17 @@ func (s *Service) finishRun(run *domain.Run, output *domain.Message, state, code
 			if err != nil && !errors.Is(err, ports.ErrNotFound) {
 				return err
 			}
+		}
+		if message == nil {
+			message = &domain.Message{ID: uuid.NewString(), ConversationID: run.ConversationID, SubjectID: run.SubjectID, OrganizationID: run.OrganizationID, Role: "assistant", Status: "streaming", Parts: json.RawMessage(`[]`), ResultCards: json.RawMessage(`[]`), IdempotencyKey: "run-output:" + run.ID, IdempotencyDigest: run.ID, RegeneratedFromID: run.RegeneratedFromID, CreatedAt: now, UpdatedAt: now}
+			if err = tx.CreateMessage(message); err != nil {
+				message, err = tx.MessageByIdempotency(message.IdempotencyKey, domain.Principal{SubjectID: run.SubjectID, OrganizationID: run.OrganizationID})
+				if err != nil {
+					return err
+				}
+			}
+			messageID = message.ID
+			current.OutputMessageID = message.ID
 		}
 		if message != nil {
 			if state != "completed" && strings.TrimSpace(message.Content) != "" {
@@ -532,6 +749,12 @@ func (s *Service) SubmitToolResult(ctx context.Context, principal domain.Princip
 		} else if !errors.Is(latestErr, ports.ErrNotFound) {
 			return latestErr
 		}
+		if run.Terminal() || run.State == "cancelling" || run.State == "cancelled" || call.State == "cancelled" || call.State == "timeout" {
+			return serviceError(Conflict, "tool_result_terminal", "tool call no longer accepts results", nil)
+		}
+		if run.State != "waiting_capability" || call.State != "dispatched" && call.State != "running" {
+			return serviceError(Conflict, "tool_result_not_dispatchable", "tool call is not accepting results", nil)
+		}
 		result = &domain.ToolResult{ID: uuid.NewString(), ToolCallID: id, RunID: run.ID, PanelSessionID: call.PanelSessionID, Sequence: request.Sequence, Done: request.Done, Status: request.Status, Result: append(json.RawMessage(nil), request.Result...), ErrorJSON: append(json.RawMessage(nil), request.Error...), PayloadDigest: digest, ExecutorAuditReference: bounded(request.ExecutorAuditReference, 512), CreatedAt: now}
 		if err = tx.CreateToolResult(result); err != nil {
 			return err
@@ -543,10 +766,14 @@ func (s *Service) SubmitToolResult(ctx context.Context, principal domain.Princip
 				eventType, call.State = "tool.completed", "succeeded"
 			case "cancelled":
 				eventType, call.State = "tool.cancelled", "cancelled"
+			case "timeout":
+				eventType, call.State = "tool.failed", "timeout"
 			default:
 				eventType, call.State = "tool.failed", "failed"
 			}
 			call.FinishedAt = &now
+		} else if request.Status == "running" {
+			call.State = "running"
 		}
 		call.UpdatedAt = now
 		if err = tx.SaveToolCall(call); err != nil {
@@ -588,11 +815,12 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 		return nil, false, serviceError(Invalid, "invalid_decision", "approval decision is invalid", nil)
 	}
 	digest, _ := domain.HashValue(request)
-	now := time.Now().UTC()
 	var approval *domain.Approval
 	duplicate := false
+	expired := false
 	var notify []string
 	err := s.store.Transaction(ctx, func(tx ports.Tx) error {
+		now := time.Now().UTC()
 		var err error
 		approval, err = tx.Approval(id, principal, true)
 		if err != nil {
@@ -610,9 +838,11 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 			return serviceError(Conflict, "approval_terminal", "approval already has a terminal decision", nil)
 		}
 		if approval.ExpiresAt.Before(now) {
-			approval.State, approval.Reason, approval.UpdatedAt, approval.ResolvedAt = "expired", "approval expired", now, &now
-			_ = tx.SaveApproval(approval)
-			return serviceError(Conflict, "approval_expired", "approval has expired", nil)
+			if err = expireApproval(tx, approval, now); err != nil {
+				return err
+			}
+			expired = true
+			return nil
 		}
 		if request.RunID != "" && request.RunID != approval.RunID || request.ArgumentsDigest != "" && request.ArgumentsDigest != approval.ArgumentsDigest {
 			return serviceError(Forbidden, "approval_binding_mismatch", "approval binding is invalid", nil)
@@ -655,6 +885,9 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 	if err != nil {
 		return nil, false, translateOrService(err)
 	}
+	if expired {
+		return nil, false, serviceError(Conflict, "approval_expired", "approval has expired", nil)
+	}
 	if !duplicate {
 		s.bus.Notify(notify...)
 	}
@@ -687,19 +920,50 @@ func (s *Service) ListApprovals(ctx context.Context, principal domain.Principal,
 	return domain.Page[domain.Approval]{Results: values, Count: count}, nil
 }
 
-func (s *Service) AdminStats(ctx context.Context, principal domain.Principal) (map[string]int64, error) {
+func (s *Service) AdminStats(ctx context.Context, principal domain.Principal, days int) (map[string]any, error) {
 	if !principal.IsSuperuser {
 		return nil, serviceError(Forbidden, "admin_required", "administrator permission is required", nil)
 	}
-	var result map[string]int64
+	var values map[string]int64
 	err := s.store.View(ctx, func(tx ports.Tx) error {
 		var err error
-		result, err = tx.Stats(principal.OrganizationID, time.Now().UTC().Add(-24*time.Hour))
+		values, err = tx.Stats(principal.OrganizationID, time.Now().UTC().Add(-time.Duration(days)*24*time.Hour))
 		return err
 	})
 	if err != nil {
 		return nil, translateStore(err)
 	}
+	result := make(map[string]any, len(values)+3)
+	type operationCount struct {
+		OperationID string `json:"operation_id"`
+		Count       int64  `json:"count"`
+	}
+	top := make([]operationCount, 0)
+	for key, value := range values {
+		if operationID, ok := strings.CutPrefix(key, "operation_count:"); ok {
+			top = append(top, operationCount{OperationID: operationID, Count: value})
+			continue
+		}
+		result[key] = value
+	}
+	sort.Slice(top, func(i, j int) bool {
+		if top[i].Count == top[j].Count {
+			return top[i].OperationID < top[j].OperationID
+		}
+		return top[i].Count > top[j].Count
+	})
+	if len(top) > 10 {
+		top = top[:10]
+	}
+	var average int64
+	if values["model_calls"] > 0 {
+		average = values["model_duration_ms"] / values["model_calls"]
+	}
+	result["days"] = days
+	result["api_calls"] = values["core_api_calls"]
+	result["runs_awaiting_approval"] = values["runs_waiting_approval"]
+	result["average_model_duration_ms"] = average
+	result["top_operations"] = top
 	return result, nil
 }
 func (s *Service) AdminAudit(ctx context.Context, principal domain.Principal, offset, limit int) (domain.Page[domain.AuditRecord], error) {

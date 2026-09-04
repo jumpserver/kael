@@ -16,12 +16,18 @@ type AuditConversation struct {
 	Assistant      string     `json:"assistant"`
 	Profile        string     `json:"profile"`
 	Status         string     `json:"status"`
-	SubjectHash    string     `json:"subject_hash"`
+	User           AuditUser  `json:"user"`
 	MessageCount   int64      `json:"message_count"`
 	QuestionCount  int64      `json:"question_count"`
 	LastQuestionAt *time.Time `json:"last_question_at,omitempty"`
 	CreatedAt      time.Time  `json:"date_created"`
 	UpdatedAt      time.Time  `json:"date_updated"`
+}
+
+type AuditUser struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Username string `json:"username"`
 }
 
 type AuditMessage struct {
@@ -56,7 +62,7 @@ func (s *Service) AdminAuditConversations(ctx context.Context, principal domain.
 		}
 		summaries = make([]AuditConversation, 0, len(conversations))
 		for _, conversation := range conversations {
-			summary := auditConversation(conversation)
+			summary := auditConversation(conversation, principal)
 			summary.MessageCount, summary.QuestionCount, summary.LastQuestionAt, err = tx.MessageAuditStats(conversation.ID, principal.OrganizationID)
 			if err != nil {
 				return err
@@ -92,7 +98,7 @@ func (s *Service) AdminAuditConversation(ctx context.Context, principal domain.P
 				break
 			}
 		}
-		summary := auditConversation(*conversation)
+		summary := auditConversation(*conversation, principal)
 		summary.MessageCount = int64(len(messages))
 		auditMessages := make([]AuditMessage, 0, len(messages))
 		for _, message := range messages {
@@ -115,8 +121,17 @@ func (s *Service) AdminAuditConversation(ctx context.Context, principal domain.P
 	return result, nil
 }
 
-func auditConversation(value domain.Conversation) AuditConversation {
-	return AuditConversation{ID: value.ID, Title: value.Title, Assistant: value.Assistant, Profile: value.Profile, Status: value.Status, SubjectHash: domain.HashBytes([]byte(value.SubjectID)), CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
+func auditConversation(value domain.Conversation, principal domain.Principal) AuditConversation {
+	name, username := value.SubjectName, value.SubjectUsername
+	if value.SubjectID == principal.SubjectID {
+		if name == "" {
+			name = principal.Name
+		}
+		if username == "" {
+			username = principal.Username
+		}
+	}
+	return AuditConversation{ID: value.ID, Title: value.Title, Assistant: value.Assistant, Profile: value.Profile, Status: value.Status, User: AuditUser{ID: value.SubjectID, Name: name, Username: username}, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
 }
 
 var auditSecretPatterns = []*regexp.Regexp{

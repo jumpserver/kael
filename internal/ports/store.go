@@ -9,6 +9,7 @@ import (
 
 var ErrNotFound = domainError("not found")
 var ErrConflict = domainError("conflict")
+var ErrUnavailable = domainError("unavailable")
 
 type domainError string
 

@@ -12,20 +12,38 @@ BOOTSTRAP_TOKEN: <PleaseChangeMe>
 # HTTP_REQUEST_TIMEOUT: 30
 # IGNORE_VERIFY_CERTS: false
 
-# 跨域部署时列出允许的 origin；同源部署保持为空。
-# ALLOWED_ORIGINS: []
+# Runtime 状态默认通过组件签名写回 JumpServer Core。
+# 仅本地开发或 Core 尚未提供 runtime-store API 时预先选择 jsonl；两种 Store 不双写，
+# 禁止在 Core 故障时自动切到 jsonl，否则会形成缺少现有历史的第二个写权威。
+# RUNTIME_STORE: core
+
+# 标准浏览器部署由 Lina 所在站点把 /kael/ 同源反向代理到 Kael。若网关终止 HTTPS，
+# 优先在这里精确填写 Lina 的外部 origin，避免 Kael 所见内部 HTTP 导致 Origin 拒绝。
+# 此项只扩展 Kael 的 Origin/CSRF 放行列表，不会发送 CORS 响应头。
+# ALLOWED_ORIGINS: [https://jumpserver.example.com]
+# 只有无法固定外部 origin 时才在可信网关后设为 true；网关必须覆盖客户端提供的
+# X-Forwarded-Host/X-Forwarded-Proto，且 Kael 端口不可直接暴露。
 # TRUST_FORWARDED_HEADERS: false
 
-# Platform Gateway 默认关闭。启用时使用以下平铺配置。
-# PLATFORM_GATEWAY_ENABLED: false
-# PLATFORM_DELEGATION_KEY: ""
+# Platform Gateway 默认且必须启用，因为 Lina 默认 general 依赖它访问授权 Core API；
+# 显式关闭或密钥留空时 Kael 会在监听端口前失败，不会以“ready 但 general 不可用”运行。
+# PLATFORM_DELEGATION_KEY 至少 32 字符，并与 Core CHAT_AI_DELEGATION_SECRET 完全一致。
+# PLATFORM_DELEGATION_KEY_ID 对应 Core CHAT_AI_DELEGATION_KEY_ID；
+# PLATFORM_DELEGATION_ISSUER 对应 Core CHAT_AI_DELEGATION_ISSUER；
+# PLATFORM_DELEGATION_AUDIENCE 对应 Core CHAT_AI_DELEGATION_AUDIENCE。
+# 启用前还必须确认 Core 已应用 Runtime Store migration、Redis 可用于 delegation nonce
+# 防重放，且 /api/swagger.json 可访问并为候选操作提供 x-jms-required-permissions 与
+# x-jms-permission-dynamic 元数据。
+PLATFORM_GATEWAY_ENABLED: true
+# 此处故意留空以强制部署者配置；不要在镜像或仓库中内置共享密钥。
+PLATFORM_DELEGATION_KEY: ""
 # PLATFORM_DELEGATION_KEY_ID: v1
 # PLATFORM_DELEGATION_ISSUER: jumpserver-ai
 # PLATFORM_DELEGATION_AUDIENCE: jumpserver-core
 # PLATFORM_CA_CERT: ""
 # PLATFORM_CLIENT_CERT: ""
 # PLATFORM_CLIENT_KEY: ""
-# PLATFORM_ALLOWED_METHODS: [GET, POST, PUT, PATCH, DELETE]
+# PLATFORM_ALLOWED_METHODS: [GET, POST, PUT, PATCH]
 # PLATFORM_REGISTRY_TTL: 1h
 # PLATFORM_TIMEOUT: 15s
 # PLATFORM_MAX_RESPONSE_BYTES: 1048576

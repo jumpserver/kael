@@ -46,6 +46,7 @@ type Config struct {
 	RegistryTTL     time.Duration
 	Timeout         time.Duration
 	MaxResponse     int64
+	OpenAPILoader   func(context.Context) (map[string]any, error)
 }
 
 type parameter struct {
@@ -57,16 +58,18 @@ type parameter struct {
 }
 
 type operation struct {
-	ID           string
-	Method       string
-	Path         string
-	Summary      string
-	Description  string
-	Tags         []string
-	PathParams   []parameter
-	QueryParams  []parameter
-	Body         map[string]any
-	BodyRequired bool
+	ID                  string
+	Method              string
+	Path                string
+	Summary             string
+	Description         string
+	Tags                []string
+	PathParams          []parameter
+	QueryParams         []parameter
+	Body                map[string]any
+	BodyRequired        bool
+	RequiredPermissions []string
+	PermissionDynamic   bool
 }
 
 type registry struct {
@@ -90,6 +93,9 @@ func New(config Config) (*Gateway, error) {
 	}
 	if len(config.DelegationKey) < 32 || config.DelegationKeyID == "" {
 		return nil, fmt.Errorf("platform gateway delegation key is invalid")
+	}
+	if config.OpenAPILoader == nil {
+		return nil, fmt.Errorf("platform gateway OpenAPI loader is required")
 	}
 	if config.Issuer == "" {
 		config.Issuer = "jumpserver-ai"
@@ -150,13 +156,13 @@ func (g *Gateway) Registrations(ctx context.Context, principal domain.Principal,
 }
 
 func registrationsFor(registry *registry, profile string) []domain.Registration {
-	searchSchema := json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":512},"progress":{"type":"string","maxLength":512},"action":{"type":"string","maxLength":128}},"required":["query","progress","action"],"additionalProperties":false}`)
-	callSchema := json.RawMessage(`{"type":"object","properties":{"operation_id":{"type":"string","minLength":1,"maxLength":256},"progress":{"type":"string","maxLength":512},"action":{"type":"string","maxLength":128},"path_params":{"type":"object"},"query_params":{"type":"object"},"body":{"oneOf":[{"type":"object"},{"type":"array"}]}},"required":["operation_id","progress","action"],"additionalProperties":false}`)
+	searchSchema := json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":512},"progress":{"type":"string","maxLength":512},"action":{"type":"string","maxLength":128}},"required":["query"],"additionalProperties":false}`)
+	callSchema := json.RawMessage(`{"type":"object","properties":{"operation_id":{"type":"string","minLength":1,"maxLength":256},"progress":{"type":"string","maxLength":512},"action":{"type":"string","maxLength":128},"path_params":{"type":"object"},"query_params":{"type":"object"},"body":{"oneOf":[{"type":"object"},{"type":"array"}]}},"required":["operation_id"],"additionalProperties":false}`)
 	readAnnotations, _ := json.Marshal(domain.ToolAnnotations{ReadOnly: true, Idempotent: true})
 	writeAnnotations, _ := json.Marshal(domain.ToolAnnotations{OpenWorld: true})
 	definitions := []domain.Registration{
-		{ID: "platform-gateway:search:" + registry.Hash, BindingKind: "service", ExecutionBindingID: "platform-gateway:" + registry.Hash, ClientKey: searchTool, Name: searchTool, Description: "Search server-authorized JumpServer Core operations by user intent.", InputSchema: searchSchema, DefinitionVersion: registry.Hash, Namespace: profile, Risk: "read", AnnotationsJSON: readAnnotations, State: "active"},
-		{ID: "platform-gateway:call:" + registry.Hash, BindingKind: "service", ExecutionBindingID: "platform-gateway:" + registry.Hash, ClientKey: callTool, Name: callTool, Description: "Call one server-authorized Core operation selected from search results.", InputSchema: callSchema, DefinitionVersion: registry.Hash, Namespace: profile, Risk: "dangerous", RequiresConfirmation: true, AnnotationsJSON: writeAnnotations, State: "active"},
+		{ID: "platform-gateway:search:" + registry.Hash, BindingKind: "service", ExecutionBindingID: "platform-gateway:" + registry.Hash, ClientKey: searchTool, Name: searchTool, Description: "Immediately search server-authorized JumpServer Core operations by user intent. Use read operations to resolve related IDs and defaults before a write; do not ask the user for data that Core can supply.", InputSchema: searchSchema, DefinitionVersion: registry.Hash, Namespace: profile, Risk: "read", AnnotationsJSON: readAnnotations, State: "active"},
+		{ID: "platform-gateway:call:" + registry.Hash, BindingKind: "service", ExecutionBindingID: "platform-gateway:" + registry.Hash, ClientKey: callTool, Name: callTool, Description: "Call one server-authorized Core operation selected from search results. A write call automatically opens the trusted approval UI; do not ask the user to type a separate confirmation first.", InputSchema: callSchema, DefinitionVersion: registry.Hash, Namespace: profile, Risk: "dangerous", RequiresConfirmation: true, AnnotationsJSON: writeAnnotations, State: "active"},
 	}
 	for index := range definitions {
 		definitions[index].DefinitionDigest, _ = domain.HashValue(map[string]any{"name": definitions[index].Name, "description": definitions[index].Description, "schema": definitions[index].InputSchema, "version": registry.Hash})
@@ -175,6 +181,9 @@ func (g *Gateway) Prepare(ctx context.Context, request ports.CapabilityRequest) 
 	if operation == nil {
 		return ports.CapabilityPolicy{}, fmt.Errorf("operation is unavailable")
 	}
+	if _, _, _, err = buildRequest(*operation, arguments); err != nil {
+		return ports.CapabilityPolicy{}, &ports.InvalidCapabilityArgumentsError{Detail: boundedString(err.Error(), 512)}
+	}
 	risk := methodRisk(operation.Method)
 	preview, _ := json.Marshal(map[string]any{"operation_id": operation.ID, "method": operation.Method, "path": operation.Path, "summary": operation.Summary, "arguments": sanitize(arguments, 0)})
 	_ = registry
@@ -188,17 +197,23 @@ func (g *Gateway) Execute(ctx context.Context, request ports.CapabilityRequest) 
 	}
 	if request.Registration.Name == searchTool {
 		query, _ := arguments["query"].(string)
-		candidates := searchOperations(registry, request.Profile, query, 5, g.config.AllowedMethods)
+		candidates := searchOperations(registry, request.Profile, request.Principal, query, 5, g.config.AllowedMethods)
 		encoded, _ := json.Marshal(map[string]any{"operations": candidates, "registry_version": registry.Hash})
 		return ports.CapabilityResult{Status: "success", Result: encoded, ExecutorAuditReference: "platform-search:" + uuid.NewString()}, nil
 	}
+	// Registry search above and Refresh do not issue a Core business request.
+	// Management operations use this same execution path and are never exempt.
+	if requiresApproval(operation.Method) && strings.TrimSpace(request.ApprovalID) == "" {
+		return ports.CapabilityResult{}, fmt.Errorf("Core write operation requires a non-empty approval ID")
+	}
 	path, query, body, err := buildRequest(*operation, arguments)
 	if err != nil {
-		return ports.CapabilityResult{}, err
+		encoded, _ := json.Marshal(map[string]any{"code": "invalid_operation_arguments", "message": "The operation arguments did not match the Core request schema.", "detail": boundedString(err.Error(), 512)})
+		return ports.CapabilityResult{Status: "error", Error: encoded}, nil
 	}
 	var bodyReader io.Reader
 	var bodyBytes []byte
-	if operation.Method != http.MethodGet && len(operation.Body) > 0 {
+	if requiresApproval(operation.Method) && len(operation.Body) > 0 {
 		bodyBytes, err = json.Marshal(body)
 		if err != nil {
 			return ports.CapabilityResult{}, err
@@ -238,7 +253,8 @@ func (g *Gateway) Execute(ctx context.Context, request ports.CapabilityRequest) 
 		value = boundedString(string(content), 8192)
 	}
 	clean := sanitize(value, 0)
-	result := map[string]any{"ok": response.StatusCode >= 200 && response.StatusCode < 300, "status_code": response.StatusCode, "operation_id": operation.ID, "data": clean}
+	ok := response.StatusCode >= 200 && response.StatusCode < 300
+	result := map[string]any{"ok": ok, "status_code": response.StatusCode, "operation_id": operation.ID, "data": clean}
 	encoded, _ := json.Marshal(result)
 	if len(encoded) > domain.MaxToolResultBytes {
 		encoded, _ = json.Marshal(map[string]any{"ok": result["ok"], "status_code": response.StatusCode, "operation_id": operation.ID, "data": map[string]any{"truncated": true, "preview": boundedString(string(encoded), 32*1024)}})
@@ -247,7 +263,12 @@ func (g *Gateway) Execute(ctx context.Context, request ports.CapabilityRequest) 
 	if len(cards) > 64*1024 {
 		cards, _ = json.Marshal([]any{map[string]any{"type": "detail", "title": operation.Summary, "source": map[string]any{"type": "core_api", "operation_id": operation.ID, "method": operation.Method, "path": operation.Path, "status_code": response.StatusCode}, "content": map[string]any{"truncated": true, "preview": boundedString(string(cards), 32*1024)}}})
 	}
-	return ports.CapabilityResult{Status: "success", Result: encoded, ResultCards: cards, ExecutorAuditReference: "core-api:" + uuid.NewString()}, nil
+	capabilityResult := ports.CapabilityResult{Status: "success", Result: encoded, ResultCards: cards, ExecutorAuditReference: "core-api:" + uuid.NewString()}
+	if !ok {
+		capabilityResult.Status = "error"
+		capabilityResult.Error, _ = json.Marshal(map[string]any{"code": "core_api_error", "message": "Core rejected the authorized operation.", "status_code": response.StatusCode, "operation_id": operation.ID, "data": clean})
+	}
+	return capabilityResult, nil
 }
 
 func buildResultCard(operation operation, status int, data any) map[string]any {
@@ -427,7 +448,7 @@ func (g *Gateway) resolveRequest(ctx context.Context, request ports.CapabilityRe
 	}
 	operationID, _ := arguments["operation_id"].(string)
 	operation, ok := registry.Operations[operationID]
-	if !ok || !operationAllowed(request.Profile, operation, g.config.AllowedMethods) {
+	if !ok || !operationAllowed(request.Profile, request.Principal, operation, g.config.AllowedMethods) {
 		return nil, nil, nil, fmt.Errorf("Core operation is not allowed")
 	}
 	return registry, &operation, arguments, nil
@@ -457,24 +478,12 @@ func (g *Gateway) load(ctx context.Context, force bool) (*registry, error) {
 	if current != nil && !force && time.Since(current.LoadedAt) < g.config.RegistryTTL {
 		return current, nil
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(g.config.CoreURL, "/")+"/api/swagger.json", nil)
+	schema, err := g.config.OpenAPILoader(ctx)
 	if err != nil {
 		return nil, err
 	}
-	response, err := g.client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Core OpenAPI returned HTTP %d", response.StatusCode)
-	}
-	content, err := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024+1))
+	content, err := json.Marshal(schema)
 	if err != nil || len(content) > 32*1024*1024 {
-		return nil, fmt.Errorf("Core OpenAPI response is invalid")
-	}
-	var schema map[string]any
-	if json.Unmarshal(content, &schema) != nil {
 		return nil, fmt.Errorf("Core OpenAPI response is invalid")
 	}
 	operations, err := parseOperations(schema)
@@ -507,7 +516,7 @@ func parseOperations(schema map[string]any) (map[string]operation, error) {
 		pathItem, _ := resolve(schema, rawPath, 0).(map[string]any)
 		for method, rawOperation := range pathItem {
 			upper := strings.ToUpper(method)
-			if !map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true}[upper] {
+			if !map[string]bool{"GET": true, "HEAD": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true}[upper] {
 				continue
 			}
 			item, _ := resolve(schema, rawOperation, 0).(map[string]any)
@@ -518,7 +527,13 @@ func parseOperations(schema map[string]any) (map[string]operation, error) {
 			if id == "" {
 				id = strings.ToLower(upper) + "_" + regexp.MustCompile(`[^A-Za-z0-9]+`).ReplaceAllString(strings.Trim(path, "/"), "_")
 			}
-			entry := operation{ID: id, Method: upper, Path: path, Summary: stringValue(item["summary"]), Description: stringValue(item["description"]), Tags: stringSlice(item["tags"])}
+			requiredPermissions, staticPermissions := permissionMetadata(item["x-jms-required-permissions"])
+			permissionDynamic, dynamicMetadata := item["x-jms-permission-dynamic"].(bool)
+			entry := operation{
+				ID: id, Method: upper, Path: path, Summary: stringValue(item["summary"]), Description: stringValue(item["description"]), Tags: stringSlice(item["tags"]),
+				RequiredPermissions: requiredPermissions,
+				PermissionDynamic:   !staticPermissions || !dynamicMetadata || permissionDynamic,
+			}
 			parameters := append(anySlice(pathItem["parameters"]), anySlice(item["parameters"])...)
 			for _, rawParameter := range parameters {
 				value, _ := resolve(schema, rawParameter, 0).(map[string]any)
@@ -543,6 +558,7 @@ func parseOperations(schema map[string]any) (map[string]operation, error) {
 			content, _ := requestBody["content"].(map[string]any)
 			media, _ := content["application/json"].(map[string]any)
 			entry.Body, _ = resolve(schema, media["schema"], 0).(map[string]any)
+			entry.Body = requestSchema(entry.Body)
 			entry.BodyRequired = boolValue(requestBody["required"])
 			result[id] = entry
 		}
@@ -553,34 +569,170 @@ func parseOperations(schema map[string]any) (map[string]operation, error) {
 	return result, nil
 }
 
-func resolve(root map[string]any, value any, depth int) any {
-	if depth > 12 {
-		return map[string]any{}
+func permissionMetadata(value any) ([]string, bool) {
+	items, ok := value.([]any)
+	if !ok {
+		return nil, false
 	}
+	permissions := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		permission, ok := item.(string)
+		permission = strings.TrimSpace(permission)
+		if !ok || permission == "" {
+			return nil, false
+		}
+		if _, exists := seen[permission]; exists {
+			continue
+		}
+		seen[permission] = struct{}{}
+		permissions = append(permissions, permission)
+	}
+	sort.Strings(permissions)
+	return permissions, true
+}
+
+// requestSchema converts the OpenAPI request view into strict JSON Schema.
+// Shared DRF schemas contain response-only required fields and nullable
+// annotations that must not reject otherwise valid request bodies.
+func requestSchema(schema map[string]any) map[string]any {
+	value, _ := normalizeRequestSchema(schema).(map[string]any)
+	return value
+}
+
+func normalizeRequestSchema(value any) any {
 	switch item := value.(type) {
 	case map[string]any:
-		if reference, _ := item["$ref"].(string); strings.HasPrefix(reference, "#/") {
-			var current any = root
-			for _, part := range strings.Split(strings.TrimPrefix(reference, "#/"), "/") {
-				object, _ := current.(map[string]any)
-				current = object[strings.ReplaceAll(strings.ReplaceAll(part, "~1", "/"), "~0", "~")]
+		removed := map[string]bool{}
+		if properties, ok := item["properties"].(map[string]any); ok {
+			for name, raw := range properties {
+				property, _ := raw.(map[string]any)
+				if readOnly, _ := property["readOnly"].(bool); readOnly {
+					removed[name] = true
+				}
 			}
-			return resolve(root, current, depth+1)
 		}
 		result := make(map[string]any, len(item))
 		for key, child := range item {
-			result[key] = resolve(root, child, depth+1)
+			if (key == "description" || key == "title" || key == "$comment") && child == nil {
+				continue
+			}
+			switch key {
+			case "nullable":
+				continue
+			case "properties":
+				properties, _ := child.(map[string]any)
+				normalized := make(map[string]any, len(properties)-len(removed))
+				for name, property := range properties {
+					if !removed[name] {
+						normalized[name] = normalizeRequestSchema(property)
+					}
+				}
+				result[key] = normalized
+			case "required":
+				required, _ := child.([]any)
+				normalized := make([]any, 0, len(required))
+				for _, name := range required {
+					text, _ := name.(string)
+					if !removed[text] {
+						normalized = append(normalized, name)
+					}
+				}
+				if len(normalized) > 0 {
+					result[key] = normalized
+				}
+			default:
+				result[key] = normalizeRequestSchema(child)
+			}
+		}
+		if nullable, _ := item["nullable"].(bool); nullable {
+			if schemaType, ok := result["type"].(string); ok {
+				result["type"] = []any{schemaType, "null"}
+			}
 		}
 		return result
 	case []any:
 		result := make([]any, len(item))
 		for index, child := range item {
-			result[index] = resolve(root, child, depth+1)
+			result[index] = normalizeRequestSchema(child)
 		}
 		return result
 	default:
 		return value
 	}
+}
+
+func resolve(root map[string]any, value any, _ int) any {
+	return resolveRefs(root, value, map[string]bool{}, 0)
+}
+
+func resolveRefs(root map[string]any, value any, seen map[string]bool, depth int) any {
+	if depth > 128 {
+		return map[string]any{}
+	}
+	switch item := value.(type) {
+	case map[string]any:
+		if reference, _ := item["$ref"].(string); strings.HasPrefix(reference, "#/") {
+			siblings := make(map[string]any, len(item)-1)
+			for key, child := range item {
+				if key != "$ref" {
+					siblings[key] = child
+				}
+			}
+			if seen[reference] {
+				return resolveRefs(root, siblings, seen, depth+1)
+			}
+			target, ok := resolveReference(root, reference)
+			if !ok {
+				return resolveRefs(root, siblings, seen, depth+1)
+			}
+			if targetObject, ok := target.(map[string]any); ok {
+				merged := make(map[string]any, len(targetObject)+len(siblings))
+				for key, child := range targetObject {
+					merged[key] = child
+				}
+				for key, child := range siblings {
+					merged[key] = child
+				}
+				target = merged
+			}
+			nextSeen := make(map[string]bool, len(seen)+1)
+			for key, value := range seen {
+				nextSeen[key] = value
+			}
+			nextSeen[reference] = true
+			return resolveRefs(root, target, nextSeen, depth+1)
+		}
+		result := make(map[string]any, len(item))
+		for key, child := range item {
+			result[key] = resolveRefs(root, child, seen, depth+1)
+		}
+		return result
+	case []any:
+		result := make([]any, len(item))
+		for index, child := range item {
+			result[index] = resolveRefs(root, child, seen, depth+1)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+func resolveReference(root map[string]any, reference string) (any, bool) {
+	var current any = root
+	for _, part := range strings.Split(strings.TrimPrefix(reference, "#/"), "/") {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		key := strings.ReplaceAll(strings.ReplaceAll(part, "~1", "/"), "~0", "~")
+		current, ok = object[key]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
 }
 
 func buildRequest(operation operation, arguments map[string]any) (string, string, any, error) {
@@ -770,7 +922,7 @@ func bindingHash(method, path string, query, body []byte) string {
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 func methodRisk(method string) string {
-	if method == http.MethodGet {
+	if !requiresApproval(method) {
 		return "read"
 	}
 	if method == http.MethodDelete {
@@ -779,11 +931,30 @@ func methodRisk(method string) string {
 	return "write"
 }
 
+func requiresApproval(method string) bool {
+	return method != http.MethodGet && method != http.MethodHead
+}
+
 var scopes = map[string]map[string]bool{
 	"platform.asset":         set("assets_assets_list", "assets_assets_retrieve", "assets_categories_list", "assets_hosts_list", "assets_hosts_retrieve", "assets_nodes_assets_list", "assets_nodes_list", "assets_nodes_retrieve", "assets_platforms_list", "assets_platforms_retrieve", "assets_protocols_list"),
 	"platform.session_audit": set("audits_activities_list", "audits_login_logs_list", "audits_login_logs_retrieve", "audits_my_login_logs_list", "audits_my_login_logs_retrieve", "audits_operate_logs_list", "audits_operate_logs_retrieve", "audits_service_access_logs_list", "audits_service_access_logs_retrieve", "audits_tickets_list", "audits_tickets_retrieve", "terminal_commands_list", "terminal_commands_retrieve", "terminal_sessions_list", "terminal_sessions_retrieve", "terminal_tasks_list", "terminal_tasks_retrieve"),
 	"platform.ops":           set("audits_job_logs_list", "audits_job_logs_retrieve", "audits_jobs_list", "audits_jobs_retrieve", "ops_jobs_list", "ops_jobs_retrieve", "ops_tasks_list", "ops_tasks_retrieve", "terminal_components_metrics_retrieve", "terminal_terminals_list", "terminal_terminals_retrieve"),
 }
+
+var generalScope = set(
+	"assets_platforms_list", "assets_platforms_retrieve",
+	"assets_nodes_list", "assets_nodes_retrieve", "assets_nodes_assets_list",
+	"assets_assets_list", "assets_assets_retrieve", "assets_categories_list", "assets_protocols_list",
+	"assets_hosts_list", "assets_hosts_retrieve", "assets_hosts_create",
+	"terminal_sessions_list", "terminal_sessions_retrieve", "terminal_commands_list", "terminal_commands_retrieve",
+	"terminal_tasks_list", "terminal_tasks_retrieve", "terminal_components_metrics_retrieve",
+	"terminal_terminals_list", "terminal_terminals_retrieve",
+	"audits_activities_list", "audits_job_logs_list", "audits_job_logs_retrieve",
+	"audits_jobs_list", "audits_jobs_retrieve", "audits_login_logs_list", "audits_login_logs_retrieve",
+	"audits_my_login_logs_list", "audits_my_login_logs_retrieve", "audits_operate_logs_list", "audits_operate_logs_retrieve",
+	"audits_service_access_logs_list", "audits_service_access_logs_retrieve", "audits_tickets_list", "audits_tickets_retrieve",
+	"ops_jobs_list", "ops_jobs_retrieve", "ops_tasks_list", "ops_tasks_retrieve",
+)
 
 func set(values ...string) map[string]bool {
 	result := make(map[string]bool, len(values))
@@ -793,16 +964,35 @@ func set(values ...string) map[string]bool {
 	return result
 }
 func profileEnabled(profile string, principal domain.Principal) bool {
-	return profile == "platform.management" && (principal.IsSuperuser || principal.IsOrgAdmin) || scopes[profile] != nil
+	return profile == "general" || profile == "platform.management" && (principal.IsSuperuser || principal.IsOrgAdmin) || scopes[profile] != nil
 }
-func operationAllowed(profile string, operation operation, methods map[string]bool) bool {
-	if !methods[operation.Method] || sensitivePath(operation.Path) {
+func operationAllowed(profile string, principal domain.Principal, operation operation, methods map[string]bool) bool {
+	if !methods[operation.Method] || sensitivePath(operation.Path) || operation.PermissionDynamic || !hasAllPermissions(principal, operation.RequiredPermissions) {
 		return false
+	}
+	if profile == "general" {
+		return generalScope[operation.ID]
 	}
 	if profile == "platform.management" {
 		return true
 	}
 	return scopes[profile][operation.ID]
+}
+
+func hasAllPermissions(principal domain.Principal, required []string) bool {
+	if principal.IsSuperuser {
+		return true
+	}
+	available := make(map[string]struct{}, len(principal.Permissions))
+	for _, permission := range principal.Permissions {
+		available[permission] = struct{}{}
+	}
+	for _, permission := range required {
+		if _, ok := available[permission]; !ok {
+			return false
+		}
+	}
+	return true
 }
 func sensitivePath(path string) bool {
 	lowered := strings.ToLower(path)
@@ -814,7 +1004,7 @@ func sensitivePath(path string) bool {
 	return strings.Contains(lowered, "chat-ai")
 }
 
-func searchOperations(registry *registry, profile, query string, limit int, methods map[string]bool) []map[string]any {
+func searchOperations(registry *registry, profile string, principal domain.Principal, query string, limit int, methods map[string]bool) []map[string]any {
 	tokens := tokenize(query)
 	type scored struct {
 		score     int
@@ -822,7 +1012,7 @@ func searchOperations(registry *registry, profile, query string, limit int, meth
 	}
 	ranked := []scored{}
 	for _, operation := range registry.Operations {
-		if !operationAllowed(profile, operation, methods) {
+		if !operationAllowed(profile, principal, operation, methods) {
 			continue
 		}
 		haystack := strings.ToLower(strings.Join([]string{operation.ID, operation.Summary, operation.Description, operation.Path, operation.Method, strings.Join(operation.Tags, " ")}, " "))
@@ -848,7 +1038,86 @@ func searchOperations(registry *registry, profile, query string, limit int, meth
 	result := make([]map[string]any, 0, len(ranked))
 	for _, item := range ranked {
 		operation := item.operation
-		result = append(result, map[string]any{"operation_id": operation.ID, "method": operation.Method, "path": operation.Path, "summary": operation.Summary, "description": boundedString(operation.Description, 500), "tags": operation.Tags, "risk_level": methodRisk(operation.Method), "requires_approval": operation.Method != http.MethodGet, "path_parameters": operation.PathParams, "query_parameters": operation.QueryParams, "request_body_schema": operation.Body})
+		result = append(result, map[string]any{"operation_id": operation.ID, "method": operation.Method, "path": operation.Path, "summary": operation.Summary, "description": boundedString(operation.Description, 500), "tags": operation.Tags, "risk_level": methodRisk(operation.Method), "requires_approval": requiresApproval(operation.Method), "path_parameters": compactParameters(operation.PathParams), "query_parameters": compactParameters(operation.QueryParams), "request_body_schema": compactSchema(operation.Body, 0)})
+	}
+	return result
+}
+
+func compactParameters(parameters []parameter) []map[string]any {
+	result := make([]map[string]any, 0, len(parameters))
+	for _, parameter := range parameters {
+		result = append(result, map[string]any{
+			"name":     parameter.Name,
+			"required": parameter.Required,
+			"style":    parameter.Style,
+			"explode":  parameter.Explode,
+			"schema":   compactSchema(parameter.Schema, 0),
+		})
+	}
+	return result
+}
+
+func compactSchema(value any, depth int) any {
+	if depth > 5 {
+		return map[string]any{}
+	}
+	item, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	result := make(map[string]any)
+	for _, key := range []string{"type", "format", "enum", "nullable", "default", "minimum", "maximum", "minLength", "maxLength", "pattern", "minItems", "maxItems", "additionalProperties"} {
+		if child, exists := item[key]; exists {
+			if object, nested := child.(map[string]any); nested {
+				result[key] = compactSchema(object, depth+1)
+			} else {
+				result[key] = child
+			}
+		}
+	}
+	if description, ok := item["description"].(string); ok && description != "" {
+		result["description"] = boundedString(description, 240)
+	}
+	keptProperties := map[string]bool{}
+	if properties, ok := item["properties"].(map[string]any); ok {
+		compact := make(map[string]any, len(properties))
+		for name, child := range properties {
+			if sensitiveKey(name) {
+				continue
+			}
+			compact[name] = compactSchema(child, depth+1)
+			keptProperties[name] = true
+		}
+		result["properties"] = compact
+	}
+	if required, ok := item["required"].([]any); ok {
+		compact := make([]any, 0, len(required))
+		for _, rawName := range required {
+			name, _ := rawName.(string)
+			if len(keptProperties) == 0 || keptProperties[name] {
+				compact = append(compact, rawName)
+			}
+		}
+		if len(compact) > 0 {
+			result["required"] = compact
+		}
+	}
+	if items, exists := item["items"]; exists {
+		result["items"] = compactSchema(items, depth+1)
+	}
+	for _, key := range []string{"oneOf", "anyOf", "allOf"} {
+		choices, ok := item[key].([]any)
+		if !ok {
+			continue
+		}
+		if len(choices) > 8 {
+			choices = choices[:8]
+		}
+		compact := make([]any, len(choices))
+		for index, choice := range choices {
+			compact[index] = compactSchema(choice, depth+1)
+		}
+		result[key] = compact
 	}
 	return result
 }
@@ -856,7 +1125,19 @@ func searchOperations(registry *registry, profile, query string, limit int, meth
 var wordPattern = regexp.MustCompile(`[\p{L}\p{N}_/-]+`)
 
 func tokenize(value string) []string {
-	raw := wordPattern.FindAllString(strings.ToLower(value), -1)
+	normalized := strings.ToLower(value)
+	aliases := []struct{ source, target string }{
+		{"创建", "create"}, {"新建", "create"}, {"主机", "host"}, {"服务器", "host"}, {"机器", "host"},
+		{"资产", "asset"}, {"平台", "platform"}, {"节点", "node"}, {"查询", "list"}, {"查看", "list"},
+		{"删除", "delete"}, {"修改", "update"}, {"会话", "session"}, {"命令", "command"}, {"任务", "task"},
+		{"作业", "job"}, {"用户", "user"}, {"登录", "login"}, {"审计", "audit"},
+	}
+	for _, alias := range aliases {
+		if strings.Contains(normalized, alias.source) {
+			normalized += " " + alias.target
+		}
+	}
+	raw := wordPattern.FindAllString(normalized, -1)
 	seen := map[string]bool{}
 	result := []string{}
 	for _, group := range raw {

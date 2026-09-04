@@ -28,7 +28,7 @@ func TestComponentRegistrationModelConfigAndHeartbeat(t *testing.T) {
 			_, _ = response.Write([]byte(`{"service_account":{"access_key":{"id":"access-id","secret":"access-secret"}}}`))
 		case terminalConfigPath:
 			assertSigned(t, request)
-			_, _ = response.Write([]byte(`{"CHAT_AI_ENABLED":true,"CHAT_AI_METHOD":"api","CHAT_AI_PROVIDER":"openai_compatible","CHAT_AI_BASE_URL":"https://model.example.test/v1","CHAT_AI_API_KEY":"model-secret","CHAT_AI_MODEL":"model-1"}`))
+			_, _ = response.Write([]byte(`{"CHAT_AI_ENABLED":true,"CHAT_AI_PROVIDER":"openai_compatible","CHAT_AI_BASE_URL":"https://model.example.test/v1","CHAT_AI_API_KEY":"model-secret","CHAT_AI_MODEL":"model-1"}`))
 		case heartbeatPath:
 			assertSigned(t, request)
 			_, _ = response.Write([]byte(`[]`))

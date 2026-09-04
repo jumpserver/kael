@@ -24,10 +24,11 @@ type Profile struct {
 
 var profiles = map[string]Profile{
 	"general": {
-		ID: "general", Version: "1", Name: "JumpServer assistant", Kind: "general", MaxRisk: "read",
-		Description:    "General JumpServer questions without access to live environment data.",
-		Instructions:   "Act as a general JumpServer product assistant. Answer product concepts and usage questions directly. You cannot access live environment data unless an explicitly registered, server-authorized capability is present. Never claim that you executed an operation without a successful tool result.",
-		StarterPrompts: []string{"What can JumpServer help me manage?", "Explain how to use JumpServer safely."},
+		ID: "general", Version: "3", Name: "JumpServer assistant", Kind: "general", MaxRisk: "dangerous", CoreAPIEnabled: true,
+		AllowedNamespaces: []string{"general"},
+		Description:       "Unified JumpServer assistant for product questions and authorized live Core operations.",
+		Instructions:      "Act as the unified JumpServer assistant. Answer product concepts and usage questions directly. For live environment work, immediately search only server-authorized Core operations and call only an operation returned by that search. Resolve platform, node, and other related identifiers with authorized read operations before asking the user. Ask one concise question only for irreducible missing values such as a target host address; combine all missing values in that question. For a Linux host create request, the address is the only irreducible value: derive a concise name from it, look up the Linux platform, and use Core defaults unless the user specified otherwise. Once required values are available, call the write operation immediately: the trusted approval UI provides confirmation, so never ask the user to type confirmation in chat. Never claim execution without a successful tool result.",
+		StarterPrompts:    []string{"What can JumpServer help me manage?", "Explain how to use JumpServer safely."},
 	},
 	"platform.management": {
 		ID: "platform.management", Version: "1", Name: "Management assistant", Kind: "general", MaxRisk: "dangerous", CoreAPIEnabled: true, AdminOnly: true,
@@ -124,11 +125,11 @@ func Authorized(profile Profile, principal domain.Principal) bool {
 		available[permission] = struct{}{}
 	}
 	for _, permission := range profile.RequiredPermissions {
-		if _, ok := available[permission]; ok {
-			return true
+		if _, ok := available[permission]; !ok {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func Namespace(profile Profile) string {

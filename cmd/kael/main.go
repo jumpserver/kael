@@ -65,7 +65,15 @@ func run(configPath string, logger *zap.Logger) error {
 	if err != nil {
 		return err
 	}
-	runtimeStore, err := store.NewJSONL(settings.RuntimeDataFolderPath)
+	var runtimeStore ports.Store
+	switch settings.RuntimeStore {
+	case "core":
+		runtimeStore, err = store.NewCore(componentClient)
+	case "jsonl":
+		runtimeStore, err = store.NewJSONL(settings.RuntimeDataFolderPath)
+	default:
+		return fmt.Errorf("unsupported runtime store %q", settings.RuntimeStore)
+	}
 	if err != nil {
 		return err
 	}
@@ -74,12 +82,12 @@ func run(configPath string, logger *zap.Logger) error {
 	bus := event.NewBus()
 	var capability ports.CapabilityProvider
 	if settings.PlatformGatewayEnabled {
-		capability, err = platformgateway.New(platformgateway.Config{CoreURL: settings.CoreHost, CoreTLSVerify: tlsVerify, DelegationKey: settings.PlatformDelegationKey, DelegationKeyID: settings.PlatformDelegationID, Issuer: settings.PlatformIssuer, Audience: settings.PlatformAudience, CACert: settings.PlatformCACert, ClientCert: settings.PlatformClientCert, ClientKey: settings.PlatformClientKey, AllowedMethods: settings.PlatformAllowedMethods, RegistryTTL: settings.PlatformRegistryTTL, Timeout: settings.PlatformTimeout, MaxResponse: settings.PlatformMaxResponse})
+		capability, err = platformgateway.New(platformgateway.Config{CoreURL: settings.CoreHost, CoreTLSVerify: tlsVerify, DelegationKey: settings.PlatformDelegationKey, DelegationKeyID: settings.PlatformDelegationID, Issuer: settings.PlatformIssuer, Audience: settings.PlatformAudience, CACert: settings.PlatformCACert, ClientCert: settings.PlatformClientCert, ClientKey: settings.PlatformClientKey, AllowedMethods: settings.PlatformAllowedMethods, RegistryTTL: settings.PlatformRegistryTTL, Timeout: settings.PlatformTimeout, MaxResponse: settings.PlatformMaxResponse, OpenAPILoader: componentClient.OpenAPISchema})
 		if err != nil {
 			return err
 		}
 	}
-	runtimeService, err := service.New(service.Options{Store: runtimeStore, Provider: provider, Bus: bus, Logger: logger, InstanceID: settings.Name, Workers: 4, ArtifactDir: settings.ArtifactFolderPath, Capability: capability, StorageKind: "jsonl", StorageDurable: true})
+	runtimeService, err := service.New(service.Options{Store: runtimeStore, Provider: provider, Bus: bus, Logger: logger, InstanceID: settings.Name, Workers: 4, ArtifactDir: settings.ArtifactFolderPath, Capability: capability, StorageKind: settings.RuntimeStore, StorageDurable: true})
 	if err != nil {
 		return err
 	}
@@ -102,7 +110,7 @@ func run(configPath string, logger *zap.Logger) error {
 	heartbeatContext, cancelHeartbeat := context.WithCancel(context.Background())
 	defer cancelHeartbeat()
 	go componentClient.RunHeartbeat(heartbeatContext, logger)
-	logger.Info("kael started", zap.String("address", httpServer.Addr), zap.String("version", Version), zap.String("component", settings.Name), zap.String("model", provider.Info().Model), zap.String("storage", "jsonl"))
+	logger.Info("kael started", zap.String("address", httpServer.Addr), zap.String("version", Version), zap.String("component", settings.Name), zap.String("model", provider.Info().Model), zap.String("storage", settings.RuntimeStore))
 	signals, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	var serveErr error

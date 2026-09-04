@@ -53,6 +53,9 @@ func serviceError(kind ErrorKind, code, detail string, cause error) error {
 	return &Error{Kind: kind, Code: code, Detail: detail, cause: cause}
 }
 func translateStore(err error) error {
+	if errors.Is(err, ports.ErrUnavailable) {
+		return &Error{Kind: Unavailable, Code: "storage_unavailable", Detail: "runtime storage is temporarily unavailable", Retryable: true, cause: err}
+	}
 	if errors.Is(err, ports.ErrNotFound) {
 		return serviceError(NotFound, "not_found", "resource was not found", err)
 	}
@@ -204,6 +207,20 @@ func (s *Service) Metrics(ctx context.Context) (map[string]int64, error) {
 		result, err = tx.RuntimeMetrics(time.Now().UTC().Add(-24 * time.Hour))
 		return err
 	})
+	if err != nil {
+		return nil, err
+	}
+	if metricsStore, ok := s.store.(interface {
+		PersistenceMetrics(context.Context) (map[string]int64, error)
+	}); ok {
+		persistenceMetrics, metricsErr := metricsStore.PersistenceMetrics(ctx)
+		if metricsErr != nil {
+			return nil, metricsErr
+		}
+		for key, value := range persistenceMetrics {
+			result[key] = value
+		}
+	}
 	return result, err
 }
 func (s *Service) Bootstrap() map[string]any {
@@ -293,6 +310,9 @@ func (s *Service) CreateConversation(ctx context.Context, principal domain.Princ
 	if !policy.Authorized(profile, principal) {
 		return nil, serviceError(Forbidden, "profile_forbidden", "runtime profile is not available", nil)
 	}
+	if profile.CoreAPIEnabled && s.capability == nil {
+		return nil, serviceError(Unavailable, "service_capability_unavailable", "this assistant requires the configured Platform Gateway", nil)
+	}
 	kind := strings.TrimSpace(request.Kind)
 	if kind == "" {
 		kind = profile.Kind
@@ -312,7 +332,7 @@ func (s *Service) CreateConversation(ctx context.Context, principal domain.Princ
 		return nil, serviceError(Invalid, "invalid_metadata", "conversation metadata is invalid", err)
 	}
 	now := time.Now().UTC()
-	conversation := &domain.Conversation{ID: uuid.NewString(), SubjectID: principal.SubjectID, OrganizationID: principal.OrganizationID, Kind: kind, Assistant: assistant, Profile: profile.ID, Surface: bounded(request.Surface, 128), Title: request.Title, Status: "active", Metadata: metadata, Version: 1, CreatedAt: now, UpdatedAt: now}
+	conversation := &domain.Conversation{ID: uuid.NewString(), SubjectID: principal.SubjectID, SubjectName: principal.Name, SubjectUsername: principal.Username, OrganizationID: principal.OrganizationID, Kind: kind, Assistant: assistant, Profile: profile.ID, Surface: bounded(request.Surface, 128), Title: request.Title, Status: "active", Metadata: metadata, Version: 1, CreatedAt: now, UpdatedAt: now}
 	if err = s.store.Transaction(ctx, func(tx ports.Tx) error {
 		if createErr := tx.CreateConversation(conversation); createErr != nil {
 			return createErr
@@ -390,6 +410,9 @@ func (s *Service) UpdateConversation(ctx context.Context, principal domain.Princ
 			profile, ok := policy.Get(*request.Assistant)
 			if !ok || profile.Kind != value.Kind || !policy.Authorized(profile, principal) {
 				return serviceError(Invalid, "invalid_assistant", "assistant is invalid", nil)
+			}
+			if profile.CoreAPIEnabled && s.capability == nil {
+				return serviceError(Unavailable, "service_capability_unavailable", "this assistant requires the configured Platform Gateway", nil)
 			}
 			value.Assistant, value.Profile = strings.TrimPrefix(profile.ID, "platform."), profile.ID
 		}
