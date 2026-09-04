@@ -185,7 +185,7 @@ func modelConfig(value terminalConfig) (kaelmodel.HTTPConfig, error) {
 		APIKey:          strings.TrimSpace(value.ChatAIAPIKey),
 		Model:           strings.TrimSpace(value.ChatAIModel),
 		Proxy:           strings.TrimSpace(value.ChatAIProxy),
-		ReasoningEffort: "medium",
+		ReasoningEffort: "low",
 		Timeout:         5 * time.Minute,
 	}
 	if config.Provider == "" {
