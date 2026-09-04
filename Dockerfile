@@ -1,4 +1,4 @@
-FROM golang:1.26.3-trixie AS stage-build
+FROM jumpserver/kael-base:20260904_062559 AS stage-build
 ARG TARGETARCH
 
 WORKDIR /opt/kael
