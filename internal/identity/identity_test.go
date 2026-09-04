@@ -47,3 +47,24 @@ func TestVerifyCSRFSupportsJumpServerCookiePrefix(t *testing.T) {
 		t.Fatalf("expected CSRF rejection, got %v", err)
 	}
 }
+
+func TestOriginVerifierIsDisabledWithoutAllowedOrigins(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "http://kael.internal/kael/api/v1/conversations", nil)
+	request.Header.Set("Origin", "https://jumpserver.example.test")
+	request.Header.Set("X-Forwarded-Host", "jumpserver.example.test")
+	request.Header.Set("X-Forwarded-Proto", "https")
+
+	if err := NewOriginVerifier(nil, false).Verify(request); err != nil {
+		t.Fatalf("default origin verification rejected a reverse-proxied request: %v", err)
+	}
+}
+
+func TestOriginVerifierIsEnabledWithAllowedOrigins(t *testing.T) {
+	verifier := NewOriginVerifier([]string{"https://jumpserver.example.test"}, false)
+	request := httptest.NewRequest(http.MethodPost, "http://kael.internal/kael/api/v1/conversations", nil)
+	request.Header.Set("Origin", "https://untrusted.example.test")
+
+	if err := verifier.Verify(request); err != ErrOriginRejected {
+		t.Fatalf("expected configured origin verification to reject request, got %v", err)
+	}
+}

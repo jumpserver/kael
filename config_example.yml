@@ -12,8 +12,9 @@ BOOTSTRAP_TOKEN: <PleaseChangeMe>
 # HTTP_REQUEST_TIMEOUT: 30
 # IGNORE_VERIFY_CERTS: false
 
-# 跨域部署时列出允许的 origin；同源部署保持为空。
+# 默认不校验 origin；如需启用校验，列出允许的 origin。
 # ALLOWED_ORIGINS: []
+# 仅在启用 origin 校验时，用于信任反向代理传入的 Host 和协议。
 # TRUST_FORWARDED_HEADERS: false
 
 # Platform Gateway 默认关闭。启用时使用以下平铺配置。
