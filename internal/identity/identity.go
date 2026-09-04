@@ -122,19 +122,27 @@ func uniqueStrings(values []string) []string {
 type OriginVerifier struct {
 	Allowed               map[string]struct{}
 	TrustForwardedHeaders bool
+	enabled               bool
 }
 
 func NewOriginVerifier(allowed []string, trustForwarded bool) *OriginVerifier {
 	values := make(map[string]struct{}, len(allowed))
+	enabled := false
 	for _, value := range allowed {
+		if strings.TrimSpace(value) != "" {
+			enabled = true
+		}
 		if normalized := normalizeOrigin(value); normalized != "" {
 			values[normalized] = struct{}{}
 		}
 	}
-	return &OriginVerifier{Allowed: values, TrustForwardedHeaders: trustForwarded}
+	return &OriginVerifier{Allowed: values, TrustForwardedHeaders: trustForwarded, enabled: enabled}
 }
 
 func (v *OriginVerifier) Verify(request *http.Request) error {
+	if !v.enabled {
+		return nil
+	}
 	origin := strings.TrimSpace(request.Header.Get("Origin"))
 	if origin == "" {
 		return nil
