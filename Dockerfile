@@ -1,6 +1,10 @@
 FROM golang:1.26-bookworm AS builder
+ARG TARGETARCH
 
 WORKDIR /opt/kael
+RUN wget https://github.com/jumpserver-dev/healthcheck/releases/latest/download/check_linux_${TARGETARCH}.deb \
+    && dpkg -i check_linux_${TARGETARCH}.deb \
+    && rm -f check_linux_${TARGETARCH}.deb
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
@@ -14,6 +18,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/kael
 COPY --from=builder /opt/kael/kael ./kael
+COPY --from=builder /usr/local/bin/check /usr/local/bin/check
 COPY config_example.yml ./config_example.yml
 COPY entrypoint.sh ./entrypoint.sh
 RUN chmod 0755 ./entrypoint.sh ./kael
