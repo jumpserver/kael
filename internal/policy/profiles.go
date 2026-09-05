@@ -55,6 +55,12 @@ var profiles = map[string]Profile{
 		Description:  "Job, task, component, and terminal health diagnosis.",
 		Instructions: "Focus on jobs, tasks, component metrics, and terminal health. Cite returned timestamps and status values, and recommend the smallest safe follow-up check.",
 	},
+	"workspace": {
+		ID: "workspace", Version: "1", Name: "Workspace assistant", Kind: "capability", MaxRisk: "dangerous", AllowedNamespaces: []string{"luna.workspace"},
+		Description:    "Find authorized assets, follow them in the Luna workspace, and start an approved connection when the target is unambiguous.",
+		Instructions:   "Act as the Luna workspace assistant. Search only the user's authorized connectable assets. Never choose among multiple assets, protocols, or accounts: present the candidates and ask the user to select. Reveal the selected asset in the workspace before preparing a connection. When the asset, protocol, and account are all unique, connect it only through the trusted connection capability and its approval UI. Otherwise open the prefilled connection setup and wait for the user's selection. Never request, expose, or infer passwords, tokens, tickets, cookies, or connection URLs. Report a session_started tool result only as a Luna session start; never claim that remote authentication or login completed.",
+		StarterPrompts: []string{"Connect me to an authorized asset.", "Find an asset in my workspace."},
+	},
 	"terminal": {
 		ID: "terminal", Version: "1", Name: "Terminal assistant", Kind: "capability", MaxRisk: "dangerous", AllowedNamespaces: []string{"luna.terminal"},
 		Instructions: "This is a live audited resource terminal. Follow registered tool descriptions and the declared command language. Never assume an operating-system shell when context identifies another language.",
@@ -74,6 +80,12 @@ var profiles = map[string]Profile{
 }
 
 var capabilityCatalog = map[string]map[string]domain.ToolAnnotations{
+	"workspace": {
+		"search_connectable_assets": {ReadOnly: true, Idempotent: true},
+		"reveal_asset":              {ReadOnly: true, Idempotent: true},
+		"prepare_asset_connection":  {ReadOnly: true},
+		"connect_asset":             {OpenWorld: true},
+	},
 	"terminal": {
 		"terminal_context":  {ReadOnly: true, Idempotent: true},
 		"terminal_snapshot": {ReadOnly: true, Idempotent: true, OpenWorld: true},
@@ -104,7 +116,7 @@ func Get(id string) (Profile, bool) {
 
 func Available(principal domain.Principal) []Profile {
 	result := make([]Profile, 0, len(profiles))
-	for _, id := range []string{"general", "platform.management", "platform.asset", "platform.session_audit", "platform.ops", "terminal", "file", "sql", "script"} {
+	for _, id := range []string{"general", "workspace", "platform.management", "platform.asset", "platform.session_audit", "platform.ops", "terminal", "file", "sql", "script"} {
 		profile := profiles[id]
 		if Authorized(profile, principal) {
 			result = append(result, profile)
@@ -142,6 +154,26 @@ func Namespace(profile Profile) string {
 	return ""
 }
 
+func ApprovalModeAllowed(profile Profile, mode string) bool {
+	if mode != "always" && mode != "auto" && mode != "never" {
+		return false
+	}
+	return profile.ID != "workspace" || mode != "never"
+}
+
+func ConfirmationRequired(profile Profile, capability string, registered bool, approvalMode string) bool {
+	if profile.ID == "workspace" && capability == "connect_asset" {
+		return true
+	}
+	if approvalMode == "always" {
+		return true
+	}
+	if approvalMode == "never" && ApprovalModeAllowed(profile, approvalMode) {
+		return false
+	}
+	return registered
+}
+
 func EnforceRegistration(profile Profile, name string, supplied domain.ToolAnnotations) (domain.ToolAnnotations, string, bool, error) {
 	name = strings.TrimSpace(name)
 	trusted, known := capabilityCatalog[profile.ID][name]
@@ -156,7 +188,7 @@ func EnforceRegistration(profile Profile, name string, supplied domain.ToolAnnot
 	result.Destructive = trusted.Destructive || supplied.Destructive
 	result.OpenWorld = trusted.OpenWorld || supplied.OpenWorld
 	result.Idempotent = trusted.Idempotent && supplied.Idempotent
-	result.FinalResult = supplied.FinalResult && (profile.ID == "sql" || profile.ID == "script")
+	result.FinalResult = supplied.FinalResult && (profile.ID == "sql" || profile.ID == "script" || profile.ID == "workspace" && name == "connect_asset")
 	risk := "write"
 	if result.ReadOnly {
 		risk = "read"
