@@ -138,7 +138,7 @@ func (s *Service) startServiceCapability(ctx context.Context, run *domain.Run, c
 				return serviceError(Conflict, "approval_required", "service capability invocation is not approved", nil)
 			}
 			if storedApproval.ExpiresAt.Before(now) {
-				if approvalErr = expireApproval(tx, storedApproval, now); approvalErr != nil {
+				if approvalErr = event.ExpireApproval(tx, storedApproval, now); approvalErr != nil {
 					return approvalErr
 				}
 				approvalExpired = true
@@ -176,6 +176,7 @@ func (s *Service) startServiceCapability(ctx context.Context, run *domain.Run, c
 		return translateOrService(err)
 	}
 	if approvalExpired {
+		s.bus.Notify(run.PanelSessionID)
 		return serviceError(Conflict, "approval_expired", "approval expired before the operation was dispatched", nil)
 	}
 	s.bus.Notify(notify...)

@@ -186,6 +186,9 @@ func snapshotRegistration(value domain.Registration) domain.RunRegistrationSnaps
 }
 func runEventPayload(run *domain.Run) map[string]any {
 	payload := map[string]any{"state": run.State, "execution_mode": run.ExecutionMode, "capability_mode": run.CapabilityMode, "partial": run.Partial, "finish_reason": run.FinishReason, "error_code": run.ErrorCode, "reason": run.ErrorDetail}
+	if run.CancelReason != "" {
+		payload["cancel_reason"] = run.CancelReason
+	}
 	if len(run.Failure) > 0 {
 		payload["failure"] = json.RawMessage(run.Failure)
 	}
@@ -254,6 +257,9 @@ func (s *Service) CancelRun(ctx context.Context, principal domain.Principal, id,
 		if approval, approvalErr := tx.PendingApprovalForRun(run.ID, true); approvalErr == nil {
 			approval.State, approval.Reason, approval.ResolvedAt, approval.UpdatedAt = "cancelled", "run cancelled", &now, now
 			if err = tx.SaveApproval(approval); err != nil {
+				return err
+			}
+			if err = event.ResolveApproval(tx, approval, now); err != nil {
 				return err
 			}
 		}
@@ -455,7 +461,7 @@ func (s *Service) execute(run *domain.Run) {
 		// Only the run context's deadline means the whole task timed out.
 		if ctx.Err() != nil {
 			s.finishCancelled(run, outputMessage, ctx.Err())
-		} else if errors.Is(err, context.Canceled) {
+		} else if errors.Is(err, context.Canceled) || isApprovalExpired(err) {
 			s.finishCancelled(run, outputMessage, err)
 		} else {
 			s.finishFailed(run, outputMessage, err)
@@ -601,4 +607,9 @@ func (s *Service) runtimeInput(ctx context.Context, run *domain.Run) (agentrunti
 		modelArtifacts[id] = parts
 	}
 	return agentruntime.Input{Run: *run, ProfileInstructions: profile.Instructions, Context: snapshot, Messages: messages, Registrations: registrations, Artifacts: modelArtifacts, MaxRounds: domain.MaxRounds, MaxModelRequests: domain.MaxModelRequests}, output, nil
+}
+
+func isApprovalExpired(err error) bool {
+	var value *Error
+	return errors.As(err, &value) && value.Code == "approval_expired"
 }
