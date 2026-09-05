@@ -18,46 +18,35 @@ func TestWorkspaceProfileIsAvailable(t *testing.T) {
 	}
 }
 
-func TestWorkspaceProfileRejectsUnknownCapability(t *testing.T) {
-	profile, _ := Get("workspace")
-	if _, _, _, err := EnforceRegistration(profile, "click", domain.ToolAnnotations{}); err == nil {
-		t.Fatal("workspace profile accepted an unknown capability")
+func TestRegistrationPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		annotations  domain.ToolAnnotations
+		risk         string
+		confirmation bool
+	}{
+		{"default", domain.ToolAnnotations{}, "write", true},
+		{"read", domain.ToolAnnotations{ReadOnly: true, Idempotent: true}, "read", false},
+		{"external read", domain.ToolAnnotations{ReadOnly: true, OpenWorld: true}, "read", true},
+		{"destructive read", domain.ToolAnnotations{ReadOnly: true, Destructive: true}, "dangerous", true},
+		{"external write", domain.ToolAnnotations{OpenWorld: true}, "dangerous", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			risk, confirmation := RegistrationPolicy(tc.annotations)
+			if risk != tc.risk || confirmation != tc.confirmation {
+				t.Fatalf("policy = %s, %t", risk, confirmation)
+			}
+		})
 	}
 }
 
-func TestWorkspaceCapabilityPolicy(t *testing.T) {
-	profile, _ := Get("workspace")
-	readAnnotations := domain.ToolAnnotations{ReadOnly: true, Idempotent: true, FinalResult: true}
-	for _, name := range []string{"search_connectable_assets", "reveal_asset"} {
-		annotations, risk, confirmation, err := EnforceRegistration(profile, name, readAnnotations)
-		if err != nil || risk != "read" || confirmation || !annotations.ReadOnly || !annotations.Idempotent || annotations.FinalResult {
-			t.Fatalf("unexpected %s policy: annotations=%+v risk=%q confirmation=%t err=%v", name, annotations, risk, confirmation, err)
+func TestPanelApprovalModes(t *testing.T) {
+	for _, registered := range []bool{false, true} {
+		for _, mode := range []string{"auto", "always", "never"} {
+			want := mode == "always" || mode == "auto" && registered
+			if ConfirmationRequired(registered, mode) != want {
+				t.Fatalf("unexpected confirmation: registered=%t mode=%s", registered, mode)
+			}
 		}
-	}
-	annotations, risk, confirmation, err := EnforceRegistration(profile, "prepare_asset_connection", readAnnotations)
-	if err != nil || risk != "read" || confirmation || !annotations.ReadOnly || annotations.Idempotent || annotations.FinalResult {
-		t.Fatalf("unexpected prepare_asset_connection policy: annotations=%+v risk=%q confirmation=%t err=%v", annotations, risk, confirmation, err)
-	}
-
-	annotations, risk, confirmation, err = EnforceRegistration(profile, "connect_asset", domain.ToolAnnotations{ReadOnly: true, Idempotent: true, FinalResult: true})
-	if err != nil || risk != "dangerous" || !confirmation || annotations.ReadOnly || annotations.Idempotent || !annotations.OpenWorld || !annotations.FinalResult {
-		t.Fatalf("unexpected connect_asset policy: annotations=%+v risk=%q confirmation=%t err=%v", annotations, risk, confirmation, err)
-	}
-}
-
-func TestWorkspaceConnectionConfirmationCannotBeDisabled(t *testing.T) {
-	workspace, _ := Get("workspace")
-	if ApprovalModeAllowed(workspace, "never") {
-		t.Fatal("workspace profile accepted approval mode never")
-	}
-	for _, mode := range []string{"always", "auto", "never"} {
-		if !ConfirmationRequired(workspace, "connect_asset", false, mode) {
-			t.Fatalf("workspace connect_asset confirmation was disabled in mode %q", mode)
-		}
-	}
-
-	general, _ := Get("general")
-	if !ApprovalModeAllowed(general, "never") || ConfirmationRequired(general, "other_tool", true, "never") {
-		t.Fatal("workspace safeguard changed the existing general profile approval behavior")
 	}
 }

@@ -1,7 +1,6 @@
 package policy
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/jumpserver/kael/internal/domain"
@@ -58,7 +57,7 @@ var profiles = map[string]Profile{
 	"workspace": {
 		ID: "workspace", Version: "1", Name: "Workspace assistant", Kind: "capability", MaxRisk: "dangerous", AllowedNamespaces: []string{"luna.workspace"},
 		Description:    "Find authorized assets, follow them in the Luna workspace, and start an approved connection when the target is unambiguous.",
-		Instructions:   "Act as the Luna workspace assistant. Search only the user's authorized connectable assets. Never choose among multiple assets, protocols, or accounts: present the candidates and ask the user to select. Reveal the selected asset in the workspace before preparing a connection. When the asset, protocol, and account are all unique, connect it only through the trusted connection capability and its approval UI. Otherwise open the prefilled connection setup and wait for the user's selection. Never request, expose, or infer passwords, tokens, tickets, cookies, or connection URLs. Report a session_started tool result only as a Luna session start; never claim that remote authentication or login completed.",
+		Instructions:   "Act as the Luna workspace assistant. Search only the user's authorized connectable assets. Never choose among multiple assets, protocols, or accounts: present the candidates and ask the user to select. Reveal the selected asset in the workspace before preparing a connection. When the asset, protocol, and account are all unique, connect it only through the trusted connection capability, following its registered policy and the user's approval mode. Otherwise open the prefilled connection setup and wait for the user's selection. Never request, expose, or infer passwords, tokens, tickets, cookies, or connection URLs. Report a session_started tool result only as a Luna session start; never claim that remote authentication or login completed.",
 		StarterPrompts: []string{"Connect me to an authorized asset.", "Find an asset in my workspace."},
 	},
 	"terminal": {
@@ -76,33 +75,6 @@ var profiles = map[string]Profile{
 	"script": {
 		ID: "script", Version: "1", Name: "Script assistant", Kind: "capability", MaxRisk: "write", AllowedNamespaces: []string{"luna.script"},
 		Instructions: "This is a draft-only script editor. Read current script before analysis, propose changes using the latest revision, and never claim a proposal was saved or executed. Never request secret values.",
-	},
-}
-
-var capabilityCatalog = map[string]map[string]domain.ToolAnnotations{
-	"workspace": {
-		"search_connectable_assets": {ReadOnly: true, Idempotent: true},
-		"reveal_asset":              {ReadOnly: true, Idempotent: true},
-		"prepare_asset_connection":  {ReadOnly: true},
-		"connect_asset":             {OpenWorld: true},
-	},
-	"terminal": {
-		"terminal_context":  {ReadOnly: true, Idempotent: true},
-		"terminal_snapshot": {ReadOnly: true, Idempotent: true, OpenWorld: true},
-		"database_schema":   {ReadOnly: true, Idempotent: true, OpenWorld: true},
-		"execute_command":   {OpenWorld: true}, "execute_shell": {OpenWorld: true}, "execute_sql": {OpenWorld: true}, "execute_redis": {OpenWorld: true}, "execute_mongodb": {OpenWorld: true},
-	},
-	"file": {
-		"list_directory": {ReadOnly: true, Idempotent: true}, "stat": {ReadOnly: true, Idempotent: true},
-		"read_text": {ReadOnly: true, Idempotent: true, OpenWorld: true},
-		"save_text": {Destructive: true}, "mkdir": {Destructive: true}, "rename": {Destructive: true}, "delete": {Destructive: true},
-	},
-	"sql": {
-		"read_sql_context": {ReadOnly: true, Idempotent: true}, "inspect_schema": {ReadOnly: true, Idempotent: true, OpenWorld: true},
-		"validate_sql": {ReadOnly: true, Idempotent: true}, "propose_sql": {ReadOnly: true, Idempotent: true},
-	},
-	"script": {
-		"read_script": {ReadOnly: true, Idempotent: true}, "propose_script": {ReadOnly: true, Idempotent: true},
 	},
 }
 
@@ -154,53 +126,28 @@ func Namespace(profile Profile) string {
 	return ""
 }
 
-func ApprovalModeAllowed(profile Profile, mode string) bool {
-	if mode != "always" && mode != "auto" && mode != "never" {
-		return false
-	}
-	return profile.ID != "workspace" || mode != "never"
-}
-
-func ConfirmationRequired(profile Profile, capability string, registered bool, approvalMode string) bool {
-	if profile.ID == "workspace" && capability == "connect_asset" {
-		return true
-	}
+// ConfirmationRequired combines the registered policy with the user's panel mode.
+func ConfirmationRequired(registered bool, approvalMode string) bool {
 	if approvalMode == "always" {
 		return true
 	}
-	if approvalMode == "never" && ApprovalModeAllowed(profile, approvalMode) {
+	if approvalMode == "never" {
 		return false
 	}
 	return registered
 }
 
-func EnforceRegistration(profile Profile, name string, supplied domain.ToolAnnotations) (domain.ToolAnnotations, string, bool, error) {
-	name = strings.TrimSpace(name)
-	trusted, known := capabilityCatalog[profile.ID][name]
-	if !known {
-		if !strings.HasPrefix(profile.ID, "platform.") {
-			return domain.ToolAnnotations{}, "", false, fmt.Errorf("capability %q is not allowed by profile", name)
-		}
-		trusted = domain.ToolAnnotations{Destructive: true, OpenWorld: true}
-	}
-	result := trusted
-	result.ReadOnly = trusted.ReadOnly && supplied.ReadOnly
-	result.Destructive = trusted.Destructive || supplied.Destructive
-	result.OpenWorld = trusted.OpenWorld || supplied.OpenWorld
-	result.Idempotent = trusted.Idempotent && supplied.Idempotent
-	result.FinalResult = supplied.FinalResult && (profile.ID == "sql" || profile.ID == "script" || profile.ID == "workspace" && name == "connect_asset")
+// RegistrationPolicy derives risk from the authenticated Luna client's annotations.
+// Missing annotations default to write with confirmation; names do not affect policy.
+func RegistrationPolicy(annotations domain.ToolAnnotations) (string, bool) {
 	risk := "write"
-	if result.ReadOnly {
+	if annotations.ReadOnly {
 		risk = "read"
 	}
-	if result.Destructive || result.OpenWorld && !result.ReadOnly {
+	if annotations.Destructive || annotations.OpenWorld && !annotations.ReadOnly {
 		risk = "dangerous"
 	}
-	requiresConfirmation := risk != "read" || result.OpenWorld
-	if profile.ID == "sql" && name == "inspect_schema" {
-		requiresConfirmation = true
-	}
-	return result, risk, requiresConfirmation, nil
+	return risk, risk != "read" || annotations.OpenWorld
 }
 
 func RiskAllowed(maximum, actual string) bool {
