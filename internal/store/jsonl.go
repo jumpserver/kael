@@ -141,17 +141,20 @@ func recoverProcessLocalState(state *memoryState, now time.Time) {
 		if !activeRun(run.State) {
 			continue
 		}
+		run.Failure = tx.interruptedFailure(run, "process_restarted")
 		run.State, run.ErrorCode, run.ErrorDetail = "interrupted", "process_restarted", "run interrupted by Kael restart"
 		run.ClaimOwner, run.ClaimExpiresAt, run.UpdatedAt, run.FinishedAt = "", nil, now, cloneValue(now)
 		state.runs[id] = cloneStoredValue(run)
 		if message, exists := state.messages[run.OutputMessageID]; exists && message.Status != "completed" {
 			message.Status, message.ErrorCode, message.ErrorDetail, message.UpdatedAt = "cancelled", "process_restarted", "response interrupted by Kael restart", now
+			message.Failure = cloneRawMessage(run.Failure)
 			state.messages[message.ID] = cloneStoredValue(message)
 		}
+		payload, _ := json.Marshal(map[string]any{"state": "interrupted", "error_code": "process_restarted", "reason": "run interrupted by Kael restart", "failure": json.RawMessage(run.Failure)})
 		_ = tx.CreateEvent(&domain.DomainEvent{
 			ID: uuid.NewString(), ConversationID: run.ConversationID, RunID: run.ID, MessageID: run.OutputMessageID,
 			AggregateType: "run", AggregateID: run.ID, Type: "run.interrupted", SchemaVersion: "1",
-			Payload: json.RawMessage(`{"state":"interrupted","error_code":"process_restarted","reason":"run interrupted by Kael restart"}`), CreatedAt: now,
+			Payload: payload, CreatedAt: now,
 		})
 	}
 	for id, call := range state.modelCalls {

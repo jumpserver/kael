@@ -361,6 +361,16 @@ func tableContent(rows []any, preferred []string) map[string]any {
 			item[column] = displayScalar(row[column])
 		}
 		item["_key"] = firstValue(row["id"], row["pk"], index)
+		// Keep the resource identifier separate from the display key, whose
+		// fallback is only a row index and must never become a detail link.
+		switch id := firstValue(row["id"], row["pk"]).(type) {
+		case string:
+			if strings.TrimSpace(id) != "" {
+				item["_resource_id"] = id
+			}
+		case json.Number, float64:
+			item["_resource_id"] = fmt.Sprint(id)
+		}
 		tableRows = append(tableRows, item)
 	}
 	result := map[string]any{"columns": columns, "rows": tableRows}

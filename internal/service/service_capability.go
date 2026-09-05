@@ -176,7 +176,7 @@ func (s *Service) startServiceCapability(ctx context.Context, run *domain.Run, c
 		return translateOrService(err)
 	}
 	if approvalExpired {
-		return context.Canceled
+		return serviceError(Conflict, "approval_expired", "approval expired before the operation was dispatched", nil)
 	}
 	s.bus.Notify(notify...)
 	return nil

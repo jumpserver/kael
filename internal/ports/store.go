@@ -74,6 +74,7 @@ type Tx interface {
 	ToolCall(id string, lock bool) (*domain.ToolCall, error)
 	ActiveToolCall(runID string, lock bool) (*domain.ToolCall, error)
 	RunToolCallCount(runID string) (int64, error)
+	ListRunToolCalls(runID string) ([]domain.ToolCall, error)
 	SaveToolCall(*domain.ToolCall) error
 	LatestToolResult(toolCallID string) (*domain.ToolResult, error)
 	CreateToolResult(*domain.ToolResult) error

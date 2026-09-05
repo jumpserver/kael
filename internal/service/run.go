@@ -185,7 +185,11 @@ func snapshotRegistration(value domain.Registration) domain.RunRegistrationSnaps
 	return domain.RunRegistrationSnapshot{ID: value.ID, Name: value.Name, Description: value.Description, BindingKind: value.BindingKind, ExecutionBindingID: value.ExecutionBindingID, DefinitionVersion: value.DefinitionVersion, DefinitionDigest: value.DefinitionDigest, Risk: value.Risk, RequiresConfirmation: value.RequiresConfirmation, Annotations: value.Annotations(), InputSchema: append(json.RawMessage(nil), value.InputSchema...), OutputSchema: append(json.RawMessage(nil), value.OutputSchema...)}
 }
 func runEventPayload(run *domain.Run) map[string]any {
-	return map[string]any{"state": run.State, "execution_mode": run.ExecutionMode, "capability_mode": run.CapabilityMode, "partial": run.Partial, "finish_reason": run.FinishReason, "error_code": run.ErrorCode, "reason": run.ErrorDetail}
+	payload := map[string]any{"state": run.State, "execution_mode": run.ExecutionMode, "capability_mode": run.CapabilityMode, "partial": run.Partial, "finish_reason": run.FinishReason, "error_code": run.ErrorCode, "reason": run.ErrorDetail}
+	if len(run.Failure) > 0 {
+		payload["failure"] = json.RawMessage(run.Failure)
+	}
+	return payload
 }
 func (s *Service) Run(ctx context.Context, principal domain.Principal, id string) (*domain.Run, error) {
 	var value *domain.Run
@@ -223,8 +227,12 @@ func (s *Service) CancelRun(ctx context.Context, principal domain.Principal, id,
 		if err != nil {
 			return err
 		}
-		if run.Terminal() {
+		if run.Terminal() || run.State == "cancelling" {
 			return nil
+		}
+		run.Failure, err = describeFailure(tx, run, "cancelled", "", "continue")
+		if err != nil {
+			return err
 		}
 		panel, err := tx.Panel(run.PanelSessionID, principal, true)
 		if err != nil {
@@ -315,6 +323,7 @@ func (s *Service) ResumeRun(ctx context.Context, principal domain.Principal, id 
 		}
 		run.State, run.ErrorCode, run.ErrorDetail, run.ClaimOwner, run.ClaimExpiresAt, run.UpdatedAt = "queued", "", "", "", nil, now
 		run.FinishedAt = nil
+		run.Failure = nil
 		if err = tx.SaveRun(run); err != nil {
 			return err
 		}
@@ -442,7 +451,11 @@ func (s *Service) execute(run *domain.Run) {
 		}
 	}
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// Provider requests can time out while the overall run is still live.
+		// Only the run context's deadline means the whole task timed out.
+		if ctx.Err() != nil {
+			s.finishCancelled(run, outputMessage, ctx.Err())
+		} else if errors.Is(err, context.Canceled) {
 			s.finishCancelled(run, outputMessage, err)
 		} else {
 			s.finishFailed(run, outputMessage, err)
@@ -521,6 +534,7 @@ func (s *Service) runtimeInput(ctx context.Context, run *domain.Run) (agentrunti
 				return err
 			}
 			output = existing
+			output.Failure = nil
 			output.Status, output.Content, output.Parts, output.ErrorCode, output.ErrorDetail, output.InputTokens, output.OutputTokens, output.UpdatedAt = "streaming", "", json.RawMessage(`[]`), "", "", 0, 0, now
 			if err = tx.SaveMessage(output); err != nil {
 				return err
