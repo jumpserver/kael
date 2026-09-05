@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jumpserver/kael/internal/domain"
+	"github.com/jumpserver/kael/internal/event"
 	"github.com/jumpserver/kael/internal/ports"
 )
 
@@ -755,17 +756,10 @@ func (t *memoryTx) Maintain(now, eventCutoff time.Time) error {
 	if _, err := t.InterruptExpiredClaims(now); err != nil {
 		return err
 	}
-	for id, value := range t.state.approvals {
+	for _, value := range t.state.approvals {
 		if value.State == "pending" && value.ExpiresAt.Before(now) {
-			value.State, value.Reason = "expired", "approval expired"
-			value.ResolvedAt, value.UpdatedAt = cloneValue(now), now
-			t.state.approvals[id] = cloneStoredValue(value)
-			if call, exists := t.state.toolCalls[value.ToolCallID]; exists {
-				switch call.State {
-				case "created", "waiting_approval", "dispatched", "running":
-					call.State, call.FinishedAt, call.UpdatedAt = "timeout", cloneValue(now), now
-					t.state.toolCalls[call.ID] = cloneStoredValue(call)
-				}
+			if err := event.ExpireApproval(t, &value, now); err != nil {
+				return err
 			}
 		}
 	}

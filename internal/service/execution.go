@@ -307,7 +307,7 @@ func (s *Service) prepareToolCall(ctx context.Context, run *domain.Run, snapshot
 		}
 		if requiresConfirmation {
 			preview, _ := json.Marshal(map[string]any{"tool_name": registration.Name, "arguments": json.RawMessage(arguments), "description": registration.Description})
-			approval = &domain.Approval{ID: uuid.NewString(), ConversationID: run.ConversationID, RunID: run.ID, ToolCallID: call.ID, RegistrationID: registration.ID, PanelSessionID: run.PanelSessionID, Scope: "panel", SubjectID: run.SubjectID, OrganizationID: run.OrganizationID, DefinitionVersion: registration.DefinitionVersion, ArgumentsDigest: digest, Risk: registration.Risk, Preview: preview, PolicyVersion: "1", State: "pending", ExpiresAt: minTime(panel.LeaseExpiresAt, now.Add(10*time.Minute)), CreatedAt: now, UpdatedAt: now}
+			approval = &domain.Approval{ID: uuid.NewString(), ConversationID: run.ConversationID, RunID: run.ID, ToolCallID: call.ID, RegistrationID: registration.ID, PanelSessionID: run.PanelSessionID, Scope: "panel", SubjectID: run.SubjectID, OrganizationID: run.OrganizationID, DefinitionVersion: registration.DefinitionVersion, ArgumentsDigest: digest, Risk: registration.Risk, Preview: preview, PolicyVersion: "1", State: "pending", ExpiresAt: now.Add(10 * time.Minute), CreatedAt: now, UpdatedAt: now}
 			call.State, current.State = "waiting_approval", "waiting_approval"
 			if err = tx.CreateApproval(approval); err != nil {
 				return err
@@ -334,13 +334,6 @@ func (s *Service) prepareToolCall(ctx context.Context, run *domain.Run, snapshot
 	}
 	s.bus.Notify(notify...)
 	return call, approval, nil
-}
-
-func minTime(left, right time.Time) time.Time {
-	if left.Before(right) {
-		return left
-	}
-	return right
 }
 
 func (s *Service) waitApproval(ctx context.Context, run *domain.Run, call *domain.ToolCall, approval *domain.Approval) error {
@@ -385,7 +378,7 @@ func (s *Service) approvalState(ctx context.Context, id string) (string, error) 
 			if !value.ExpiresAt.Before(now) {
 				return nil
 			}
-			if err = expireApproval(tx, value, now); err != nil {
+			if err = event.ExpireApproval(tx, value, now); err != nil {
 				return err
 			}
 			state = value.State
@@ -393,27 +386,6 @@ func (s *Service) approvalState(ctx context.Context, id string) (string, error) 
 		return nil
 	})
 	return state, err
-}
-
-func expireApproval(tx ports.Tx, approval *domain.Approval, now time.Time) error {
-	approval.State, approval.Reason, approval.UpdatedAt, approval.ResolvedAt = "expired", "approval expired", now, &now
-	if err := tx.SaveApproval(approval); err != nil {
-		return err
-	}
-	call, err := tx.ToolCall(approval.ToolCallID, true)
-	if errors.Is(err, ports.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	switch call.State {
-	case "created", "waiting_approval", "dispatched", "running":
-		call.State, call.UpdatedAt, call.FinishedAt = "timeout", now, &now
-		return tx.SaveToolCall(call)
-	default:
-		return nil
-	}
 }
 
 func validateToolCallBinding(run *domain.Run, call *domain.ToolCall) error {
@@ -480,7 +452,7 @@ func (s *Service) dispatchToolCall(ctx context.Context, run *domain.Run, call *d
 				return serviceError(Conflict, "approval_required", "capability invocation is not approved", nil)
 			}
 			if approval.ExpiresAt.Before(now) {
-				if approvalErr = expireApproval(tx, approval, now); approvalErr != nil {
+				if approvalErr = event.ExpireApproval(tx, approval, now); approvalErr != nil {
 					return approvalErr
 				}
 				approvalExpired = true
@@ -527,6 +499,7 @@ func (s *Service) dispatchToolCall(ctx context.Context, run *domain.Run, call *d
 		return translateOrService(err)
 	}
 	if approvalExpired {
+		s.bus.Notify(run.PanelSessionID)
 		return serviceError(Conflict, "approval_expired", "approval expired before the operation was dispatched", nil)
 	}
 	s.bus.Notify(notify...)
@@ -572,10 +545,16 @@ func (s *Service) finishFailed(run *domain.Run, output *domain.Message, failure 
 }
 func (s *Service) finishCancelled(run *domain.Run, output *domain.Message, failure error) {
 	code, detail, next := "cancelled", "The request was stopped. Completed operations have not been undone.", "continue"
+	stage := ""
+	var serviceErr *Error
+	if errors.As(failure, &serviceErr) && serviceErr.Code == "approval_expired" {
+		code, detail, stage, next = "approval_expired", "The approval expired. This operation was not executed. Request a new approval to continue.", "approval", "approve_again"
+		s.logger.Info("approval expired", zap.String("run_id", run.ID))
+	}
 	if errors.Is(failure, context.DeadlineExceeded) {
 		code, detail, next = "run_timeout", "The request reached its execution time limit.", "retry_later"
 	}
-	s.finishRun(run, output, "cancelled", code, detail, "", next, true, "cancelled", model.Usage{})
+	s.finishRun(run, output, "cancelled", code, detail, stage, next, true, "cancelled", model.Usage{})
 }
 
 func (s *Service) finishRun(run *domain.Run, output *domain.Message, state, code, detail, stage, next string, partial bool, finishReason string, usage model.Usage) {
@@ -602,6 +581,20 @@ func (s *Service) finishRun(run *domain.Run, output *domain.Message, state, code
 			}
 		} else {
 			current.Failure = nil
+		}
+		if state != "completed" {
+			approval, approvalErr := tx.PendingApprovalForRun(current.ID, true)
+			if approvalErr == nil {
+				approval.State, approval.Reason, approval.ResolvedAt, approval.UpdatedAt = "cancelled", "run cancelled", &now, now
+				if err = tx.SaveApproval(approval); err != nil {
+					return err
+				}
+				if err = event.ResolveApproval(tx, approval, now); err != nil {
+					return err
+				}
+			} else if !errors.Is(approvalErr, ports.ErrNotFound) {
+				return approvalErr
+			}
 		}
 		if current.ModelRequestCount > 0 {
 			modelCall, modelErr := tx.ModelCall(current.ID, current.ModelRequestCount, true)
@@ -838,6 +831,9 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 		if err != nil {
 			return err
 		}
+		if approval.State == "expired" {
+			return serviceError(Conflict, "approval_expired", "approval has expired", nil)
+		}
 		if approval.State != "pending" {
 			expected := "approved"
 			if request.Decision == "reject" {
@@ -850,7 +846,7 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 			return serviceError(Conflict, "approval_terminal", "approval already has a terminal decision", nil)
 		}
 		if approval.ExpiresAt.Before(now) {
-			if err = expireApproval(tx, approval, now); err != nil {
+			if err = event.ExpireApproval(tx, approval, now); err != nil {
 				return err
 			}
 			expired = true
@@ -898,6 +894,7 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 		return nil, false, translateOrService(err)
 	}
 	if expired {
+		s.bus.Notify(approval.PanelSessionID)
 		return nil, false, serviceError(Conflict, "approval_expired", "approval has expired", nil)
 	}
 	if !duplicate {
