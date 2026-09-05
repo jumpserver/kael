@@ -505,6 +505,8 @@ Luna 能力对话不能静默降级。Panel 重连后，应先通过 client key 
 
 ### 9.1 原子注册
 
+Kael 信任通过 Core 登录认证的 Luna 客户端，接受其动态工具定义和注解，不维护工具名称白名单。风险统一从注册声明推导并受 Profile 上限约束；Panel 的 auto/always/never 审批模式与工具名称无关，final-result 按注册元数据生效。具体信任边界、默认风险和审批规则见 [架构文档 Registration](./ARCHITECTURE.md#82-registration)。现有 HTTP/SSE、MCP 转发协议不变，Koko 无需知道 Kael，双方无需相互认证。
+
 Luna 的 MCP manifest 是整组并带 revision 的，因此 Kael 除单项增删外，应支持整组原子替换。原子替换必须：
 
 - 校验 base registry revision；

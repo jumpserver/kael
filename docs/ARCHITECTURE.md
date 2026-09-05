@@ -115,8 +115,8 @@ service binding 已按 ADR 0001 启用：Capability Broker 把调用路由给 He
 
 | 信任域 | 信任程度 | 处理原则 |
 |---|---|---|
-| Browser renderer | 不可信客户端 | 请求、Context、Registration 和 ToolResult 全部校验 |
-| Electron renderer | 不可信客户端 | 不允许直接提供 Authorization 或 Cookie |
+| Luna browser renderer | 通过 Core 登录认证的可信工具客户端 | 接受工具声明和结果；保留请求、schema、会话绑定校验，Context 内容不作为指令 |
+| Luna Electron renderer | 通过 Core 登录认证的可信工具客户端 | 使用现有桌面认证适配；凭据不进入工具定义、上下文或模型 |
 | Electron main process | 受控身份代理 | 注入最新 Bearer、组织和时区，隔离窗口流 |
 | 同源入口/身份适配器 | 可信入口 | 验证身份并生成 Kael 可消费的 Principal |
 | Kael Runtime | 可信编排层 | 不保存资源凭据，不越过执行端权限 |
@@ -492,13 +492,15 @@ Registration 至少包含：
 - registry revision；
 - lease、expires time 和状态。
 
-Renderer 提交的风险与重试注解不可信。Kael 必须维护由 Profile 和受控 capability catalog 决定的最低安全策略：
+Kael 将通过现有 Core 登录认证的 Luna 视为可信工具客户端。用户、组织和 AI 权限仍由认证入口校验；不增加 Luna 应用密钥、组件签名或 Koko—Kael 相互认证。
 
-- 客户端只能提高 risk、增加 confirmation 或收紧能力，不能降低服务端策略；
-- destructive、idempotent、open-world、read-only 等影响执行和重试的属性以服务端策略为下限；
-- 未知工具默认拒绝；仅当 Profile 显式允许某个动态 namespace 时，才按 dangerous、requires confirmation、non-idempotent、open-world 的保守默认值注册；
-- 不能因为 schema 合法就自动接受动态 namespace；
-- 将来若使用 manifest 签名或 attestation，只能增强来源可信度，不能取消执行端二次权限校验。
+- 工具名称不受内置 capability catalog 限制；定义、schema、注解和执行路由由 Luna 注册和维护。
+- Kael 接受 read-only、destructive、open-world、idempotent 和 final-result 声明，不按工具名或 Profile 覆盖这些注解。最终结果标记仍仅在工具成功后生效。
+- 风险由注解统一推导：read-only 为 read；默认 write；destructive 或非只读 open-world 为 dangerous。缺省注解不视为只读。
+- 显式 risk 可以提高上述风险，不能抵消相冲突的注解；非法 risk 拒绝注册。合并完成后检查 Profile 风险上限。
+- auto 模式在写入、高风险、open-world 或注册声明 requires_confirmation 时要求审批；always 总是审批，never 跳过 Panel 工具审批。workspace 与其他 Panel 使用同一规则，不再按工具名称强制审批。service binding 的业务审批策略保持独立。
+- 未知工具使用同一套注册规则，不额外升级风险或强制审批。现有 Profile、namespace 和风险上限保留，新增助手类型不属于本次扩展。
+- 信任 Luna 不取消 schema、数量、大小、用户/组织、版本、lease、调用及审批绑定校验，也不替代执行组件的资产权限、ACL 和会话检查。注册和结果采用已认证客户端信任模型，不额外提供组件来源或结果的密码学证明。
 
 Luna 的 manifest 更新采用原子 Registry 替换：
 
