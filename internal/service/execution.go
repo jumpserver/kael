@@ -14,6 +14,7 @@ import (
 	"github.com/jumpserver/kael/internal/domain"
 	"github.com/jumpserver/kael/internal/event"
 	"github.com/jumpserver/kael/internal/model"
+	"github.com/jumpserver/kael/internal/policy"
 	"github.com/jumpserver/kael/internal/ports"
 	agentruntime "github.com/jumpserver/kael/internal/runtime"
 	"go.uber.org/zap"
@@ -299,12 +300,8 @@ func (s *Service) prepareToolCall(ctx context.Context, run *domain.Run, snapshot
 			return serviceError(Conflict, "capability_revoked", "run capability snapshot is no longer executable", nil)
 		}
 		digest := domain.HashBytes(arguments)
-		requiresConfirmation := registration.RequiresConfirmation
-		if panel.ApprovalMode == "always" {
-			requiresConfirmation = true
-		} else if panel.ApprovalMode == "never" {
-			requiresConfirmation = false
-		}
+		profile, _ := policy.Get(panel.Profile)
+		requiresConfirmation := policy.ConfirmationRequired(profile, registration.Name, registration.RequiresConfirmation, panel.ApprovalMode)
 		call = &domain.ToolCall{ID: uuid.NewString(), ConversationID: run.ConversationID, RunID: run.ID, PanelSessionID: run.PanelSessionID, SubjectID: run.SubjectID, OrganizationID: run.OrganizationID, RegistrationID: registration.ID, DefinitionVersion: registration.DefinitionVersion, DefinitionDigest: registration.DefinitionDigest, ToolName: registration.Name, Arguments: append(json.RawMessage(nil), arguments...), ArgumentsDigest: digest, Risk: registration.Risk, RequiresConfirmation: requiresConfirmation, InvocationSequence: uint64(now.UnixNano()), InvocationID: uuid.NewString(), State: "created", CreatedAt: now, UpdatedAt: now}
 		if err = tx.CreateToolCall(call); err != nil {
 			return err

@@ -91,6 +91,9 @@ func (s *Service) CreatePanel(ctx context.Context, principal domain.Principal, r
 		if approvalMode != "always" && approvalMode != "auto" && approvalMode != "never" {
 			return serviceError(Invalid, "invalid_approval_mode", "approval mode is invalid", nil)
 		}
+		if !policy.ApprovalModeAllowed(profile, approvalMode) {
+			return serviceError(Forbidden, "approval_mode_forbidden", "approval mode is not allowed by the runtime profile", nil)
+		}
 		panel = &domain.PanelSession{ID: uuid.NewString(), ConversationID: conversation.ID, SubjectID: principal.SubjectID, OrganizationID: principal.OrganizationID, Surface: bounded(request.Surface, 128), Profile: profile.ID, ApprovalMode: approvalMode, State: "active", ResumeTokenHash: tokenHash, ClientInstanceID: request.ClientInstanceID, ConnectionOwner: s.instanceID, LeaseExpiresAt: now.Add(s.panelLease), LastHeartbeatAt: now, CreatedAt: now, UpdatedAt: now}
 		if panel.Surface == "" {
 			panel.Surface = conversation.Surface
@@ -141,6 +144,10 @@ func (s *Service) UpdateApprovalMode(ctx context.Context, principal domain.Princ
 		}
 		if panel.State != "active" || panel.LeaseExpiresAt.Before(now) {
 			return serviceError(Conflict, "panel_expired", "panel session is not active", nil)
+		}
+		profile, ok := policy.Get(panel.Profile)
+		if !ok || !policy.ApprovalModeAllowed(profile, request.Mode) {
+			return serviceError(Forbidden, "approval_mode_forbidden", "approval mode is not allowed by the runtime profile", nil)
 		}
 		if panel.ApprovalMode == request.Mode {
 			return nil
