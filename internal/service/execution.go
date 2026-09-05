@@ -362,7 +362,9 @@ func (s *Service) waitApproval(ctx context.Context, run *domain.Run, call *domai
 			return nil
 		case "rejected":
 			return serviceError(Conflict, "approval_rejected", "user rejected the capability invocation", nil)
-		case "cancelled", "expired":
+		case "expired":
+			return serviceError(Conflict, "approval_expired", "approval expired before the operation was dispatched", nil)
+		case "cancelled":
 			return context.Canceled
 		}
 		select {
@@ -529,7 +531,7 @@ func (s *Service) dispatchToolCall(ctx context.Context, run *domain.Run, call *d
 		return translateOrService(err)
 	}
 	if approvalExpired {
-		return context.Canceled
+		return serviceError(Conflict, "approval_expired", "approval expired before the operation was dispatched", nil)
 	}
 	s.bus.Notify(notify...)
 	return nil
@@ -564,22 +566,23 @@ func (s *Service) latestToolResult(ctx context.Context, id string) (*domain.Tool
 }
 
 func (s *Service) finishCompleted(run *domain.Run, output *domain.Message, completion agentruntime.Completion) {
-	s.finishRun(run, output, "completed", "", "", completion.Partial, completion.FinishReason, completion.Usage)
+	s.finishRun(run, output, "completed", "", "", "", "", completion.Partial, completion.FinishReason, completion.Usage)
 }
 func (s *Service) finishFailed(run *domain.Run, output *domain.Message, failure error) {
 	internalDetail := bounded(sanitizeAuditText(failure.Error()), 1024)
 	s.logger.Error("run failed", zap.String("run_id", run.ID), zap.String("error", internalDetail))
-	s.finishRun(run, output, "failed", "run_failed", "The AI request could not be completed. Please try again.", false, "error", model.Usage{})
+	code, detail, stage, next := publicFailure(failure)
+	s.finishRun(run, output, "failed", code, detail, stage, next, false, "error", model.Usage{})
 }
 func (s *Service) finishCancelled(run *domain.Run, output *domain.Message, failure error) {
-	detail := "run cancelled"
+	code, detail, next := "cancelled", "The request was stopped. Completed operations have not been undone.", "continue"
 	if errors.Is(failure, context.DeadlineExceeded) {
-		detail = "run timed out"
+		code, detail, next = "run_timeout", "The request reached its execution time limit.", "retry_later"
 	}
-	s.finishRun(run, output, "cancelled", "cancelled", detail, true, "cancelled", model.Usage{})
+	s.finishRun(run, output, "cancelled", code, detail, "", next, true, "cancelled", model.Usage{})
 }
 
-func (s *Service) finishRun(run *domain.Run, output *domain.Message, state, code, detail string, partial bool, finishReason string, usage model.Usage) {
+func (s *Service) finishRun(run *domain.Run, output *domain.Message, state, code, detail, stage, next string, partial bool, finishReason string, usage model.Usage) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	now := time.Now().UTC()
@@ -591,6 +594,18 @@ func (s *Service) finishRun(run *domain.Run, output *domain.Message, state, code
 		}
 		if current.Terminal() {
 			return nil
+		}
+		if state != "completed" {
+			// CancelRun records the receipt summary before marking active calls
+			// cancelled, preserving the difference between queued and sent work.
+			if state != "cancelled" || len(current.Failure) == 0 {
+				current.Failure, err = describeFailure(tx, current, code, stage, next)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			current.Failure = nil
 		}
 		if current.ModelRequestCount > 0 {
 			modelCall, modelErr := tx.ModelCall(current.ID, current.ModelRequestCount, true)
@@ -630,6 +645,7 @@ func (s *Service) finishRun(run *domain.Run, output *domain.Message, state, code
 			current.OutputMessageID = message.ID
 		}
 		if message != nil {
+			message.Failure = append(json.RawMessage(nil), current.Failure...)
 			if state != "completed" && strings.TrimSpace(message.Content) != "" {
 				partial = true
 			}
@@ -637,7 +653,7 @@ func (s *Service) finishRun(run *domain.Run, output *domain.Message, state, code
 			case "completed":
 				message.Status = "completed"
 			case "cancelled":
-				message.Status = "cancelled"
+				message.Status, message.ErrorCode, message.ErrorDetail = "cancelled", code, detail
 			default:
 				message.Status, message.ErrorCode, message.ErrorDetail = "failed", code, detail
 			}

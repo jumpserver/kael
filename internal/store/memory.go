@@ -120,6 +120,7 @@ func cloneStoredValue[T any](value T) T {
 	case domain.Message:
 		item.Parts = cloneRawMessage(item.Parts)
 		item.ResultCards = cloneRawMessage(item.ResultCards)
+		item.Failure = cloneRawMessage(item.Failure)
 		cloned = item
 	case domain.Artifact:
 		item.DeletedAt = cloneTime(item.DeletedAt)
@@ -136,6 +137,7 @@ func cloneStoredValue[T any](value T) T {
 		item.AnnotationsJSON = cloneRawMessage(item.AnnotationsJSON)
 		cloned = item
 	case domain.Run:
+		item.Failure = cloneRawMessage(item.Failure)
 		item.AuthorizationPermissions = cloneStrings(item.AuthorizationPermissions)
 		item.RegistrationSnapshot = cloneRawMessage(item.RegistrationSnapshot)
 		item.ModelPolicy = cloneRawMessage(item.ModelPolicy)
@@ -708,13 +710,45 @@ func (t *memoryTx) InterruptExpiredClaims(now time.Time) (int64, error) {
 	var count int64
 	for id, value := range t.state.runs {
 		if value.ClaimExpiresAt != nil && value.ClaimExpiresAt.Before(now) && (value.State == "running" || value.State == "waiting_capability" || value.State == "waiting_approval" || value.State == "cancelling") {
+			value.Failure = t.interruptedFailure(value, "worker_interrupted")
 			value.State, value.ErrorCode, value.ErrorDetail = "interrupted", "worker_interrupted", "run worker stopped before completion"
 			value.ClaimOwner, value.ClaimExpiresAt, value.UpdatedAt = "", nil, now
 			t.state.runs[id] = cloneStoredValue(value)
+			if message, exists := t.state.messages[value.OutputMessageID]; exists && message.Status != "completed" {
+				message.Status, message.ErrorCode, message.ErrorDetail, message.UpdatedAt = "cancelled", value.ErrorCode, value.ErrorDetail, now
+				message.Failure = cloneRawMessage(value.Failure)
+				t.state.messages[message.ID] = cloneStoredValue(message)
+			}
 			count++
 		}
 	}
 	return count, nil
+}
+
+func (t *memoryTx) interruptedFailure(run domain.Run, code string) json.RawMessage {
+	calls, _ := t.ListRunToolCalls(run.ID)
+	results := make(map[string]domain.ToolResult, len(calls))
+	approvals := make(map[string]domain.Approval)
+	for _, call := range calls {
+		if approval, err := t.ApprovalByToolCall(call.ID, false); err == nil {
+			approvals[call.ID] = *approval
+		}
+		if result, err := t.LatestToolResult(call.ID); err == nil {
+			results[call.ID] = *result
+		}
+	}
+	failure := domain.DescribeRunFailure(calls, results, approvals, "interrupted", code, "continue")
+	// A previous explicit cancellation may have happened before a process
+	// stopped. Retain its pre-cancellation evidence rather than reclassifying
+	// a never-dispatched approval as an uncertain write.
+	if len(run.Failure) > 0 {
+		var previous domain.RunFailure
+		if json.Unmarshal(run.Failure, &previous) == nil && previous.Code == "cancelled" {
+			failure.CompletedSteps, failure.UncertainSteps, failure.NextAction = previous.CompletedSteps, previous.UncertainSteps, previous.NextAction
+		}
+	}
+	encoded, _ := json.Marshal(failure)
+	return encoded
 }
 
 func (t *memoryTx) Maintain(now, eventCutoff time.Time) error {
@@ -820,6 +854,22 @@ func (t *memoryTx) RunToolCallCount(runID string) (int64, error) {
 		}
 	}
 	return count, nil
+}
+
+func (t *memoryTx) ListRunToolCalls(runID string) ([]domain.ToolCall, error) {
+	result := []domain.ToolCall{}
+	for _, value := range t.state.toolCalls {
+		if value.RunID == runID {
+			result = append(result, cloneStoredValue(value))
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
+	return result, nil
 }
 
 func (t *memoryTx) SaveToolCall(value *domain.ToolCall) error {

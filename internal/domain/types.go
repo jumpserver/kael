@@ -88,6 +88,7 @@ type Message struct {
 	ResultCards       json.RawMessage `json:"result_cards,omitempty"`
 	ErrorCode         string          `json:"error_code,omitempty"`
 	ErrorDetail       string          `json:"error,omitempty"`
+	Failure           json.RawMessage `json:"failure,omitempty"`
 	IdempotencyKey    string          `json:"-"`
 	IdempotencyDigest string          `json:"-"`
 	ParentMessageID   string          `json:"parent_message_id,omitempty"`
@@ -228,6 +229,7 @@ type Run struct {
 	CancelReason             string          `json:"cancel_reason,omitempty"`
 	ErrorCode                string          `json:"error_code,omitempty"`
 	ErrorDetail              string          `json:"error,omitempty"`
+	Failure                  json.RawMessage `json:"failure,omitempty"`
 	Partial                  bool            `json:"partial"`
 	FinishReason             string          `json:"finish_reason,omitempty"`
 	RoundCount               int             `json:"round_count"`
