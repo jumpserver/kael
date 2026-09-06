@@ -12,6 +12,7 @@ import (
 )
 
 type Config struct {
+	CodexBinary            string
 	Name                   string
 	CoreHost               string
 	BootstrapToken         string
@@ -19,6 +20,7 @@ type Config struct {
 	HTTPPort               int
 	IgnoreVerifyCerts      bool
 	HTTPRequestTimeout     time.Duration
+	ToolResultTimeout      time.Duration
 	AllowedOrigins         []string
 	TrustForwardedHeaders  bool
 	AccessKeyFilePath      string
@@ -58,6 +60,7 @@ func Load(path string) (Config, error) {
 	}
 	dataFolder := filepath.Join(root, "data")
 	result := Config{
+		CodexBinary:            strings.TrimSpace(v.GetString("CODEX_BINARY")),
 		Name:                   strings.TrimSpace(v.GetString("NAME")),
 		CoreHost:               strings.TrimRight(strings.TrimSpace(v.GetString("CORE_HOST")), "/"),
 		BootstrapToken:         strings.TrimSpace(v.GetString("BOOTSTRAP_TOKEN")),
@@ -65,6 +68,7 @@ func Load(path string) (Config, error) {
 		HTTPPort:               v.GetInt("HTTPD_PORT"),
 		IgnoreVerifyCerts:      v.GetBool("IGNORE_VERIFY_CERTS"),
 		HTTPRequestTimeout:     time.Duration(v.GetInt("HTTP_REQUEST_TIMEOUT")) * time.Second,
+		ToolResultTimeout:      v.GetDuration("TOOL_RESULT_TIMEOUT"),
 		AllowedOrigins:         v.GetStringSlice("ALLOWED_ORIGINS"),
 		TrustForwardedHeaders:  v.GetBool("TRUST_FORWARDED_HEADERS"),
 		AccessKeyFilePath:      filepath.Join(dataFolder, "keys", ".access_key"),
@@ -120,11 +124,13 @@ func readConfig(v *viper.Viper, path string) error {
 }
 
 func setDefaults(v *viper.Viper) {
+	v.SetDefault("CODEX_BINARY", "codex")
 	v.SetDefault("NAME", defaultName())
 	v.SetDefault("CORE_HOST", "http://127.0.0.1:8080")
 	v.SetDefault("BIND_HOST", "0.0.0.0")
 	v.SetDefault("HTTPD_PORT", 8083)
 	v.SetDefault("HTTP_REQUEST_TIMEOUT", 30)
+	v.SetDefault("TOOL_RESULT_TIMEOUT", "45s")
 	v.SetDefault("RUNTIME_STORE", "core")
 	v.SetDefault("PLATFORM_GATEWAY_ENABLED", true)
 	v.SetDefault("PLATFORM_DELEGATION_KEY_ID", "v1")
@@ -149,6 +155,9 @@ func defaultName() string {
 }
 
 func (c Config) Validate() error {
+	if c.ToolResultTimeout < time.Second || c.ToolResultTimeout > 10*time.Minute {
+		return fmt.Errorf("TOOL_RESULT_TIMEOUT must be between 1s and 10m")
+	}
 	if c.Name == "" || c.BindHost == "" || c.HTTPPort < 1 || c.HTTPPort > 65535 {
 		return fmt.Errorf("component name or listen address is invalid")
 	}

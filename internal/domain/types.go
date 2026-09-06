@@ -18,10 +18,8 @@ const (
 	MaxEventPayloadBytes  = 256 * 1024
 	MaxTools              = 64
 	MaxQueuedRuns         = 64
-	MaxRounds             = 20
-	MaxModelRequests      = 40
+	MaxToolCalls          = 128
 	MaxPageSize           = 256
-	MaxHistoryMessages    = 30
 	MaxExtractedTextBytes = 40 * 1024
 	MaxImagePixels        = 40 * 1000 * 1000
 )
@@ -152,11 +150,12 @@ type ContextSnapshot struct {
 }
 
 type ToolAnnotations struct {
-	ReadOnly    bool `json:"read_only"`
-	Destructive bool `json:"destructive"`
-	Idempotent  bool `json:"idempotent"`
-	OpenWorld   bool `json:"open_world"`
-	FinalResult bool `json:"final_result,omitempty"`
+	ReadOnly      bool   `json:"read_only"`
+	Destructive   bool   `json:"destructive"`
+	Idempotent    bool   `json:"idempotent"`
+	OpenWorld     bool   `json:"open_world"`
+	FinalResult   bool   `json:"final_result,omitempty"`
+	CommandPolicy string `json:"command_policy,omitempty"`
 }
 
 type Registration struct {

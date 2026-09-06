@@ -1,5 +1,8 @@
 # Kael AI Native Agent Runtime 迁移与演进方案
 
+> 2026-09-06 harness 分支更新：Agent 引擎已直接替换为 Codex App Server，移除官方 Go SDK adapter 与 Chat Completions fallback。当前范围、试用步骤、上下文回收及统计语义见 [ADR 0007](./adr/0007-codex-harness.md)；下文此前迁移的验收结论不代表 Codex 已完成真实环境联调。
+
+
 ## 1. 文档状态
 
 | 项目 | 内容 |
@@ -505,7 +508,7 @@ Luna 能力对话不能静默降级。Panel 重连后，应先通过 client key 
 
 ### 9.1 原子注册
 
-Kael 信任通过 Core 登录认证的 Luna 客户端，接受其动态工具定义和注解，不维护工具名称白名单。风险统一从注册声明推导并受 Profile 上限约束；Panel 的 auto/always/never 审批模式与工具名称无关，final-result 按注册元数据生效。具体信任边界、默认风险和审批规则见 [架构文档 Registration](./ARCHITECTURE.md#82-registration)。现有 HTTP/SSE、MCP 转发协议不变，Koko 无需知道 Kael，双方无需相互认证。
+Kael 信任通过 Core 登录认证的 Luna 客户端，接受其动态工具定义和注解，不维护工具名称白名单。风险默认从注册声明推导并受 Profile 上限约束；终端可以通过 `com.jumpserver/commandPolicy=shell-readonly-v1` 声明按完整 shell 命令识别只读调用，避免 auto 模式对 `du`、`df` 等查询一律审批。Panel 的 auto/always/never 审批模式与工具名称无关，显式强制审批仍优先，final-result 按注册元数据生效。具体信任边界、支持范围和升级要求见 [架构文档 Registration](./ARCHITECTURE.md#82-registration)。现有 HTTP/SSE、MCP 转发协议不变，Koko 无需知道 Kael，双方无需相互认证。
 
 Luna 的 MCP manifest 是整组并带 revision 的，因此 Kael 除单项增删外，应支持整组原子替换。原子替换必须：
 

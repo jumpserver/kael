@@ -1,6 +1,6 @@
 # Kael 文档
 
-本目录保存 Kael 的架构、协议、迁移和验收规范。
+本目录保存 Kael 的架构、协议、迁移和验收规范。harness 分支只使用 Codex App Server；请先阅读 ADR 0007 安装固定版本运行时并配置 Responses 模型。
 
 AI 相关实现必须先与这些文档保持一致。任何会改变以下内容的代码修改，都必须在同一次变更中更新对应文档：
 
@@ -23,6 +23,7 @@ AI 相关实现必须先与这些文档保持一致。任何会改变以下内�
 - [ADR 0004：JSONL Store 与 Event 协议](./adr/0004-jsonl-store-and-event-protocol.md)
 - [ADR 0005：官方 OpenAI Go SDK](./adr/0005-official-openai-go-sdk.md)
 - [ADR 0006：由 JumpServer Core 持久化 Runtime Journal](./adr/0006-core-backed-runtime-journal.md)
+- [ADR 0007：Codex Harness 与试用步骤](./adr/0007-codex-harness.md)
 
 阅读顺序：先用 `ARCHITECTURE.md` 确认长期不变量，再用迁移方案安排实现，最后按 Platform AI 契约核对旧能力兼容。
 

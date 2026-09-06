@@ -145,7 +145,7 @@ func (s *Service) CreateRun(ctx context.Context, principal domain.Principal, req
 			}
 		}
 		registrationJSON, _ := json.Marshal(registrations)
-		modelPolicyJSON, _ := json.Marshal(map[string]any{"provider": s.provider.Info().Provider, "model": s.provider.Info().Model, "max_rounds": domain.MaxRounds, "max_model_requests": domain.MaxModelRequests})
+		modelPolicyJSON, _ := json.Marshal(map[string]any{"provider": s.engine.Info().Provider, "model": s.engine.Info().Model, "engine": "codex", "max_tool_calls": domain.MaxToolCalls})
 		approvalScope := "panel"
 		if request.CapabilityMode == "service" {
 			approvalScope = "service"
@@ -435,7 +435,7 @@ func (s *Service) execute(run *domain.Run) {
 		return
 	}
 	deltas := newMessageDeltaCoalescer(ctx, s, run, outputMessage)
-	completion, err := s.loop.Execute(ctx, input, agentruntime.Callbacks{ModelStarted: func(sequence int) error { return s.modelStarted(ctx, run, sequence) }, ModelCompleted: func(sequence int, result model.Result, duration time.Duration) error {
+	completion, err := s.engine.Execute(ctx, input, agentruntime.Callbacks{ModelStarted: func(sequence int, info model.Info) error { return s.modelStarted(ctx, run, sequence, info) }, ModelCompleted: func(sequence int, result model.Result, duration time.Duration) error {
 		if flushErr := deltas.Flush(ctx, false); flushErr != nil {
 			return flushErr
 		}
@@ -553,12 +553,8 @@ func (s *Service) runtimeInput(ctx context.Context, run *domain.Run) (agentrunti
 			}
 		}
 		messages = filtered
-		historyStart := 0
-		if len(messages) > domain.MaxHistoryMessages {
-			historyStart = len(messages) - domain.MaxHistoryMessages
-		}
 		owner := domain.Principal{SubjectID: run.SubjectID, OrganizationID: run.OrganizationID}
-		for _, message := range messages[historyStart:] {
+		for _, message := range messages {
 			var parts []domain.MessagePart
 			if json.Unmarshal(message.Parts, &parts) != nil {
 				continue
@@ -606,7 +602,7 @@ func (s *Service) runtimeInput(ctx context.Context, run *domain.Run) (agentrunti
 		}
 		modelArtifacts[id] = parts
 	}
-	return agentruntime.Input{Run: *run, ProfileInstructions: profile.Instructions, Context: snapshot, Messages: messages, Registrations: registrations, Artifacts: modelArtifacts, MaxRounds: domain.MaxRounds, MaxModelRequests: domain.MaxModelRequests}, output, nil
+	return agentruntime.Input{Run: *run, ProfileInstructions: profile.Instructions, Context: snapshot, Messages: messages, Registrations: registrations, Artifacts: modelArtifacts, OutputMessageID: output.ID}, output, nil
 }
 
 func isApprovalExpired(err error) bool {
