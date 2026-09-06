@@ -395,7 +395,14 @@ func suppliedAnnotations(definition RegistrationDefinition) domain.ToolAnnotatio
 			final = true
 		}
 	}
-	return domain.ToolAnnotations{ReadOnly: boolAnnotation(values, "read_only", "readOnlyHint"), Destructive: boolAnnotation(values, "destructive", "destructiveHint"), Idempotent: boolAnnotation(values, "idempotent", "idempotentHint"), OpenWorld: boolAnnotation(values, "open_world", "openWorldHint"), FinalResult: final}
+	annotations := domain.ToolAnnotations{ReadOnly: boolAnnotation(values, "read_only", "readOnlyHint"), Destructive: boolAnnotation(values, "destructive", "destructiveHint"), Idempotent: boolAnnotation(values, "idempotent", "idempotentHint"), OpenWorld: boolAnnotation(values, "open_world", "openWorldHint"), FinalResult: final}
+	// Explicit confirmation and risk overrides take precedence over command inference.
+	if !definition.RequiresConfirmation && (definition.Risk == "" || definition.Risk == "read") && !annotations.Destructive && !final {
+		if value, _ := definition.Meta[policy.CommandPolicyMetaKey].(string); value == policy.ShellReadOnlyPolicy {
+			annotations.CommandPolicy = value
+		}
+	}
+	return annotations
 }
 
 func (s *Service) ReplaceRegistrations(ctx context.Context, principal domain.Principal, panelID string, request ReplaceRegistrationsRequest) (*RegistryResponse, error) {

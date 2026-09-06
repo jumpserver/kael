@@ -7,7 +7,7 @@
 | 状态 | 目标架构基线 |
 | 日期 | 2026-09-04 |
 | 适用范围 | Kael AI Runtime、Luna/Lina AI Panel 及其能力适配边界 |
-| 当前实现状态 | Kael/Luna/Lina 逻辑迁移已实现；Kael 使用 Core component + Core-backed Runtime Journal，边界见 ADR 0002/0004/0006 |
+| 当前实现状态 | harness 分支已用 Codex 替换手写 Agent Loop（ADR 0007）；Kael 使用 Core component + Core-backed Runtime Journal，边界见 ADR 0002/0004/0006 |
 | 本期代码范围 | Kael、Luna、Lina 与 JumpServer Core 的 Runtime Store 接口 |
 
 本文将《JumpServer AI Native Agent Runtime 完整方案》的核心思想，与现有 Koko agentd、Platform AI、Luna/Lina 客户端的真实能力合并为 Kael 的长期架构约束。
@@ -281,7 +281,7 @@ Conversation / PanelSession / Registration / Run / Artifact / Approval
 | ContextSnapshot | 当前环境的最小化语义数据 | 有 version、digest 和保留策略 |
 | Registration | Panel 能力定义及路由声明 | 属于一个 PanelSession，有 lease/revision |
 | Run | 一次用户请求的执行实例 | 固定 execution mode、Profile、Context 和 Registry 快照 |
-| Step/ModelCall | Agent Loop 内部步骤和模型请求 | 受预算、超时和审计约束 |
+| Step/ModelCall | Harness turn 记录（scope=agent_turn） | 受预算、超时和审计约束 |
 | ToolCall | 模型提出、Kael 校验后的能力调用 | 绑定 Run、Panel、Registration 和 arguments digest |
 | ToolResult | executor 回传的有界结构化结果 | sequence 递增，重复提交幂等 |
 | Approval | 风险操作的受控决定 | 绑定主体、调用、参数和过期时间；重启时未决项统一过期，不续接执行 |
@@ -354,66 +354,39 @@ Panel 后续切换页面、更新选区、刷新 manifest 或改变 Profile，�
 - ToolCall 的 unknown 只能通过原 invocation 查询或人工处置解析，不能被当作 failed 后重新调用；
 - 状态变化和对应 DomainEvent/OutboxRecord 必须在同一事务边界提交。
 
-## 7. Agent Loop
+## 7. Codex Agent Harness
+
+当前实现由 [ADR 0007](./adr/0007-codex-harness.md) 定义，直接替换原手写 Loop 与官方 Go SDK adapter。
 
 ### 7.1 标准流程
 
 ```text
-User Message
-    |
-    v
-Create Run -> Claim -> Freeze Snapshot
-    |
-    v
-Build Model Context
-    |
-    v
-Call Model
-    |
-    +---- Final output --------------------------+
-    |                                            |
-    +---- Tool decision                          |
-             |                                   |
-             v                                   |
-      Validate Registration                      |
-             |                                   |
-      Apply Policy / Approval                    |
-             |                                   |
-      Dispatch to exact binding                  |
-             |                                   |
-      Wait for ToolResult                        |
-             |                                   |
-      Append bounded result ---------------------+
-             |
-             v
-        Next model turn or terminal state
+Message -> Kael Run / frozen Context and Registration
+        -> Codex App Server turn
+        -> dynamic tool request
+        -> Kael schema / approval / exact binding
+        -> Luna -> Koko / Chen / local executor
+        -> tool result -> Codex continues -> streamed answer
 ```
+
+service binding 仍由现有 Headless Platform Gateway 执行。
 
 ### 7.2 Runtime 不变量
 
-- 每个 Run 有最大轮数、模型请求数、工具数、Context、History、Payload、结果大小和总超时。
-- 达到预算时进入不允许新工具的最终生成轮，尽力给出安全的部分回答。
-- Tool input/output schema 在进入模型和接收结果时都要校验。
-- Provider 不支持原工具名时只能使用可逆、无冲突的安全别名。
-- 非标准 Tool Arguments 只允许有限解析和一次受控修复。
-- final-result ToolResult 只终止后续工具调用；Runtime 必须再进行一轮禁用工具的模型生成，向用户解释 proposal 及已应用或已拒绝的结果。
-- 写操作不自动重试；只读操作只有在请求身份明确时才允许一次安全刷新。
-- cancel 必须同时影响 Run、等待中的 ToolCall、Provider 请求和真实 executor。
-- Run 的模型、预算与 fallback policy 一旦开始不能因配置热更新而静默改变。
+- Codex 负责推理循环和上下文压缩，Kael 负责业务状态与执行边界。
+- 取消、超时、错误不自动重放写操作；相同 callId 回执幂等，参数变更失败关闭。
+- 工具输入/输出 schema 和准确 Panel/Registration/Run 绑定继续校验。
+- final-result 后拒绝后续业务工具，模型解释已记录的 proposal 决定。
+- 限制为现有 Run 总超时、输入/输出字节上限和每 turn 128 次动态工具请求；不再实施 30 条历史、20 轮/40 次模型请求裁剪。
+- 进程内复用 Codex thread；重启、缓存回收、能力或历史变化后从 Kael 历史重建，不恢复未决工具和审批。
 
-### 7.3 模型抽象
+### 7.3 引擎与模型配置
 
-Kael 只保留领域无关的 Model Provider port，不自研 OpenAI 协议 SDK，也不引入决定领域模型的 Agent Framework。模型 Adapter 统一使用官方 `github.com/openai/openai-go`：OpenAI 走 Responses API，OpenAI-compatible 与 DeepSeek 走 Chat Completions；HTTP、鉴权、SSE、工具调用类型和 API 错误解析由 SDK 负责。迁移基线至少需要承接：
+唯一引擎为固定版本 Codex App Server。Go `Engine` 接口只隔离协议和业务层，不提供旧引擎开关。模型配置仍来自 Core TerminalConfig，要求 Responses API；删除 Chat Completions/DeepSeek fallback。
 
-- OpenAI Responses；
-- OpenAI Chat Completions fallback；
-- OpenAI-compatible Provider；
-- DeepSeek reasoning、结构化 action 和非 reasoning fallback；
-- native tools、structured output 和纯文本模式；
-- reasoning effort、previous response、local state 与 compaction；
-- token/window 归一化、代理、TLS、超时和安全错误分类。
+Codex 使用私有 HOME、空工作目录和无执行环境的线程。业务工具必须通过 Kael Broker；服务端本地 shell、浏览器、插件等不是 Luna 的资产能力。模型密钥仅通过子进程环境注入。
 
-官方 SDK 必须隔离在 Adapter 内，不能进入 domain/application 接口。代理、TLS 和超时通过注入 SDK 的 HTTP client 配置；SDK 内建重试关闭，由 Runtime 的请求预算和只读重试策略统一控制。
+`model.*` 事件带 `scope=agent_turn`，记录完整 Agent turn 而非内部单次请求；usage 为 turn 内累计增量，Luna 不将其完整耗时作为某个工具前的模型思考时间。
 
 ### 7.4 关键调用时序
 
@@ -498,9 +471,18 @@ Kael 将通过现有 Core 登录认证的 Luna 视为可信工具客户端。用
 - Kael 接受 read-only、destructive、open-world、idempotent 和 final-result 声明，不按工具名或 Profile 覆盖这些注解。最终结果标记仍仅在工具成功后生效。
 - 风险由注解统一推导：read-only 为 read；默认 write；destructive 或非只读 open-world 为 dangerous。缺省注解不视为只读。
 - 显式 risk 可以提高上述风险，不能抵消相冲突的注解；非法 risk 拒绝注册。合并完成后检查 Profile 风险上限。
-- auto 模式在写入、高风险、open-world 或注册声明 requires_confirmation 时要求审批；always 总是审批，never 跳过 Panel 工具审批。workspace 与其他 Panel 使用同一规则，不再按工具名称强制审批。service binding 的业务审批策略保持独立。
+- auto 模式默认在写入、高风险、open-world 或注册声明 requires_confirmation 时要求审批；声明命令策略的终端工具可以按完整调用参数识别只读命令（见下文）。always 总是审批，never 跳过 Panel 工具审批。workspace 与其他 Panel 使用同一规则，不按工具名称强制审批。service binding 的业务审批策略保持独立。
 - 未知工具使用同一套注册规则，不额外升级风险或强制审批。现有 Profile、namespace 和风险上限保留，新增助手类型不属于本次扩展。
 - 信任 Luna 不取消 schema、数量、大小、用户/组织、版本、lease、调用及审批绑定校验，也不替代执行组件的资产权限、ACL 和会话检查。注册和结果采用已认证客户端信任模型，不额外提供组件来源或结果的密码学证明。
+
+终端命令的参数级审批：
+
+- Koko 对 SSH、Telnet 和 Kubernetes 的 shell 工具声明 `_meta["com.jumpserver/commandPolicy"] = "shell-readonly-v1"`，Luna 原样转发。通用 shell 的注册注解仍是非只读、open-world；SQL、Redis、MongoDB 和未知协议不声明 shell 策略。Kael 只对 `luna.terminal` 的 panel binding 启用该策略，与具体工具名称无关。
+- 声明规范化为 `annotations.command_policy`，随 Registration digest、Run snapshot 和 Journal 保存。显式 `requires_confirmation`、write/dangerous risk、destructive 或 final-result 声明优先，关闭参数级降级。旧注册、未知策略或不完整参数沿用原审批规则。
+- Kael 使用 shell 语法树检查完整命令。`df`、`du`、`ls`、`free`、`ps`、`cat`、`head`、`tail`、`grep` 等常见查询，以及受限的 `sort`/`uniq` 管道过滤和 `hostname` 查询，可得到调用级 `risk=read`。例如 `du -sh /var/log/* 2>/dev/null | sort -hr | head -n 20` 在 auto 模式直接执行。所有管道及 `;`、`&&`、`||` 的每一段都必须通过检查；只允许丢弃到 `/dev/null` 或 stdout/stderr 间复制的重定向。
+- 写文件重定向、执行/删除型参数、未知程序、非系统路径程序、环境赋值、变量/命令/进程替换、shell 包装、sudo 和未支持语法继续审批。此检查识别标准系统工具的命令语义，不执行任何解析结果，也不取代远端执行隔离或资产 ACL。
+- ToolCall、审批预览、派发事件和审计使用本次调用的风险；写防重使用相同分类，允许新的 callId 重新读取 `df` 等状态，相同 callId 仍仅复用原回执。Koko 执行前的权限、ACL review、租约和取消校验保持生效。
+- 上线需要同时更新 Kael 与 Koko，并重新连接终端以注册新 manifest；只有一端更新或旧 Panel 未重新注册时，继续使用保守审批规则。
 
 Luna 的 manifest 更新采用原子 Registry 替换：
 
@@ -892,7 +874,7 @@ Chat AI 尚未上线，不保留旧开发分支的 Conversation、Message、附�
 迁入 Kael 的是通用 Runtime 能力：
 
 - Agent Loop、Run queue、预算和超时；
-- Model Provider、fallback 和结构化输出；
+- Codex Harness、Responses 配置和结构化工具；
 - schema、argument repair 和工具名归一化；
 - ToolResult、Approval、cancel 和幂等；
 - Event cursor、历史、恢复和限制；

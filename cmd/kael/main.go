@@ -17,12 +17,13 @@ import (
 	"github.com/jumpserver/kael/internal/config"
 	"github.com/jumpserver/kael/internal/event"
 	"github.com/jumpserver/kael/internal/identity"
-	"github.com/jumpserver/kael/internal/model"
 	"github.com/jumpserver/kael/internal/platformgateway"
 	"github.com/jumpserver/kael/internal/ports"
+	agentruntime "github.com/jumpserver/kael/internal/runtime"
 	"github.com/jumpserver/kael/internal/service"
 	"github.com/jumpserver/kael/internal/store"
 	"go.uber.org/zap"
+	"path/filepath"
 )
 
 var (
@@ -61,10 +62,11 @@ func run(configPath string, logger *zap.Logger) error {
 	if err != nil {
 		return err
 	}
-	provider, err := model.NewDynamicProvider(context.Background(), componentClient.ModelConfig, time.Minute)
+	engine, err := agentruntime.NewHarness(context.Background(), settings.CodexBinary, filepath.Join(settings.RuntimeDataFolderPath, "harness"), componentClient.ModelConfig)
 	if err != nil {
 		return err
 	}
+	defer engine.Close()
 	var runtimeStore ports.Store
 	switch settings.RuntimeStore {
 	case "core":
@@ -87,7 +89,7 @@ func run(configPath string, logger *zap.Logger) error {
 			return err
 		}
 	}
-	runtimeService, err := service.New(service.Options{Store: runtimeStore, Provider: provider, Bus: bus, Logger: logger, InstanceID: settings.Name, Workers: 4, ArtifactDir: settings.ArtifactFolderPath, Capability: capability, StorageKind: settings.RuntimeStore, StorageDurable: true})
+	runtimeService, err := service.New(service.Options{Store: runtimeStore, Engine: engine, Bus: bus, Logger: logger, InstanceID: settings.Name, Workers: 4, ToolResultTimeout: settings.ToolResultTimeout, ArtifactDir: settings.ArtifactFolderPath, Capability: capability, StorageKind: settings.RuntimeStore, StorageDurable: true})
 	if err != nil {
 		return err
 	}
@@ -110,7 +112,7 @@ func run(configPath string, logger *zap.Logger) error {
 	heartbeatContext, cancelHeartbeat := context.WithCancel(context.Background())
 	defer cancelHeartbeat()
 	go componentClient.RunHeartbeat(heartbeatContext, logger)
-	logger.Info("kael started", zap.String("address", httpServer.Addr), zap.String("version", Version), zap.String("component", settings.Name), zap.String("model", provider.Info().Model), zap.String("storage", settings.RuntimeStore))
+	logger.Info("kael started", zap.String("address", httpServer.Addr), zap.String("version", Version), zap.String("component", settings.Name), zap.String("model", engine.Info().Model), zap.String("storage", settings.RuntimeStore))
 	signals, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	var serveErr error

@@ -118,7 +118,7 @@ func (c *messageDeltaCoalescer) flushLocked(ctx context.Context, allowCancelling
 	return nil
 }
 
-func (s *Service) modelStarted(ctx context.Context, run *domain.Run, sequence int) error {
+func (s *Service) modelStarted(ctx context.Context, run *domain.Run, sequence int, info model.Info) error {
 	now := time.Now().UTC()
 	var notify []string
 	err := s.store.Transaction(ctx, func(tx ports.Tx) error {
@@ -133,7 +133,7 @@ func (s *Service) modelStarted(ctx context.Context, run *domain.Run, sequence in
 		if err != nil {
 			return err
 		}
-		call := &domain.ModelCall{ID: uuid.NewString(), RunID: run.ID, Sequence: sequence, Provider: s.provider.Info().Provider, Model: s.provider.Info().Model, State: "running", CreatedAt: now}
+		call := &domain.ModelCall{ID: uuid.NewString(), RunID: run.ID, Sequence: sequence, Provider: info.Provider, Model: info.Model, State: "running", CreatedAt: now}
 		if err = tx.CreateModelCall(call); err != nil {
 			return err
 		}
@@ -141,7 +141,7 @@ func (s *Service) modelStarted(ctx context.Context, run *domain.Run, sequence in
 		if err = tx.SaveRun(current); err != nil {
 			return err
 		}
-		_, deliveries, err := event.Project(tx, "model.requested", "model_call", call.ID, "run", event.References{ConversationID: current.ConversationID, RunID: current.ID, MessageID: current.OutputMessageID}, map[string]any{"sequence": sequence, "provider": call.Provider, "model": call.Model}, []domain.PanelSession{*panel}, now)
+		_, deliveries, err := event.Project(tx, "model.requested", "model_call", call.ID, "run", event.References{ConversationID: current.ConversationID, RunID: current.ID, MessageID: current.OutputMessageID}, map[string]any{"sequence": sequence, "engine": "codex", "scope": "agent_turn", "provider": call.Provider, "model": call.Model}, []domain.PanelSession{*panel}, now)
 		if err != nil {
 			return err
 		}
@@ -182,7 +182,7 @@ func (s *Service) modelCompleted(ctx context.Context, run *domain.Run, sequence 
 		if err = tx.SaveRun(current); err != nil {
 			return err
 		}
-		_, deliveries, err := event.Project(tx, "model.completed", "model_call", call.ID, "run", event.References{ConversationID: current.ConversationID, RunID: current.ID, MessageID: current.OutputMessageID}, map[string]any{"sequence": sequence, "provider": call.Provider, "model": call.Model, "duration_ms": call.DurationMS, "usage": result.Usage, "finish_reason": result.FinishReason, "request_id": result.RequestID}, []domain.PanelSession{*panel}, now)
+		_, deliveries, err := event.Project(tx, "model.completed", "model_call", call.ID, "run", event.References{ConversationID: current.ConversationID, RunID: current.ID, MessageID: current.OutputMessageID}, map[string]any{"sequence": sequence, "engine": "codex", "scope": "agent_turn", "provider": call.Provider, "model": call.Model, "duration_ms": call.DurationMS, "usage": result.Usage, "finish_reason": result.FinishReason, "request_id": result.RequestID}, []domain.PanelSession{*panel}, now)
 		if err != nil {
 			return err
 		}
@@ -300,14 +300,15 @@ func (s *Service) prepareToolCall(ctx context.Context, run *domain.Run, snapshot
 			return serviceError(Conflict, "capability_revoked", "run capability snapshot is no longer executable", nil)
 		}
 		digest := domain.HashBytes(arguments)
-		requiresConfirmation := policy.ConfirmationRequired(registration.RequiresConfirmation, panel.ApprovalMode)
-		call = &domain.ToolCall{ID: uuid.NewString(), ConversationID: run.ConversationID, RunID: run.ID, PanelSessionID: run.PanelSessionID, SubjectID: run.SubjectID, OrganizationID: run.OrganizationID, RegistrationID: registration.ID, DefinitionVersion: registration.DefinitionVersion, DefinitionDigest: registration.DefinitionDigest, ToolName: registration.Name, Arguments: append(json.RawMessage(nil), arguments...), ArgumentsDigest: digest, Risk: registration.Risk, RequiresConfirmation: requiresConfirmation, InvocationSequence: uint64(now.UnixNano()), InvocationID: uuid.NewString(), State: "created", CreatedAt: now, UpdatedAt: now}
+		risk, confirmation := policy.InvocationPolicy(*registration, arguments)
+		requiresConfirmation := policy.ConfirmationRequired(confirmation, panel.ApprovalMode)
+		call = &domain.ToolCall{ID: uuid.NewString(), ConversationID: run.ConversationID, RunID: run.ID, PanelSessionID: run.PanelSessionID, SubjectID: run.SubjectID, OrganizationID: run.OrganizationID, RegistrationID: registration.ID, DefinitionVersion: registration.DefinitionVersion, DefinitionDigest: registration.DefinitionDigest, ToolName: registration.Name, Arguments: append(json.RawMessage(nil), arguments...), ArgumentsDigest: digest, Risk: risk, RequiresConfirmation: requiresConfirmation, InvocationSequence: uint64(now.UnixNano()), InvocationID: uuid.NewString(), State: "created", CreatedAt: now, UpdatedAt: now}
 		if err = tx.CreateToolCall(call); err != nil {
 			return err
 		}
 		if requiresConfirmation {
 			preview, _ := json.Marshal(map[string]any{"tool_name": registration.Name, "arguments": json.RawMessage(arguments), "description": registration.Description})
-			approval = &domain.Approval{ID: uuid.NewString(), ConversationID: run.ConversationID, RunID: run.ID, ToolCallID: call.ID, RegistrationID: registration.ID, PanelSessionID: run.PanelSessionID, Scope: "panel", SubjectID: run.SubjectID, OrganizationID: run.OrganizationID, DefinitionVersion: registration.DefinitionVersion, ArgumentsDigest: digest, Risk: registration.Risk, Preview: preview, PolicyVersion: "1", State: "pending", ExpiresAt: now.Add(10 * time.Minute), CreatedAt: now, UpdatedAt: now}
+			approval = &domain.Approval{ID: uuid.NewString(), ConversationID: run.ConversationID, RunID: run.ID, ToolCallID: call.ID, RegistrationID: registration.ID, PanelSessionID: run.PanelSessionID, Scope: "panel", SubjectID: run.SubjectID, OrganizationID: run.OrganizationID, DefinitionVersion: registration.DefinitionVersion, ArgumentsDigest: digest, Risk: risk, Preview: preview, PolicyVersion: "1", State: "pending", ExpiresAt: now.Add(10 * time.Minute), CreatedAt: now, UpdatedAt: now}
 			call.State, current.State = "waiting_approval", "waiting_approval"
 			if err = tx.CreateApproval(approval); err != nil {
 				return err
@@ -327,7 +328,7 @@ func (s *Service) prepareToolCall(ctx context.Context, run *domain.Run, snapshot
 				notify = append(notify, delivery.PanelSessionID)
 			}
 		}
-		return s.audit(tx, domain.Principal{SubjectID: run.SubjectID, OrganizationID: run.OrganizationID}, "tool.created", run.ConversationID, run.PanelSessionID, run.ID, map[string]any{"tool_call_id": call.ID, "registration_id": registration.ID, "risk": registration.Risk})
+		return s.audit(tx, domain.Principal{SubjectID: run.SubjectID, OrganizationID: run.OrganizationID}, "tool.created", run.ConversationID, run.PanelSessionID, run.ID, map[string]any{"tool_call_id": call.ID, "registration_id": registration.ID, "risk": risk})
 	})
 	if err != nil {
 		return nil, nil, translateOrService(err)
@@ -507,6 +508,12 @@ func (s *Service) dispatchToolCall(ctx context.Context, run *domain.Run, call *d
 }
 
 func (s *Service) waitToolResult(ctx context.Context, run *domain.Run, call *domain.ToolCall) (agentruntime.ToolObservation, error) {
+	wait := s.toolResultTimeout
+	if wait <= 0 {
+		wait = 45 * time.Second
+	}
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
 	notifications, unsubscribe := s.bus.Subscribe(run.PanelSessionID)
 	defer unsubscribe()
 	ticker := time.NewTicker(time.Second)
@@ -522,10 +529,79 @@ func (s *Service) waitToolResult(ctx context.Context, run *domain.Run, call *dom
 		select {
 		case <-ctx.Done():
 			return agentruntime.ToolObservation{}, ctx.Err()
+		case <-deadline.C:
+			return s.expireToolWait(ctx, run, call)
 		case <-notifications:
 		case <-ticker.C:
 		}
 	}
+}
+
+// A lost executor receipt is an observation for the model, never permission to
+// retry a write. The transaction arbitrates with a concurrently arriving result.
+func (s *Service) expireToolWait(ctx context.Context, run *domain.Run, call *domain.ToolCall) (agentruntime.ToolObservation, error) {
+	var observation agentruntime.ToolObservation
+	now := time.Now().UTC()
+	err := s.store.Transaction(ctx, func(tx ports.Tx) error {
+		latest, err := tx.LatestToolResult(call.ID)
+		if err == nil && latest.Done {
+			observation = agentruntime.ToolObservation{ToolCallID: call.ID, Status: latest.Status, Result: latest.Result, Error: latest.ErrorJSON}
+			return nil
+		}
+		if err != nil && !errors.Is(err, ports.ErrNotFound) {
+			return err
+		}
+		current, err := tx.RunInternal(run.ID, true)
+		if err != nil {
+			return err
+		}
+		if current.Terminal() || current.State == "cancelling" {
+			return context.Canceled
+		}
+		stored, err := tx.ToolCall(call.ID, true)
+		if err != nil {
+			return err
+		}
+		if current.State != "waiting_capability" || stored.State != "dispatched" && stored.State != "running" {
+			return serviceError(Conflict, "tool_result_terminal", "tool call is no longer waiting for a result", nil)
+		}
+		panel, err := tx.PanelInternal(call.PanelSessionID, true)
+		if err != nil {
+			return err
+		}
+		sequence := uint64(1)
+		var partial json.RawMessage
+		if latest != nil {
+			sequence = latest.Sequence + 1
+			partial = latest.Result
+		}
+		failure := json.RawMessage(`{"code":"execution_state_unknown","message":"Executor result deadline exceeded. Cancellation was requested but remote termination is unconfirmed. Inspect execution state before any retry; completed writes may have taken effect."}`)
+		request := ToolResultRequest{RunID: run.ID, Sequence: sequence, Done: true, Status: "timeout", Result: partial, Error: failure}
+		digest, _ := domain.HashValue(request)
+		result := &domain.ToolResult{ID: uuid.NewString(), ToolCallID: call.ID, RunID: run.ID, PanelSessionID: panel.ID, Sequence: sequence, Done: true, Status: "timeout", Result: partial, ErrorJSON: failure, PayloadDigest: digest, CreatedAt: now}
+		if err = tx.CreateToolResult(result); err != nil {
+			return err
+		}
+		stored.State, stored.FinishedAt, stored.UpdatedAt = "timeout", &now, now
+		if err = tx.SaveToolCall(stored); err != nil {
+			return err
+		}
+		current.State, current.UpdatedAt = "running", now
+		if err = tx.SaveRun(current); err != nil {
+			return err
+		}
+		refs := event.References{ConversationID: run.ConversationID, RunID: run.ID, ToolCallID: call.ID}
+		if _, _, err = event.Project(tx, "tool.cancel", "tool_call", call.ID, "tool", refs, map[string]any{"tool_call_id": call.ID, "reason": "tool_result_timeout"}, []domain.PanelSession{*panel}, now); err != nil {
+			return err
+		}
+		_, _, err = event.Project(tx, "tool.failed", "tool_call", call.ID, "tool", refs, map[string]any{"tool_call_id": call.ID, "tool_name": call.ToolName, "status": "timeout", "done": true, "result": partial, "error": failure}, []domain.PanelSession{*panel}, now)
+		observation = agentruntime.ToolObservation{ToolCallID: call.ID, Status: "timeout", Result: partial, Error: failure}
+		return err
+	})
+	if err == nil {
+		s.bus.Notify(call.PanelSessionID)
+	}
+	return observation, err
 }
 
 func (s *Service) latestToolResult(ctx context.Context, id string) (*domain.ToolResult, error) {
@@ -777,6 +853,12 @@ func (s *Service) SubmitToolResult(ctx context.Context, principal domain.Princip
 				eventType, call.State = "tool.failed", "failed"
 			}
 			call.FinishedAt = &now
+			// A terminal RPC receipt returns control to the harness, even when its
+			// command is still running and must be queried by a subsequent tool.
+			run.State, run.UpdatedAt = "running", now
+			if err = tx.SaveRun(run); err != nil {
+				return err
+			}
 		} else if request.Status == "running" {
 			call.State = "running"
 		}
@@ -878,6 +960,16 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 			call.State, call.UpdatedAt, call.FinishedAt = "rejected", now, &now
 			if callErr = tx.SaveToolCall(call); callErr != nil {
 				return callErr
+			}
+			run, runErr := tx.RunInternal(approval.RunID, true)
+			if runErr != nil {
+				return runErr
+			}
+			if run.State == "waiting_approval" {
+				run.State, run.UpdatedAt = "running", now
+				if runErr = tx.SaveRun(run); runErr != nil {
+					return runErr
+				}
 			}
 		}
 		payload := map[string]any{"approval_id": approval.ID, "tool_call_id": approval.ToolCallID, "status": approval.State, "approved": approval.State == "approved", "reason": approval.Reason}

@@ -67,12 +67,13 @@ func translateStore(err error) error {
 
 type Options struct {
 	Store             ports.Store
-	Provider          model.Provider
+	Engine            agentruntime.Engine
 	Bus               *event.Bus
 	Logger            *zap.Logger
 	InstanceID        string
 	Workers           int
 	RunTimeout        time.Duration
+	ToolResultTimeout time.Duration
 	PanelLease        time.Duration
 	RegistrationLease time.Duration
 	EventRetention    time.Duration
@@ -85,13 +86,13 @@ type Options struct {
 
 type Service struct {
 	store             ports.Store
-	loop              *agentruntime.Loop
-	provider          model.Provider
+	engine            agentruntime.Engine
 	bus               *event.Bus
 	logger            *zap.Logger
 	instanceID        string
 	workers           int
 	runTimeout        time.Duration
+	toolResultTimeout time.Duration
 	panelLease        time.Duration
 	registrationLease time.Duration
 	eventRetention    time.Duration
@@ -113,7 +114,7 @@ type Service struct {
 }
 
 func New(options Options) (*Service, error) {
-	if options.Store == nil || options.Provider == nil || options.Bus == nil || options.InstanceID == "" {
+	if options.Store == nil || options.Engine == nil || options.Bus == nil || options.InstanceID == "" {
 		return nil, fmt.Errorf("service dependencies are incomplete")
 	}
 	if options.Logger == nil {
@@ -128,6 +129,9 @@ func New(options Options) (*Service, error) {
 	if options.PanelLease <= 0 {
 		options.PanelLease = 2 * time.Minute
 	}
+	if options.ToolResultTimeout <= 0 {
+		options.ToolResultTimeout = 45 * time.Second
+	}
 	if options.RegistrationLease <= 0 {
 		options.RegistrationLease = options.PanelLease
 	}
@@ -140,7 +144,7 @@ func New(options Options) (*Service, error) {
 	if options.StorageKind == "" {
 		options.StorageKind = "memory"
 	}
-	return &Service{store: options.Store, loop: agentruntime.New(options.Provider), provider: options.Provider, bus: options.Bus, logger: options.Logger, instanceID: options.InstanceID, workers: options.Workers, runTimeout: options.RunTimeout, panelLease: options.PanelLease, registrationLease: options.RegistrationLease, eventRetention: options.EventRetention, artifactDir: options.ArtifactDir, maxArtifactBytes: options.MaxArtifactBytes, capability: options.Capability, storageKind: options.StorageKind, storageDurable: options.StorageDurable, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}), active: make(map[string]context.CancelFunc)}, nil
+	return &Service{store: options.Store, engine: options.Engine, bus: options.Bus, logger: options.Logger, instanceID: options.InstanceID, workers: options.Workers, runTimeout: options.RunTimeout, toolResultTimeout: options.ToolResultTimeout, panelLease: options.PanelLease, registrationLease: options.RegistrationLease, eventRetention: options.EventRetention, artifactDir: options.ArtifactDir, maxArtifactBytes: options.MaxArtifactBytes, capability: options.Capability, storageKind: options.StorageKind, storageDurable: options.StorageDurable, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}), active: make(map[string]context.CancelFunc)}, nil
 }
 
 func (s *Service) Start(ctx context.Context) error {
@@ -224,7 +228,7 @@ func (s *Service) Metrics(ctx context.Context) (map[string]int64, error) {
 	return result, err
 }
 func (s *Service) Bootstrap() map[string]any {
-	return map[string]any{"api_version": domain.APIVersion, "protocol_version": domain.ProtocolVersion, "capability_version": domain.CapabilityVersion, "cluster_id": "kael", "instance_id": s.instanceID, "storage": map[string]any{"kind": s.storageKind, "durable": s.storageDurable}, "features": map[string]bool{"conversations": true, "panel_capabilities": true, "service_capabilities": s.capability != nil, "platform_gateway": s.capability != nil, "artifacts": true, "branch": true, "regenerate": true, "background": false, "sse_replay": true, "transcription": false, "web_search": false, "notifications": false}, "limits": map[string]any{"max_context_bytes": domain.MaxContextBytes, "max_tools": domain.MaxTools, "max_rounds": domain.MaxRounds, "max_model_requests": domain.MaxModelRequests, "max_queued_runs": domain.MaxQueuedRuns, "max_artifact_bytes": s.maxArtifactBytes, "event_retention_seconds": int64(s.eventRetention.Seconds())}}
+	return map[string]any{"agent_engine": "codex", "agent_protocol_version": 1, "api_version": domain.APIVersion, "protocol_version": domain.ProtocolVersion, "capability_version": domain.CapabilityVersion, "cluster_id": "kael", "instance_id": s.instanceID, "storage": map[string]any{"kind": s.storageKind, "durable": s.storageDurable}, "features": map[string]bool{"conversations": true, "panel_capabilities": true, "service_capabilities": s.capability != nil, "platform_gateway": s.capability != nil, "artifacts": true, "branch": true, "regenerate": true, "background": false, "sse_replay": true, "transcription": false, "web_search": false, "notifications": false}, "limits": map[string]any{"max_context_bytes": domain.MaxContextBytes, "max_tools": domain.MaxTools, "max_tool_calls": domain.MaxToolCalls, "max_queued_runs": domain.MaxQueuedRuns, "max_artifact_bytes": s.maxArtifactBytes, "event_retention_seconds": int64(s.eventRetention.Seconds())}}
 }
 func (s *Service) Profiles(principal domain.Principal) []policy.Profile {
 	available := policy.Available(principal)
@@ -237,7 +241,7 @@ func (s *Service) Profiles(principal domain.Principal) []policy.Profile {
 	}
 	return result
 }
-func (s *Service) ModelInfo() model.Info   { return s.provider.Info() }
+func (s *Service) ModelInfo() model.Info   { return s.engine.Info() }
 func (s *Service) MaxArtifactBytes() int64 { return s.maxArtifactBytes }
 
 func (s *Service) maintenance() {

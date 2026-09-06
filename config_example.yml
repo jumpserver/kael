@@ -1,3 +1,7 @@
+# Codex harness is the sole Agent runtime; install the exact pinned CLI version.
+# npm install -g @openai/codex@0.153.2
+CODEX_BINARY: codex
+# CHAT_AI_BASE_URL in Core must support Responses API. Chat Completions is not supported.
 # 与 Koko 一致，Kael 只使用平铺配置。
 # 组件名称不能与其它 Terminal component 重复。
 # NAME: "[Kael]-hostname"
@@ -10,6 +14,9 @@ BOOTSTRAP_TOKEN: <PleaseChangeMe>
 # BIND_HOST: 0.0.0.0
 # HTTPD_PORT: 8083
 # HTTP_REQUEST_TIMEOUT: 30
+# Deadline for each relayed tool response, independent of command lifetime and approvals.
+# Async commands yield after 2s; wait_command_execution is bounded at 30s.
+# TOOL_RESULT_TIMEOUT: 45s
 # IGNORE_VERIFY_CERTS: false
 
 # Runtime 状态默认通过组件签名写回 JumpServer Core。

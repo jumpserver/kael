@@ -220,16 +220,16 @@ func validateAccessKey(client *httplib.Client) (bool, error) {
 	return true, nil
 }
 
-func (c *Client) ModelConfig(ctx context.Context) (kaelmodel.HTTPConfig, error) {
+func (c *Client) ModelConfig(ctx context.Context) (kaelmodel.Config, error) {
 	if err := ctx.Err(); err != nil {
-		return kaelmodel.HTTPConfig{}, err
+		return kaelmodel.Config{}, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var value terminalConfig
 	response, err := c.client.Get(terminalConfigPath, &value)
 	if err != nil {
-		return kaelmodel.HTTPConfig{}, responseError("load model configuration from TerminalConfig", response, err)
+		return kaelmodel.Config{}, responseError("load model configuration from TerminalConfig", response, err)
 	}
 	return modelConfig(value)
 }
@@ -431,11 +431,11 @@ func equalHexDigest(expected, provided string) bool {
 	return expectedErr == nil && providedErr == nil && hmac.Equal(expectedBytes, providedBytes)
 }
 
-func modelConfig(value terminalConfig) (kaelmodel.HTTPConfig, error) {
+func modelConfig(value terminalConfig) (kaelmodel.Config, error) {
 	if value.ChatAIEnabled == nil || !*value.ChatAIEnabled {
-		return kaelmodel.HTTPConfig{}, fmt.Errorf("Chat AI is disabled in TerminalConfig")
+		return kaelmodel.Config{}, fmt.Errorf("Chat AI is disabled in TerminalConfig")
 	}
-	config := kaelmodel.HTTPConfig{
+	config := kaelmodel.Config{
 		Provider:        strings.ToLower(strings.TrimSpace(value.ChatAIProvider)),
 		BaseURL:         strings.TrimSpace(value.ChatAIBaseURL),
 		APIKey:          strings.TrimSpace(value.ChatAIAPIKey),
@@ -448,7 +448,7 @@ func modelConfig(value terminalConfig) (kaelmodel.HTTPConfig, error) {
 		config.Provider = "openai_compatible"
 	}
 	if config.BaseURL == "" || config.APIKey == "" || config.Model == "" {
-		return kaelmodel.HTTPConfig{}, fmt.Errorf("model endpoint is incomplete in TerminalConfig")
+		return kaelmodel.Config{}, fmt.Errorf("model endpoint is incomplete in TerminalConfig")
 	}
 	return config, nil
 }

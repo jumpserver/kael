@@ -1,5 +1,8 @@
 # AI Runtime 迁移实施状态
 
+> 2026-09-06 harness 分支更新：Agent 引擎已直接替换为 Codex App Server，移除官方 Go SDK adapter 与 Chat Completions fallback。当前范围、试用步骤、上下文回收及统计语义见 [ADR 0007](./adr/0007-codex-harness.md)；下文此前迁移的验收结论不代表 Codex 已完成真实环境联调。
+
+
 日期：2026-09-05
 
 ## 结论
@@ -13,7 +16,7 @@ Runtime 仍只依赖 `ports.Store`/`ports.Tx` 抽象。默认 adapter 通过组�
 | 范围 | 状态 | 实现语义 |
 |---|---|---|
 | Component | 完成 | 与 Koko 相同的 Terminal registration、AccessKey 校验和心跳契约；component type 为 `kael` |
-| Model | 完成 | 从 TerminalConfig 读取并定期刷新 `CHAT_AI_ENABLED/PROVIDER/BASE_URL/API_KEY/PROXY/MODEL`；仅 `CHAT_AI_ENABLED` 控制功能启停，本地配置不保存模型 Secret |
+| Model | 完成 | 从 TerminalConfig 读取并在每次 Run 前刷新 `CHAT_AI_ENABLED/PROVIDER/BASE_URL/API_KEY/PROXY/MODEL`；仅 `CHAT_AI_ENABLED` 控制功能启停，本地配置不保存模型 Secret |
 | Store port | 完成 | Runtime 只依赖通用 Store/Tx 接口；默认由 Core 保存 opaque Journal，Kael 不直接使用数据库；本地 JSONL 为可选回退 |
 | 直接数据库依赖 | 已移除 | 无 DSN、GORM、MySQL/PostgreSQL driver、migration 或领域 ORM 标签 |
 | Conversation/Message/Run | 完成 | 历史、终态和幂等索引持久化；重启时未完成 Run 收敛为 `interrupted`，不会自动重放模型或工具 |
@@ -38,7 +41,7 @@ Kael 的管理员 stats API 仍接受 `days=1..365`（默认 30），保留 flat
 
 - 配置文件和环境变量统一使用 Koko 风格的平铺大写键；核心键为 `CORE_HOST`、`BOOTSTRAP_TOKEN`、`NAME`、`BIND_HOST`、`HTTPD_PORT`、`HTTP_REQUEST_TIMEOUT`、`IGNORE_VERIFY_CERTS` 和 `RUNTIME_STORE`，不再维护嵌套配置及同义别名。
 - AccessKey 默认保存在 `data/keys/.access_key`，权限为 `0600`；已有 Key 会先通过 Core profile 校验，未注册或已失效时使用 BootstrapToken 注册。
-- 模型配置只来自 TerminalConfig，默认每分钟刷新；仅 `CHAT_AI_ENABLED` 控制功能启停，`CHAT_AI_METHOD`、`CHAT_AI_EMBED_URL` 及 Lina iframe/embed 分支已删除。Core 不可用、Chat AI 被禁用或模型端点不完整时 fail closed。
+- 模型配置只来自 TerminalConfig，启动和每次 Run 执行前刷新；仅 `CHAT_AI_ENABLED` 控制功能启停，`CHAT_AI_METHOD`、`CHAT_AI_EMBED_URL` 及 Lina iframe/embed 分支已删除。Core 不可用、Chat AI 被禁用或模型端点不完整时 fail closed。
 - 所有 `/kael/api/v1` 用户请求继续要求旧 `chat_ai.use_chatai` 权限（superuser 除外）。Platform Gateway 默认且必须启用，因为 Lina 默认 `general` 依赖它；显式关闭或缺少有效 `PLATFORM_DELEGATION_KEY` 时 Kael 在监听端口前失败，不能出现 ready 但默认会话固定返回 503 的部署。Kael 的 delegation key/ID/issuer/audience 必须分别匹配 Core 对应 `CHAT_AI_*` 配置，其中 secret 去除首尾空白后至少 32 字符；仓库和镜像不提供可工作的默认共享密钥。
 - Platform Gateway 默认允许 `GET/POST/PUT/PATCH`，不默认允许 `DELETE`。`general` 使用与当前 JumpServer 源码默认 `CHAT_AI_ALLOWED_OPERATION_IDS` 等价的编译期固定范围；它不会读取生产环境对 operation IDs、allowed/blocked paths/tags 或 method policies 的自定义配置。切流前必须比较现网策略，任何差异都要显式评审并收窄。asset/session_audit/ops 继续叠加各自更窄范围，management 仅管理员可用。所有范围再叠加 method allowlist、敏感路径拒绝、OpenAPI 静态 required-permissions 全量检查；动态权限或缺少权限元数据的 operation 一律不可搜索、不可调用。
 - Run 创建时固化 admin flags 与 permission 列表供异步搜索和选择保持同一授权可见性；Core 在实际 delegated request 上仍按当前用户状态和权限实时复核，权限撤销后不能凭旧 Run 快照执行。
