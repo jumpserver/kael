@@ -18,6 +18,8 @@ BOOTSTRAP_TOKEN: <PleaseChangeMe>
 # Async commands yield after 2s; wait_command_execution is bounded at 30s.
 # TOOL_RESULT_TIMEOUT: 45s
 # IGNORE_VERIFY_CERTS: false
+# 同时写入 stdout 和 data/logs/kael.log；文件达到 50 MB 时轮转，保留 7 份、7 天。
+# LOG_LEVEL: INFO
 
 # Runtime 状态默认通过组件签名写回 JumpServer Core。
 # 仅本地开发或 Core 尚未提供 runtime-store API 时预先选择 jsonl；两种 Store 不双写，
