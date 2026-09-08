@@ -27,7 +27,7 @@ type Tx interface {
 	Conversation(id string, principal domain.Principal, lock bool) (*domain.Conversation, error)
 	SaveConversation(*domain.Conversation) error
 	ListConversations(principal domain.Principal, kind string, offset, limit int) ([]domain.Conversation, int64, error)
-	ListConversationsByOrganization(organizationID string, offset, limit int) ([]domain.Conversation, int64, error)
+	ListQuestionedConversationsByOrganization(organizationID string, offset, limit int) ([]domain.Conversation, int64, error)
 	ConversationByOrganization(id, organizationID string) (*domain.Conversation, error)
 	ActiveRunCount(conversationID string) (int64, error)
 
