@@ -122,6 +122,8 @@ func (p *corePersistence) Commit(previous, next *memoryState) error {
 	if p.poisoned != nil {
 		return p.unavailableLocked()
 	}
+	previous = corePersistableState(previous)
+	next = corePersistableState(next)
 	delta := diffPersistentState(previous, next)
 	if delta.empty() {
 		return nil
@@ -173,6 +175,146 @@ func (p *corePersistence) Commit(previous, next *memoryState) error {
 		p.recordsSinceSnapshot++
 	}
 	return nil
+}
+
+// corePersistableState keeps pre-question sessions process-local. Luna prepares
+// conversations, panels, context, and registrations before the user sends a
+// prompt; persisting that preparation would expose empty conversations in Core
+// audit views. The first user message makes the entire conversation subgraph
+// durable in the same transaction.
+func corePersistableState(state *memoryState) *memoryState {
+	result := state.clone()
+	durableConversations := make(map[string]struct{})
+	for _, message := range state.messages {
+		if message.Role == "user" {
+			durableConversations[message.ConversationID] = struct{}{}
+		}
+	}
+
+	transientConversations := make(map[string]struct{})
+	for id := range result.conversations {
+		if _, durable := durableConversations[id]; durable {
+			continue
+		}
+		transientConversations[id] = struct{}{}
+		delete(result.conversations, id)
+	}
+	if len(transientConversations) == 0 {
+		return result
+	}
+
+	transientMessages := make(map[string]struct{})
+	for id, message := range result.messages {
+		if _, transient := transientConversations[message.ConversationID]; transient {
+			transientMessages[id] = struct{}{}
+			delete(result.messages, id)
+		}
+	}
+	for id, artifact := range result.artifacts {
+		if _, transient := transientMessages[artifact.MessageID]; transient {
+			delete(result.artifacts, id)
+		}
+	}
+
+	transientPanels := make(map[string]struct{})
+	for id, panel := range result.panels {
+		if _, transient := transientConversations[panel.ConversationID]; transient {
+			transientPanels[id] = struct{}{}
+			delete(result.panels, id)
+		}
+	}
+	for id, snapshot := range result.contexts {
+		if _, transient := transientPanels[snapshot.PanelSessionID]; transient {
+			delete(result.contexts, id)
+		}
+	}
+	for id, registration := range result.registrations {
+		if _, transient := transientPanels[registration.PanelSessionID]; transient {
+			delete(result.registrations, id)
+		}
+	}
+
+	transientRuns := make(map[string]struct{})
+	for id, run := range result.runs {
+		if _, transient := transientConversations[run.ConversationID]; transient {
+			transientRuns[id] = struct{}{}
+			delete(result.runs, id)
+		}
+	}
+	for id, call := range result.modelCalls {
+		if _, transient := transientRuns[call.RunID]; transient {
+			delete(result.modelCalls, id)
+		}
+	}
+
+	transientToolCalls := make(map[string]struct{})
+	for id, call := range result.toolCalls {
+		_, transientConversation := transientConversations[call.ConversationID]
+		_, transientRun := transientRuns[call.RunID]
+		_, transientPanel := transientPanels[call.PanelSessionID]
+		if transientConversation || transientRun || transientPanel {
+			transientToolCalls[id] = struct{}{}
+			delete(result.toolCalls, id)
+		}
+	}
+	for id, value := range result.toolResults {
+		_, transientCall := transientToolCalls[value.ToolCallID]
+		_, transientRun := transientRuns[value.RunID]
+		_, transientPanel := transientPanels[value.PanelSessionID]
+		if transientCall || transientRun || transientPanel {
+			delete(result.toolResults, id)
+		}
+	}
+
+	transientApprovals := make(map[string]struct{})
+	for id, approval := range result.approvals {
+		_, transientConversation := transientConversations[approval.ConversationID]
+		_, transientRun := transientRuns[approval.RunID]
+		_, transientPanel := transientPanels[approval.PanelSessionID]
+		_, transientCall := transientToolCalls[approval.ToolCallID]
+		if transientConversation || transientRun || transientPanel || transientCall {
+			transientApprovals[id] = struct{}{}
+			delete(result.approvals, id)
+		}
+	}
+
+	transientEvents := make(map[string]struct{})
+	for id, value := range result.events {
+		if _, transient := transientConversations[value.ConversationID]; transient {
+			transientEvents[id] = struct{}{}
+			delete(result.events, id)
+		}
+	}
+	for id := range transientConversations {
+		delete(result.eventHighWater, id)
+	}
+	for id, delivery := range result.deliveries {
+		_, transientConversation := transientConversations[delivery.ConversationID]
+		_, transientPanel := transientPanels[delivery.PanelSessionID]
+		_, transientRun := transientRuns[delivery.RunID]
+		_, transientMessage := transientMessages[delivery.MessageID]
+		_, transientCall := transientToolCalls[delivery.ToolCallID]
+		_, transientApproval := transientApprovals[delivery.ApprovalID]
+		_, transientEvent := transientEvents[delivery.EventID]
+		if transientConversation || transientPanel || transientRun || transientMessage || transientCall || transientApproval || transientEvent {
+			delete(result.deliveries, id)
+		}
+	}
+	for id := range transientPanels {
+		delete(result.deliveryHighWater, id)
+	}
+
+	for id, audit := range result.audits {
+		_, transientConversation := transientConversations[audit.ConversationID]
+		_, transientPanel := transientPanels[audit.PanelSessionID]
+		_, transientRun := transientRuns[audit.RunID]
+		_, transientCall := transientToolCalls[audit.ToolCallID]
+		_, transientApproval := transientApprovals[audit.ApprovalID]
+		if transientConversation || transientPanel || transientRun || transientCall || transientApproval {
+			delete(result.audits, id)
+		}
+	}
+	return result
 }
 
 func (p *corePersistence) Ready(ctx context.Context) error {
