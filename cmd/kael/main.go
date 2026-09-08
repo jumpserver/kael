@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -17,13 +18,13 @@ import (
 	"github.com/jumpserver/kael/internal/config"
 	"github.com/jumpserver/kael/internal/event"
 	"github.com/jumpserver/kael/internal/identity"
+	kaellogger "github.com/jumpserver/kael/internal/logger"
 	"github.com/jumpserver/kael/internal/platformgateway"
 	"github.com/jumpserver/kael/internal/ports"
 	agentruntime "github.com/jumpserver/kael/internal/runtime"
 	"github.com/jumpserver/kael/internal/service"
 	"github.com/jumpserver/kael/internal/store"
 	"go.uber.org/zap"
-	"path/filepath"
 )
 
 var (
@@ -41,22 +42,23 @@ func main() {
 		fmt.Printf("kael %s (%s, %s, %s)\n", Version, Githash, Buildstamp, Goversion)
 		return
 	}
-	logger, err := zap.NewProduction()
+	settings, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "load config:", err)
+		os.Exit(1)
+	}
+	logger, err := kaellogger.New(settings.LogDirPath, settings.LogLevel)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "create logger:", err)
 		os.Exit(1)
 	}
 	defer func() { _ = logger.Sync() }()
-	if err = run(*configPath, logger); err != nil {
+	if err = run(settings, logger); err != nil {
 		logger.Fatal("kael stopped", zap.Error(err))
 	}
 }
 
-func run(configPath string, logger *zap.Logger) error {
-	settings, err := config.Load(configPath)
-	if err != nil {
-		return err
-	}
+func run(settings config.Config, logger *zap.Logger) error {
 	tlsVerify := !settings.IgnoreVerifyCerts
 	componentClient, err := component.Connect(component.Options{CoreURL: settings.CoreHost, TLSVerify: tlsVerify, Timeout: settings.HTTPRequestTimeout, Name: settings.Name, BootstrapToken: settings.BootstrapToken, AccessKeyFile: settings.AccessKeyFilePath})
 	if err != nil {

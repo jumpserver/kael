@@ -21,6 +21,8 @@ type Config struct {
 	IgnoreVerifyCerts      bool
 	HTTPRequestTimeout     time.Duration
 	ToolResultTimeout      time.Duration
+	LogLevel               string
+	LogDirPath             string
 	AllowedOrigins         []string
 	TrustForwardedHeaders  bool
 	AccessKeyFilePath      string
@@ -69,6 +71,8 @@ func Load(path string) (Config, error) {
 		IgnoreVerifyCerts:      v.GetBool("IGNORE_VERIFY_CERTS"),
 		HTTPRequestTimeout:     time.Duration(v.GetInt("HTTP_REQUEST_TIMEOUT")) * time.Second,
 		ToolResultTimeout:      v.GetDuration("TOOL_RESULT_TIMEOUT"),
+		LogLevel:               strings.ToUpper(strings.TrimSpace(v.GetString("LOG_LEVEL"))),
+		LogDirPath:             filepath.Join(dataFolder, "logs"),
 		AllowedOrigins:         v.GetStringSlice("ALLOWED_ORIGINS"),
 		TrustForwardedHeaders:  v.GetBool("TRUST_FORWARDED_HEADERS"),
 		AccessKeyFilePath:      filepath.Join(dataFolder, "keys", ".access_key"),
@@ -131,6 +135,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("HTTPD_PORT", 8083)
 	v.SetDefault("HTTP_REQUEST_TIMEOUT", 30)
 	v.SetDefault("TOOL_RESULT_TIMEOUT", "45s")
+	v.SetDefault("LOG_LEVEL", "INFO")
 	v.SetDefault("RUNTIME_STORE", "core")
 	v.SetDefault("PLATFORM_GATEWAY_ENABLED", true)
 	v.SetDefault("PLATFORM_DELEGATION_KEY_ID", "v1")
