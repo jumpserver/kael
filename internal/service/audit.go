@@ -56,7 +56,7 @@ func (s *Service) AdminAuditConversations(ctx context.Context, principal domain.
 	var summaries []AuditConversation
 	err := s.store.View(ctx, func(tx ports.Tx) error {
 		var err error
-		conversations, count, err = tx.ListConversationsByOrganization(principal.OrganizationID, offset, limit)
+		conversations, count, err = tx.ListQuestionedConversationsByOrganization(principal.OrganizationID, offset, limit)
 		if err != nil {
 			return err
 		}
