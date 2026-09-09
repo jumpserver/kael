@@ -16,7 +16,7 @@
 
 本文是后续 AI 改造的实现、评审和验收基线。若代码与本文冲突，应先明确并记录新的架构决策，再修改本文和代码。
 
-[ADR 0002](./adr/0002-core-component-and-store-port.md)、[ADR 0004](./adr/0004-jsonl-store-and-event-protocol.md) 与 [ADR 0006](./adr/0006-core-backed-runtime-journal.md) 已冻结当前运行形态：Kael 与 Koko 一样注册为 Core Terminal component，模型配置来自 TerminalConfig，只有 `CHAT_AI_ENABLED` 控制启停；`CHAT_AI_METHOD` 和 `CHAT_AI_EMBED_URL` 已删除。Kael 不连接数据库，默认通过组件签名 API 把 Runtime snapshot/delta Journal 保存到 Core，`RUNTIME_STORE=jsonl` 仅为显式回退。Core 旧 ChatAI Runtime/API/models/worker 已删除，`/api/v1/chat-ai/` 下只保留 `runtime-store/`。Kael 不读取或导入 Koko `data/agent/events/*.jsonl`，也不导入旧 Platform 数据。功能尚未上线；使用过旧开发分支的环境应清理旧 AI 表或重建开发库。后台 Run、多实例共享、活动 Panel 能力和未决 Approval 的跨重启续接仍禁用。
+[ADR 0002](./adr/0002-core-component-and-store-port.md)、[ADR 0004](./adr/0004-jsonl-store-and-event-protocol.md) 与 [ADR 0006](./adr/0006-core-backed-runtime-journal.md) 已冻结当前运行形态：Kael 与 Koko 一样注册为 Core Terminal component，模型配置来自 TerminalConfig，只有 `CHAT_AI_ENABLED` 控制启停；`CHAT_AI_METHOD` 和 `CHAT_AI_EMBED_URL` 已删除。Kael 不连接数据库，默认通过组件签名 API 只把用户可见问答历史 delta 保存到 Core，且不做周期性 snapshot；Terminal AI 使用独立本地 JSONL，`RUNTIME_STORE=jsonl` 仅为显式完整运行态回退。Core 旧 ChatAI Runtime/API/models/worker 已删除，`/api/v1/chat-ai/` 下只保留 `runtime-store/`。Kael 不读取或导入 Koko `data/agent/events/*.jsonl`，也不导入旧 Platform 数据。后台 Run、多实例共享、活动 Panel 能力和未决 Approval 的跨重启续接仍禁用。
 
 长期稳定的组件边界、所有权和协议不变量见 [Kael AI Runtime Architecture](./ARCHITECTURE.md)。
 
@@ -808,7 +808,7 @@ Principal
 
 ### 13.1 当前 Store
 
-Runtime 只依赖 `ports.Store` 和 `ports.Tx`。默认 adapter 仍以单进程 Memory 执行事务，但在发布 next state 前，通过组件签名把与 JSONL 相同的 snapshot/delta Journal CAS 追加到 Core `/api/v1/chat-ai/runtime-store/`。启动时分页重放最新 snapshot 与后续 delta，达到 4096 条 delta 后提交新 snapshot。`RUNTIME_STORE=jsonl` 才使用 `data/store/runtime.jsonl` 和 `data/events/<conversation-id>.jsonl`。Kael 不包含 DSN、数据库 driver、ORM、schema 或 migration。
+Runtime 只依赖 `ports.Store` 和 `ports.Tx`。默认 adapter 仍以单进程 Memory 执行完整事务，但在发布 next state 前只把 Conversation、用户问题、终态回答、结果卡片和关联 Artifact 的历史 delta CAS 追加到 Core `/api/v1/chat-ai/runtime-store/`。Core 不做周期性 snapshot，启动时分页重放全部保留历史；升级旧版完整运行态时仅用一次精简 snapshot 替换旧记录。Terminal AI 使用 `data/terminal/store/runtime.jsonl`，`RUNTIME_STORE=jsonl` 回退使用 `data/store/runtime.jsonl` 和 `data/events/<conversation-id>.jsonl`。Kael 不包含 DSN、数据库 driver、ORM、schema 或 migration。
 
 Artifact 元数据和有界提取文本进入 Runtime Journal，但原始文件内容目前仍保存在 Kael 私有 `data/artifacts`；组件 AccessKey 位于 `data/keys/.access_key`。这两个目录必须使用服务账号私有持久卷，节点替换或故障切换时重新挂载或迁移 Artifact 卷，否则只能恢复元数据和提取文本。旧 Koko `data/agent/events` 和旧 Platform ORM 数据不属于新 Journal，也不由 Kael 启动流程读取。
 
