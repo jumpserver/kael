@@ -13,7 +13,7 @@
 
 ## 协议与执行
 
-固定 `codex-cli 0.153.2`；启动时检查精确版本，Docker 同样固定 npm 包版本。依赖该版本的 experimental dynamicTools 和 environments 字段，升级需要重新生成/验证协议并执行集成测试。
+要求 `codex-cli 0.153.2` 或更高版本；启动时按语义版本比较，Docker 安装满足该下限的最新版本。Codex 尚未达到 1.0，跨 minor 版本仍可能调整 experimental dynamicTools 和 environments 字段，因此升级后需要执行集成测试。
 
 Luna bootstrap 必须收到 `agent_engine=codex`、`agent_protocol_version=1`。现有 `/kael/api/v1` HTTP、PanelDelivery SSE、工具回执和审批端点保持。`model.requested/completed` 的 `scope=agent_turn` 表示一次完整 harness turn，包含工具和审批等待；不再声称是内部单次模型请求。现有 ModelCall/ModelRequestCount 存储字段在本分支记录 harness turn，值通常为 1；Luna 不将该总耗时分摊到某次工具调用。usage 从 Codex 累积计数扣除本 turn 起点，覆盖该 turn 内所有模型调用。
 
@@ -35,7 +35,7 @@ Core TerminalConfig 仍是模型凭据唯一来源；启动及每次 Run 执行�
 
 ## 试用
 
-1. 安装 `npm install -g @openai/codex@0.153.2`，用 `codex --version` 核对。
+1. 安装 `npm install -g '@openai/codex@>=0.153.2'`，用 `codex --version` 核对不低于 `0.153.2`。
 2. Core 开启 Chat AI，配置支持 Responses 的模型、base URL 和 API key。保留原组件注册和 Platform Gateway delegation 配置。
 3. 使用 `CODEX_BINARY` 指定可执行路径，或使用默认 PATH 中的 `codex`。运行 `make run`；同时使用 Luna 的 `harness` 分支。
 4. 验证终端只读排查、SQL/脚本 proposal 审批、拒绝审批、停止、多轮追问及断连。真实模型效果和真实 Core/Koko/Chen 联调需要试用环境验收。

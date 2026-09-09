@@ -7,7 +7,7 @@ ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o /opt/kael/kael ./cmd/kael
 
 FROM node:22-trixie-slim AS stage-codex
-RUN npm install --global @openai/codex@0.153.2 \
+RUN npm install --global '@openai/codex@>=0.153.2' \
     && codex --version
 
 FROM node:22-trixie-slim

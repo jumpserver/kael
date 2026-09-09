@@ -17,12 +17,33 @@ import (
 	"github.com/jumpserver/kael/internal/model"
 )
 
-// Runs the actual pinned Codex executable against a local Responses fixture.
+func TestCompatibleCodexVersion(t *testing.T) {
+	tests := map[string]bool{
+		"codex-cli 0.144.4":   false,
+		"codex-cli 0.153.1":   false,
+		"codex-cli 0.153.2":   true,
+		"codex-cli 0.153.999": true,
+		"codex-cli 0.154.0":   true,
+		"codex-cli 1.0.0":     true,
+		"codex-cli 0.153":     false,
+		"codex-cli 0.153.dev": false,
+		"codex 0.153.2":       false,
+	}
+	for output, want := range tests {
+		t.Run(output, func(t *testing.T) {
+			if got := compatibleCodexVersion(output); got != want {
+				t.Fatalf("compatibleCodexVersion(%q) = %t, want %t", output, got, want)
+			}
+		})
+	}
+}
+
+// Runs an actual compatible Codex executable against a local Responses fixture.
 // No real model request or external API credential is used.
 func TestCodexAppServerIntegration(t *testing.T) {
 	binary := os.Getenv("KAEL_TEST_CODEX")
 	if binary == "" {
-		t.Skip("set KAEL_TEST_CODEX to the pinned Codex binary for the protocol integration test")
+		t.Skip("set KAEL_TEST_CODEX to a compatible Codex binary for the protocol integration test")
 	}
 	var mu sync.Mutex
 	requests := 0

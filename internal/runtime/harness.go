@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -97,8 +98,8 @@ func NewHarness(ctx context.Context, binary, root string, loader model.ConfigLoa
 	versionCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	version, err := exec.CommandContext(versionCtx, resolved, "--version").Output()
-	if err != nil || strings.TrimSpace(string(version)) != "codex-cli "+CodexVersion {
-		return nil, fmt.Errorf("Kael requires codex-cli %s", CodexVersion)
+	if err != nil || !compatibleCodexVersion(string(version)) {
+		return nil, fmt.Errorf("Kael requires codex-cli %s or newer", CodexMinimumVersion)
 	}
 	config, err := loader(ctx)
 	if err != nil {
@@ -117,6 +118,51 @@ func NewHarness(ctx context.Context, binary, root string, loader model.ConfigLoa
 	h := &Harness{binary: resolved, root: directory, loader: loader, info: configInfo(config), sessions: map[string]*harnessSession{}, stop: make(chan struct{})}
 	go h.reap()
 	return h, nil
+}
+
+func compatibleCodexVersion(output string) bool {
+	version, ok := strings.CutPrefix(strings.TrimSpace(output), "codex-cli ")
+	if !ok {
+		return false
+	}
+	actual, ok := parseCodexVersion(version)
+	if !ok {
+		return false
+	}
+	minimum, ok := parseCodexVersion(CodexMinimumVersion)
+	if !ok {
+		return false
+	}
+	for i := range actual {
+		if actual[i] != minimum[i] {
+			return actual[i] > minimum[i]
+		}
+	}
+	return true
+}
+
+func parseCodexVersion(version string) ([3]uint64, bool) {
+	var parsed [3]uint64
+	parts := strings.Split(version, ".")
+	if len(parts) != len(parsed) {
+		return parsed, false
+	}
+	for i, part := range parts {
+		if part == "" {
+			return parsed, false
+		}
+		for _, digit := range part {
+			if digit < '0' || digit > '9' {
+				return parsed, false
+			}
+		}
+		value, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			return parsed, false
+		}
+		parsed[i] = value
+	}
+	return parsed, true
 }
 
 func validateConfig(config model.Config) error {
