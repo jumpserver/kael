@@ -1,5 +1,5 @@
-# Codex harness is the sole Agent runtime; install the exact pinned CLI version.
-# npm install -g @openai/codex@0.153.2
+# Codex harness is the sole Agent runtime; install CLI version 0.153.2 or newer.
+# npm install -g '@openai/codex@>=0.153.2'
 CODEX_BINARY: codex
 # CHAT_AI_BASE_URL in Core must support Responses API. Chat Completions is not supported.
 # 与 Koko 一致，Kael 只使用平铺配置。
