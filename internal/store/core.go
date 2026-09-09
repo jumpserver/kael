@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -29,23 +30,66 @@ type corePersistence struct {
 	snapshotDisabled     bool
 }
 
-func NewCore(client *component.Client) (*Memory, error) {
+func NewCore(client *component.Client, runtimeRoot string) (*Memory, error) {
 	if client == nil {
 		return nil, fmt.Errorf("Core runtime store client is required")
 	}
-	persistence, state, err := openCorePersistence(client)
+	core, loadedCore, err := openCorePersistence(client)
 	if err != nil {
 		return nil, err
 	}
-	next := state.clone()
-	recoverProcessLocalState(next, time.Now().UTC())
-	if !reflect.DeepEqual(state, next) {
-		if err = persistence.Commit(state, next); err != nil {
-			return nil, fmt.Errorf("recover persisted runtime state: %w", err)
-		}
-		state = next
+	terminal, loadedTerminal, err := openJSONLRoot(filepath.Join(runtimeRoot, "terminal"))
+	if err != nil {
+		return nil, fmt.Errorf("open Terminal AI runtime store: %w", err)
 	}
-	return &Memory{state: state, persistence: persistence}, nil
+	closeTerminal := true
+	defer func() {
+		if closeTerminal {
+			_ = terminal.Close()
+		}
+	}()
+
+	coreState := corePersistableState(loadedCore)
+	loadedTerminal = terminalPersistableState(loadedTerminal)
+	terminalState := loadedTerminal
+	if terminal.records == 0 {
+		terminalState = mergeMemoryStates(
+			terminalPersistableState(loadedCore),
+			loadedTerminal,
+		)
+		if !reflect.DeepEqual(loadedTerminal, terminalState) {
+			if err = terminal.Commit(loadedTerminal, terminalState); err != nil {
+				return nil, fmt.Errorf("migrate Terminal AI runtime state: %w", err)
+			}
+		}
+	}
+
+	now := time.Now().UTC()
+	coreState, err = recoverPersistence(core, coreState, now)
+	if err != nil {
+		return nil, fmt.Errorf("recover Core runtime state: %w", err)
+	}
+	terminalState, err = recoverPersistence(terminal, terminalState, now)
+	if err != nil {
+		return nil, fmt.Errorf("recover Terminal AI runtime state: %w", err)
+	}
+	closeTerminal = false
+	return &Memory{
+		state:       mergeMemoryStates(coreState, terminalState),
+		persistence: &splitPersistence{core: core, terminal: terminal},
+	}, nil
+}
+
+func recoverPersistence(persistence statePersistence, state *memoryState, now time.Time) (*memoryState, error) {
+	next := state.clone()
+	recoverProcessLocalState(next, now)
+	if reflect.DeepEqual(state, next) {
+		return state, nil
+	}
+	if err := persistence.Commit(state, next); err != nil {
+		return nil, err
+	}
+	return next, nil
 }
 
 func openCorePersistence(client *component.Client) (*corePersistence, *memoryState, error) {
@@ -177,10 +221,11 @@ func (p *corePersistence) Commit(previous, next *memoryState) error {
 	return nil
 }
 
-// corePersistableState keeps pre-question sessions process-local. Luna prepares
+// corePersistableState excludes Terminal AI and pre-question sessions from Core.
+// Split persistence routes Terminal AI to local JSONL storage. Luna also prepares
 // conversations, panels, context, and registrations before the user sends a
 // prompt; persisting that preparation would expose empty conversations in Core
-// audit views. The first user message makes the entire conversation subgraph
+// audit views. The first user message makes every other conversation subgraph
 // durable in the same transaction.
 func corePersistableState(state *memoryState) *memoryState {
 	result := state.clone()
@@ -192,20 +237,41 @@ func corePersistableState(state *memoryState) *memoryState {
 	}
 
 	transientConversations := make(map[string]struct{})
-	for id := range result.conversations {
+	for id, conversation := range result.conversations {
+		if conversation.Profile == "terminal" {
+			transientConversations[id] = struct{}{}
+			continue
+		}
 		if _, durable := durableConversations[id]; durable {
 			continue
 		}
 		transientConversations[id] = struct{}{}
+	}
+	return removeConversationSubgraphs(result, transientConversations)
+}
+
+func terminalPersistableState(state *memoryState) *memoryState {
+	result := state.clone()
+	nonTerminalConversations := make(map[string]struct{})
+	for id, conversation := range result.conversations {
+		if conversation.Profile != "terminal" {
+			nonTerminalConversations[id] = struct{}{}
+		}
+	}
+	return removeConversationSubgraphs(result, nonTerminalConversations)
+}
+
+func removeConversationSubgraphs(result *memoryState, conversations map[string]struct{}) *memoryState {
+	for id := range conversations {
 		delete(result.conversations, id)
 	}
-	if len(transientConversations) == 0 {
+	if len(conversations) == 0 {
 		return result
 	}
 
 	transientMessages := make(map[string]struct{})
 	for id, message := range result.messages {
-		if _, transient := transientConversations[message.ConversationID]; transient {
+		if _, transient := conversations[message.ConversationID]; transient {
 			transientMessages[id] = struct{}{}
 			delete(result.messages, id)
 		}
@@ -218,7 +284,7 @@ func corePersistableState(state *memoryState) *memoryState {
 
 	transientPanels := make(map[string]struct{})
 	for id, panel := range result.panels {
-		if _, transient := transientConversations[panel.ConversationID]; transient {
+		if _, transient := conversations[panel.ConversationID]; transient {
 			transientPanels[id] = struct{}{}
 			delete(result.panels, id)
 		}
@@ -236,7 +302,7 @@ func corePersistableState(state *memoryState) *memoryState {
 
 	transientRuns := make(map[string]struct{})
 	for id, run := range result.runs {
-		if _, transient := transientConversations[run.ConversationID]; transient {
+		if _, transient := conversations[run.ConversationID]; transient {
 			transientRuns[id] = struct{}{}
 			delete(result.runs, id)
 		}
@@ -249,7 +315,7 @@ func corePersistableState(state *memoryState) *memoryState {
 
 	transientToolCalls := make(map[string]struct{})
 	for id, call := range result.toolCalls {
-		_, transientConversation := transientConversations[call.ConversationID]
+		_, transientConversation := conversations[call.ConversationID]
 		_, transientRun := transientRuns[call.RunID]
 		_, transientPanel := transientPanels[call.PanelSessionID]
 		if transientConversation || transientRun || transientPanel {
@@ -268,7 +334,7 @@ func corePersistableState(state *memoryState) *memoryState {
 
 	transientApprovals := make(map[string]struct{})
 	for id, approval := range result.approvals {
-		_, transientConversation := transientConversations[approval.ConversationID]
+		_, transientConversation := conversations[approval.ConversationID]
 		_, transientRun := transientRuns[approval.RunID]
 		_, transientPanel := transientPanels[approval.PanelSessionID]
 		_, transientCall := transientToolCalls[approval.ToolCallID]
@@ -280,16 +346,16 @@ func corePersistableState(state *memoryState) *memoryState {
 
 	transientEvents := make(map[string]struct{})
 	for id, value := range result.events {
-		if _, transient := transientConversations[value.ConversationID]; transient {
+		if _, transient := conversations[value.ConversationID]; transient {
 			transientEvents[id] = struct{}{}
 			delete(result.events, id)
 		}
 	}
-	for id := range transientConversations {
+	for id := range conversations {
 		delete(result.eventHighWater, id)
 	}
 	for id, delivery := range result.deliveries {
-		_, transientConversation := transientConversations[delivery.ConversationID]
+		_, transientConversation := conversations[delivery.ConversationID]
 		_, transientPanel := transientPanels[delivery.PanelSessionID]
 		_, transientRun := transientRuns[delivery.RunID]
 		_, transientMessage := transientMessages[delivery.MessageID]
@@ -305,7 +371,7 @@ func corePersistableState(state *memoryState) *memoryState {
 	}
 
 	for id, audit := range result.audits {
-		_, transientConversation := transientConversations[audit.ConversationID]
+		_, transientConversation := conversations[audit.ConversationID]
 		_, transientPanel := transientPanels[audit.PanelSessionID]
 		_, transientRun := transientRuns[audit.RunID]
 		_, transientCall := transientToolCalls[audit.ToolCallID]

@@ -105,21 +105,7 @@ type jsonlPersistence struct {
 }
 
 func NewJSONL(root string) (*Memory, error) {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return nil, fmt.Errorf("JSONL store root is required")
-	}
-	storeDir := filepath.Join(root, "store")
-	eventDir := filepath.Join(root, "events")
-	for _, path := range []string{root, storeDir, eventDir} {
-		if err := os.MkdirAll(path, 0o700); err != nil {
-			return nil, fmt.Errorf("create JSONL store directory: %w", err)
-		}
-		if err := os.Chmod(path, 0o700); err != nil {
-			return nil, fmt.Errorf("protect JSONL store directory: %w", err)
-		}
-	}
-	persistence, state, err := openJSONLPersistence(filepath.Join(storeDir, "runtime.jsonl"), eventDir)
+	persistence, state, err := openJSONLRoot(root)
 	if err != nil {
 		return nil, err
 	}
@@ -133,6 +119,24 @@ func NewJSONL(root string) (*Memory, error) {
 		state = next
 	}
 	return &Memory{state: state, persistence: persistence}, nil
+}
+
+func openJSONLRoot(root string) (*jsonlPersistence, *memoryState, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil, nil, fmt.Errorf("JSONL store root is required")
+	}
+	storeDir := filepath.Join(root, "store")
+	eventDir := filepath.Join(root, "events")
+	for _, path := range []string{root, storeDir, eventDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return nil, nil, fmt.Errorf("create JSONL store directory: %w", err)
+		}
+		if err := os.Chmod(path, 0o700); err != nil {
+			return nil, nil, fmt.Errorf("protect JSONL store directory: %w", err)
+		}
+	}
+	return openJSONLPersistence(filepath.Join(storeDir, "runtime.jsonl"), eventDir)
 }
 
 func recoverProcessLocalState(state *memoryState, now time.Time) {
