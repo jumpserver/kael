@@ -72,7 +72,7 @@ func run(settings config.Config, logger *zap.Logger) error {
 	var runtimeStore ports.Store
 	switch settings.RuntimeStore {
 	case "core":
-		runtimeStore, err = store.NewCore(componentClient)
+		runtimeStore, err = store.NewCore(componentClient, settings.RuntimeDataFolderPath)
 	case "jsonl":
 		runtimeStore, err = store.NewJSONL(settings.RuntimeDataFolderPath)
 	default:
