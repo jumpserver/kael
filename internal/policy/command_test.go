@@ -10,7 +10,7 @@ import (
 
 func TestReadOnlyShell(t *testing.T) {
 	for _, command := range []string{
-		"df -h", "df -hT /", "du -sh /var/log", "du -sh /var/log/*",
+		"df -h", "df -hT", "df -hT /", "du -sh /var/log", "du -sh /var/log/*",
 		`du -sh "/var/log/my app"`, "/usr/bin/df -i", "'df' -h", "df -h && du -sh /var/log",
 		"df -h; free -m", "du -sh /var/log/* 2>/dev/null | sort -hr | head -n 20",
 		"du -sh /var/log/* 2>&1 | sort -k 1,1h -r", "df -h | grep -v tmpfs",

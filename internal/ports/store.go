@@ -84,6 +84,7 @@ type Tx interface {
 	ApprovalInternal(id string, lock bool) (*domain.Approval, error)
 	ApprovalByToolCall(toolCallID string, lock bool) (*domain.Approval, error)
 	PendingApprovalForRun(runID string, lock bool) (*domain.Approval, error)
+	RememberedApproval(panelID, registrationID, definitionVersion, argumentsDigest string) (bool, error)
 	SaveApproval(*domain.Approval) error
 	ListApprovals(conversationID string, principal domain.Principal, offset, limit int) ([]domain.Approval, int64, error)
 

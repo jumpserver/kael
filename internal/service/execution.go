@@ -275,6 +275,7 @@ func (s *Service) prepareToolCall(ctx context.Context, run *domain.Run, snapshot
 	var call *domain.ToolCall
 	var approval *domain.Approval
 	var notify []string
+	var rememberedApproval bool
 	err := s.store.Transaction(ctx, func(tx ports.Tx) error {
 		current, err := tx.RunInternal(run.ID, true)
 		if err != nil {
@@ -302,6 +303,14 @@ func (s *Service) prepareToolCall(ctx context.Context, run *domain.Run, snapshot
 		digest := domain.HashBytes(arguments)
 		risk, confirmation := policy.InvocationPolicy(*registration, arguments)
 		requiresConfirmation := policy.ConfirmationRequired(confirmation, panel.ApprovalMode)
+		if requiresConfirmation && panel.ApprovalMode == "auto" {
+			remembered, rememberErr := tx.RememberedApproval(panel.ID, registration.ID, registration.DefinitionVersion, digest)
+			if rememberErr != nil {
+				return rememberErr
+			}
+			rememberedApproval = remembered
+			requiresConfirmation = !remembered
+		}
 		call = &domain.ToolCall{ID: uuid.NewString(), ConversationID: run.ConversationID, RunID: run.ID, PanelSessionID: run.PanelSessionID, SubjectID: run.SubjectID, OrganizationID: run.OrganizationID, RegistrationID: registration.ID, DefinitionVersion: registration.DefinitionVersion, DefinitionDigest: registration.DefinitionDigest, ToolName: registration.Name, Arguments: append(json.RawMessage(nil), arguments...), ArgumentsDigest: digest, Risk: risk, RequiresConfirmation: requiresConfirmation, InvocationSequence: uint64(now.UnixNano()), InvocationID: uuid.NewString(), State: "created", CreatedAt: now, UpdatedAt: now}
 		if err = tx.CreateToolCall(call); err != nil {
 			return err
@@ -328,7 +337,7 @@ func (s *Service) prepareToolCall(ctx context.Context, run *domain.Run, snapshot
 				notify = append(notify, delivery.PanelSessionID)
 			}
 		}
-		return s.audit(tx, domain.Principal{SubjectID: run.SubjectID, OrganizationID: run.OrganizationID}, "tool.created", run.ConversationID, run.PanelSessionID, run.ID, map[string]any{"tool_call_id": call.ID, "registration_id": registration.ID, "risk": risk})
+		return s.audit(tx, domain.Principal{SubjectID: run.SubjectID, OrganizationID: run.OrganizationID}, "tool.created", run.ConversationID, run.PanelSessionID, run.ID, map[string]any{"tool_call_id": call.ID, "registration_id": registration.ID, "risk": risk, "remembered_approval": rememberedApproval})
 	})
 	if err != nil {
 		return nil, nil, translateOrService(err)
@@ -895,11 +904,15 @@ type ApprovalDecisionRequest struct {
 	Decision        string `json:"decision"`
 	RunID           string `json:"run_id"`
 	ArgumentsDigest string `json:"arguments_digest"`
+	Remember        bool   `json:"remember,omitempty"`
 }
 
 func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal, id string, request ApprovalDecisionRequest) (*domain.Approval, bool, error) {
 	if request.Decision != "approve" && request.Decision != "reject" {
 		return nil, false, serviceError(Invalid, "invalid_decision", "approval decision is invalid", nil)
+	}
+	if request.Remember && request.Decision != "approve" {
+		return nil, false, serviceError(Invalid, "invalid_remembered_decision", "only an approved command can be remembered", nil)
 	}
 	digest, _ := domain.HashValue(request)
 	var approval *domain.Approval
@@ -944,11 +957,20 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 		if approval.Scope != "service" && (panel.State != "active" || panel.LeaseExpiresAt.Before(now)) {
 			return serviceError(Conflict, "panel_expired", "original panel session is unavailable", nil)
 		}
+		if request.Remember {
+			registration, registrationErr := tx.Registration(approval.RegistrationID, true)
+			if registrationErr != nil {
+				return registrationErr
+			}
+			if registration.PanelSessionID != panel.ID || registration.Annotations().CommandPolicy != policy.ShellReadOnlyPolicy {
+				return serviceError(Forbidden, "remembered_approval_forbidden", "this approval cannot be remembered", nil)
+			}
+		}
 		approval.State = "approved"
 		if request.Decision == "reject" {
 			approval.State = "rejected"
 		}
-		approval.DecisionDigest, approval.UpdatedAt, approval.ResolvedAt = digest, now, &now
+		approval.DecisionDigest, approval.Remembered, approval.UpdatedAt, approval.ResolvedAt = digest, request.Remember, now, &now
 		if err = tx.SaveApproval(approval); err != nil {
 			return err
 		}
@@ -972,7 +994,7 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 				}
 			}
 		}
-		payload := map[string]any{"approval_id": approval.ID, "tool_call_id": approval.ToolCallID, "status": approval.State, "approved": approval.State == "approved", "reason": approval.Reason}
+		payload := map[string]any{"approval_id": approval.ID, "tool_call_id": approval.ToolCallID, "status": approval.State, "approved": approval.State == "approved", "remembered": approval.Remembered, "reason": approval.Reason}
 		_, deliveries, err := event.Project(tx, "approval.resolved", "approval", approval.ID, "approval", event.References{ConversationID: approval.ConversationID, RunID: approval.RunID, ToolCallID: approval.ToolCallID, ApprovalID: approval.ID}, payload, []domain.PanelSession{*panel}, now)
 		if err != nil {
 			return err
@@ -980,7 +1002,7 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 		for _, delivery := range deliveries {
 			notify = append(notify, delivery.PanelSessionID)
 		}
-		return s.audit(tx, principal, "approval.decided", approval.ConversationID, approval.PanelSessionID, approval.RunID, map[string]any{"approval_id": approval.ID, "decision": request.Decision})
+		return s.audit(tx, principal, "approval.decided", approval.ConversationID, approval.PanelSessionID, approval.RunID, map[string]any{"approval_id": approval.ID, "decision": request.Decision, "remembered": approval.Remembered})
 	})
 	if err != nil {
 		return nil, false, translateOrService(err)

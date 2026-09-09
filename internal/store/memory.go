@@ -941,6 +941,17 @@ func (t *memoryTx) PendingApprovalForRun(runID string, _ bool) (*domain.Approval
 	return selected, nil
 }
 
+func (t *memoryTx) RememberedApproval(panelID, registrationID, definitionVersion, argumentsDigest string) (bool, error) {
+	for _, value := range t.state.approvals {
+		if value.PanelSessionID == panelID && value.RegistrationID == registrationID &&
+			value.DefinitionVersion == definitionVersion && value.ArgumentsDigest == argumentsDigest &&
+			value.State == "approved" && value.Remembered {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (t *memoryTx) SaveApproval(value *domain.Approval) error {
 	if _, exists := t.state.approvals[value.ID]; !exists {
 		return ports.ErrNotFound
