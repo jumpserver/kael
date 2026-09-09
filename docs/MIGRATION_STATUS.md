@@ -9,7 +9,7 @@
 
 Kael、Luna 与 Lina 的代码级逻辑迁移已经完成。两类前端都只使用 Kael 原生 `/kael/api/v1`，不把旧 `/api/v1/chat-ai` 作为运行时回退。Lina 按 Message -> Run -> PanelSession SSE 的原生资源流程工作，并直接消费 `message.delta`、`tool.call`、`approval.required`、`run.completed` 等 dot 命名的 PanelDelivery，不再保留旧 DTO/SSE 映射或 iframe/embed 入口。Kael 按 JumpServer Terminal component 注册为 `kael`，使用 BootstrapToken 获取并保存组件 AccessKey，通过组件身份读取 Core TerminalConfig 中的 `CHAT_AI_*` 模型配置并发送心跳。Kael 不连接 MySQL、PostgreSQL 或其它业务数据库。
 
-Runtime 仍只依赖 `ports.Store`/`ports.Tx` 抽象。默认 adapter 通过组件签名调用 JumpServer Core Runtime Store API，以 CAS 追加与本地 JSONL 相同的 snapshot/delta Journal；Conversation、Message、Run 终态、DomainEvent、幂等索引和审计状态可跨 Kael 节点恢复。Artifact 原始字节不在 Journal 中，替换节点仍需挂载或迁移原 `data/artifacts` 卷。`RUNTIME_STORE=jsonl` 仅作为预先选定的本地回退，不是 Core 故障时的自动 failover。Core-backed Journal 不是分布式执行协调器，PanelSession 的浏览器连接、Registration、运行中的 ToolCall、未决 Approval 和 SSE 连接仍不会跨进程恢复。
+Runtime 仍只依赖 `ports.Store`/`ports.Tx` 抽象。默认 adapter 通过组件签名调用 JumpServer Core Runtime Store API，以 CAS 只追加 Conversation、用户问题、终态回答、结果卡片和关联 Artifact 的历史 delta；Run、DomainEvent、PanelSession、Registration、Tool/Approval 和 SSE 状态不跨 Kael 节点恢复。Artifact 原始字节不在 Journal 中，替换节点仍需挂载或迁移原 `data/artifacts` 卷。Terminal AI 使用独立本地 JSONL，`RUNTIME_STORE=jsonl` 仍只是预先选定的完整运行态回退，不是 Core 故障时的自动 failover。
 
 ## 实施矩阵
 
@@ -46,7 +46,7 @@ Kael 的管理员 stats API 仍接受 `days=1..365`（默认 30），保留 flat
 - Platform Gateway 默认允许 `GET/POST/PUT/PATCH`，不默认允许 `DELETE`。`general` 使用与当前 JumpServer 源码默认 `CHAT_AI_ALLOWED_OPERATION_IDS` 等价的编译期固定范围；它不会读取生产环境对 operation IDs、allowed/blocked paths/tags 或 method policies 的自定义配置。切流前必须比较现网策略，任何差异都要显式评审并收窄。asset/session_audit/ops 继续叠加各自更窄范围，management 仅管理员可用。所有范围再叠加 method allowlist、敏感路径拒绝、OpenAPI 静态 required-permissions 全量检查；动态权限或缺少权限元数据的 operation 一律不可搜索、不可调用。
 - Run 创建时固化 admin flags 与 permission 列表供异步搜索和选择保持同一授权可见性；Core 在实际 delegated request 上仍按当前用户状态和权限实时复核，权限撤销后不能凭旧 Run 快照执行。
 - Runtime journal 默认通过 `/api/v1/chat-ai/runtime-store/` 保存在 Core；提交使用 commit ID 幂等、expected revision CAS、请求 HMAC integrity 和签名 receipt，读取使用一次性 nonce 与整页签名 receipt。网络/5xx 以同一 commit ID 有限重试；最终结果不确定或 CAS 冲突会 poison 本地 Store，必须重启恢复。
-- 达到 4096 条 delta 后 Kael 尝试提交新 snapshot；全量 snapshot 超过单条记录限制时，本进程降级为继续追加 delta，单个 delta 超限仍拒绝事务。`RUNTIME_STORE=jsonl` 时才写 `data/store/runtime.jsonl` 和 `data/events/*.jsonl`。
+- Core 正常运行不再生成周期性 snapshot，只追加精简历史 delta；升级首次加载旧版完整运行态时会用一次精简 snapshot 完成迁移。Terminal AI 写 `data/terminal/store/runtime.jsonl`；`RUNTIME_STORE=jsonl` 回退写 `data/store/runtime.jsonl` 和 `data/events/*.jsonl`。
 - Kael 不读取或导入 Koko `data/agent/events/*.jsonl`，也不导入或投影旧 Platform `chat_ai_*` 数据。Core 中旧 ChatAI Runtime/API/models/worker 已删除，`/api/v1/chat-ai/` 下只保留供 Kael 组件签名访问的 `runtime-store/`；当前没有旧 Runtime 写入口或历史只读兼容入口。本功能尚未上线，因此不提供旧 AI 数据迁移；使用过旧开发分支的环境应在部署前删除旧 AI 表或重建开发数据库。
 - 一个进程内可以使用多个 worker；Core Journal 的 CAS 防止并发覆盖，但当前没有冲突重载、分布式 claim 或跨实例 Panel 路由。所有 Kael component account 当前共享 `default` store。生产必须使用 `replicas=1`，采用 `Recreate` 或严格的先停旧实例、fencing 后再启动新实例流程；会话粘性不能代替单 writer。开发、预发和生产不得让不同 Kael 同时指向同一 Core `default` store。
 - `/kael/health/ready` 检查进程内 Store 已初始化、未关闭且未 poisoned，并检查当前持久化 adapter；Core 模式会在 2 秒超时内对 `runtime-store` 发起带签名的轻量探测并校验 receipt 与本地 revision 未分叉，JSONL 模式会检查 journal 仍可用。它不检查 Worker 或模型端点。`/kael/internal/metrics` 没有业务用户认证，必须由反向代理或网络 ACL 限制到监控网络。

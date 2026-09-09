@@ -7,7 +7,7 @@ import (
 )
 
 // splitPersistence routes Terminal AI state to local JSONL storage and keeps
-// every other durable conversation in Core.
+// the user-visible conversation history for every other profile in Core.
 type splitPersistence struct {
 	core     *corePersistence
 	terminal *jsonlPersistence

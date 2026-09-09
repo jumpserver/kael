@@ -19,6 +19,7 @@ import (
 const (
 	coreStorePageSize       = 1000
 	coreStoreCommitAttempts = 3
+	coreStoreMaxRecordBytes = 8 * 1024 * 1024
 )
 
 type corePersistence struct {
@@ -27,7 +28,6 @@ type corePersistence struct {
 	revision             uint64
 	recordsSinceSnapshot int
 	poisoned             error
-	snapshotDisabled     bool
 }
 
 func NewCore(client *component.Client, runtimeRoot string) (*Memory, error) {
@@ -50,6 +50,7 @@ func NewCore(client *component.Client, runtimeRoot string) (*Memory, error) {
 	}()
 
 	coreState := corePersistableState(loadedCore)
+	rewriteCoreHistory := !reflect.DeepEqual(loadedCore, coreState)
 	loadedTerminal = terminalPersistableState(loadedTerminal)
 	terminalState := loadedTerminal
 	if terminal.records == 0 {
@@ -61,6 +62,11 @@ func NewCore(client *component.Client, runtimeRoot string) (*Memory, error) {
 			if err = terminal.Commit(loadedTerminal, terminalState); err != nil {
 				return nil, fmt.Errorf("migrate Terminal AI runtime state: %w", err)
 			}
+		}
+	}
+	if rewriteCoreHistory {
+		if err = core.ReplaceSnapshot(coreState); err != nil {
+			return nil, fmt.Errorf("compact Core conversation history: %w", err)
 		}
 	}
 
@@ -172,25 +178,38 @@ func (p *corePersistence) Commit(previous, next *memoryState) error {
 	if delta.empty() {
 		return nil
 	}
-	snapshot := !p.snapshotDisabled && p.recordsSinceSnapshot >= compactJournalRecords
-	payload := journalPayload{Delta: &delta}
-	if snapshot {
-		state := persistentStateFromMemory(next)
-		payload = journalPayload{Snapshot: &state}
-	}
-	line, err := encodeJournalRecord(payload)
-	if snapshot && errors.Is(err, errJournalRecordTooLarge) {
-		p.snapshotDisabled = true
-		snapshot = false
-		payload = journalPayload{Delta: &delta}
-		line, err = encodeJournalRecord(payload)
-	}
+	line, err := encodeJournalRecord(journalPayload{Delta: &delta})
 	if err != nil {
 		return err
+	}
+	return p.appendLocked(false, line)
+}
+
+// ReplaceSnapshot immediately replaces an older Core runtime snapshot with the
+// durable conversation-history projection. This is used once when loading a
+// store written by a version that persisted process-local runtime state.
+func (p *corePersistence) ReplaceSnapshot(state *memoryState) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.poisoned != nil {
+		return p.unavailableLocked()
+	}
+	projected := persistentStateFromMemory(corePersistableState(state))
+	line, err := encodeJournalRecord(journalPayload{Snapshot: &projected})
+	if err != nil {
+		return err
+	}
+	return p.appendLocked(true, line)
+}
+
+func (p *corePersistence) appendLocked(snapshot bool, line []byte) error {
+	if len(line) > coreStoreMaxRecordBytes {
+		return fmt.Errorf("%w: Core history record is %d bytes, limit is %d", errJournalRecordTooLarge, len(line), coreStoreMaxRecordBytes)
 	}
 	record := strings.TrimSuffix(string(line), "\n")
 	commitID := uuid.NewString()
 	var revision uint64
+	var err error
 	uncertainSeen := false
 	for attempt := 0; attempt < coreStoreCommitAttempts; attempt++ {
 		revision, err = p.client.AppendRuntimeStore(commitID, p.revision, snapshot, record)
@@ -221,33 +240,58 @@ func (p *corePersistence) Commit(previous, next *memoryState) error {
 	return nil
 }
 
-// corePersistableState excludes Terminal AI and pre-question sessions from Core.
-// Split persistence routes Terminal AI to local JSONL storage. Luna also prepares
-// conversations, panels, context, and registrations before the user sends a
-// prompt; persisting that preparation would expose empty conversations in Core
-// audit views. The first user message makes every other conversation subgraph
-// durable in the same transaction.
+// corePersistableState is the durable, user-visible conversation history stored
+// in Core. It keeps questions, finalized assistant answers (including result
+// cards), and artifacts attached to those messages. Process-local execution
+// state is deliberately excluded: runs cannot be resumed safely after restart,
+// and panels, contexts, registrations, events, deliveries, approvals, tool
+// records, and runtime audits are not required to render conversation history.
+// Terminal AI continues to use its separate local JSONL store.
 func corePersistableState(state *memoryState) *memoryState {
-	result := state.clone()
+	result := newMemoryState()
 	durableConversations := make(map[string]struct{})
 	for _, message := range state.messages {
-		if message.Role == "user" {
+		if message.Role != "user" {
+			continue
+		}
+		conversation, exists := state.conversations[message.ConversationID]
+		if exists && conversation.Profile != "terminal" {
 			durableConversations[message.ConversationID] = struct{}{}
 		}
 	}
-
-	transientConversations := make(map[string]struct{})
-	for id, conversation := range result.conversations {
-		if conversation.Profile == "terminal" {
-			transientConversations[id] = struct{}{}
-			continue
-		}
-		if _, durable := durableConversations[id]; durable {
-			continue
-		}
-		transientConversations[id] = struct{}{}
+	for id := range durableConversations {
+		result.conversations[id] = cloneStoredValue(state.conversations[id])
 	}
-	return removeConversationSubgraphs(result, transientConversations)
+
+	durableMessages := make(map[string]struct{})
+	for id, message := range state.messages {
+		if _, durable := durableConversations[message.ConversationID]; !durable {
+			continue
+		}
+		if message.Role != "user" && !finalAssistantMessage(message.Role, message.Status) {
+			continue
+		}
+		result.messages[id] = cloneStoredValue(message)
+		durableMessages[id] = struct{}{}
+	}
+	for id, artifact := range state.artifacts {
+		if _, durable := durableMessages[artifact.MessageID]; durable {
+			result.artifacts[id] = cloneStoredValue(artifact)
+		}
+	}
+	return result
+}
+
+func finalAssistantMessage(role, status string) bool {
+	if role != "assistant" {
+		return false
+	}
+	switch status {
+	case "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func terminalPersistableState(state *memoryState) *memoryState {
@@ -419,12 +463,8 @@ func (p *corePersistence) unavailableLocked() error {
 func (p *corePersistence) RuntimeMetrics() map[string]int64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	disabled := int64(0)
-	if p.snapshotDisabled {
-		disabled = 1
-	}
 	return map[string]int64{
-		"runtime_store_snapshot_disabled":      disabled,
+		"runtime_store_snapshot_disabled":      1,
 		"runtime_store_revision":               int64(p.revision),
 		"runtime_store_records_since_snapshot": int64(p.recordsSinceSnapshot),
 	}
