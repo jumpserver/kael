@@ -42,11 +42,11 @@ Kael 是注册到 Core 的 Terminal component，也是通用推理与编排 Runt
 3. Luna 持有当前环境、能力执行器和结果渲染；Kael 不持有资源连接凭据。
 4. 普通对话和 Luna 能力对话共用一套 Conversation、Run、Event 和模型调用链。
 5. 所有 AI 业务接口只使用 `/kael/api/v1`，不提供其它业务根路径或按对话类型拆分的入口；Lina 不保留 iframe/embed、旧 DTO 或旧 SSE 事件映射。
-6. Conversation 与 Message 历史默认通过 Core-backed Journal 跨 Kael 节点恢复；PanelSession、Registration 和 executor 连接不跨进程恢复。每次 Run 固定本次执行环境和能力快照。
+6. Conversation、用户 Message、终态 Assistant Message 及其结果卡片默认通过 Core-backed Journal 跨 Kael 节点恢复；Run、PanelSession、Context、Registration、Event/Delivery 和 executor 连接不跨进程恢复。每次 Run 仍在当前进程内固定本次执行环境和能力快照。
 7. ToolCall 必须路由到 Registration 绑定的准确 ExecutionBinding；当前启用的 panel binding 必须返回原 PanelSession，禁止广播、按用户猜测或自动转移到其它 Tab。
 8. Context 是不可信数据，不是指令或权限。
 9. Registration 只是能力声明；真正执行时仍由 Core、Koko、Chen 或本地执行器复验权限。
-10. 状态与 Event 先提交到 Store 事务，再通知订阅者；DomainEvent 按 Conversation 持久化，PanelDelivery cursor 只属于具体 PanelSession。
+10. 状态与 Event 先提交到 Store 事务，再通知订阅者；Core adapter 只持久化用户可见历史投影，DomainEvent/PanelDelivery 属于当前进程，PanelDelivery cursor 只属于具体 PanelSession。Terminal AI 的完整运行态由独立本地 JSONL 保存。
 11. 非幂等操作结果未知时不得自动重放。
 12. 产品差异只存在于 Profile、Context、Capability Adapter 和 Renderer 边界，不能进入 Runtime 核心。
 
@@ -94,7 +94,7 @@ Kael Capability Broker ------------> Headless Platform Gateway ------------> Cor
 
 普通对话命令由 Luna 或 Lina 通过 HTTP 提交给 Kael；Kael 按 PanelDelivery audience 通过 SSE 投递状态。Lina 直接读取 PanelDelivery DTO 及其 dot 事件名（如 `message.delta`、`tool.call`、`approval.required`、`run.completed`），不经过 Legacy DTO/SSE adapter。Luna 的 panel-scoped 文本增量、ToolCall 和 Approval 回到原 Panel；可共享的脱敏终态可以投影给同一 Conversation 的其它授权 Panel。panel-scoped ToolResult 由 Luna 通过 HTTP 回传。
 
-service binding 已按 ADR 0001 启用：Capability Broker 把调用路由给 Headless Provider，该执行路径不使用 Panel SSE，状态和 Approval 仍通过统一 Event/PanelDelivery 投影。按 ADR 0004/0006，历史和 DomainEvent 可从 Core Journal 恢复，但未决 Approval、活动 ToolCall 和 Panel capability 不跨 Kael 重启续接。
+service binding 已按 ADR 0001 启用：Capability Broker 把调用路由给 Headless Provider，该执行路径不使用 Panel SSE，状态和 Approval 仍通过统一 Event/PanelDelivery 投影。按 ADR 0004/0006，用户问题、终态回答和结果卡片可从 Core Journal 恢复；DomainEvent、未决 Approval、活动 ToolCall 和 Panel capability 不跨 Kael 重启续接。
 
 ### 3.2 当前迁移形态与长期形态
 
@@ -426,7 +426,7 @@ Run cancel -> tool.cancel to original Panel
 ```text
 SSE disconnect -> subscription closes; Run is not implicitly cancelled
 Panel reconnect -> verify Principal/resume token -> replay same PanelDelivery stream
-New Panel -> read Conversation/Message/Run/Approval snapshots -> start a new stream
+New Panel -> read Conversation/Message history -> start a new stream
 New Panel never takes over an old panel-local invocation
 ```
 
@@ -612,7 +612,7 @@ SSE `data` 是原生 PanelDelivery。Lina 直接按 `delivery.type` 的 dot 事�
 - PanelDelivery 有 PanelSession ID、该 stream 内的 sequence、event ID、audience 和投影 payload；
 - Event Projector 按 PanelSession 原子分配 sequence，并在向 SSE 发布前把 PanelDelivery 提交到 Store；
 - 同一个 DomainEvent 可以产生多个 PanelDelivery，各 Panel 的 sequence 相互独立；
-- PanelDelivery 是具体 PanelSession 的重放真值；Runtime Journal 可保留它用于审计，但 PanelSession 重启后失效，新的 Panel 不能沿用旧 cursor。
+- PanelDelivery 是具体 PanelSession 的进程内重放真值；Core 历史投影不保存它，PanelSession 重启后失效，新的 Panel 不能沿用旧 cursor。Terminal AI 的本地 JSONL 可保留完整运行态。
 
 PanelSession 与 Conversation 的绑定规则：
 
@@ -646,7 +646,7 @@ PanelSession 与 Conversation 的绑定规则：
 - 未知事件类型和未知可选字段必须可忽略；
 - 代理关闭响应缓冲和缓存，并允许长连接。
 
-新 Panel 打开已有 Conversation 时，先读取 Conversation、Message、Run 和 Approval 的权威快照，再从自己的 stream cursor 接收后续事件。快照必须明确 Approval scope 和当前允许动作；旧 Panel 的 panel-scoped Approval 在新 Panel 中不可执行。新 Panel 不能尝试接管旧 Panel 的本地 ToolCall。
+新 Panel 打开已有 Conversation 时，只读取 Conversation/Message 历史并建立新的 stream。旧 Run、Approval、Panel cursor 和本地 ToolCall 不跨 Kael 进程恢复，新 Panel 不能尝试接管旧 Panel 的本地 ToolCall。
 
 ### 9.5 版本策略
 
@@ -750,12 +750,15 @@ Kael 保存编排审计和执行摘要；Koko、Chen、Core 保存其既有执�
 
 | 类型 | 内容 | 当前要求 |
 |---|---|---|
-| Runtime state | Conversation、Message、Run、ToolCall、ToolResult、Approval、DomainEvent、PanelDelivery、审计索引 | 仅通过 Store port；默认以 snapshot/delta Journal 写入 Core |
-| Artifact state | 图片、文件和派生内容 | 元数据和有界提取文本进入 Journal；原始文件内容当前仍在 Kael 私有目录 |
+| Durable history | Conversation、用户问题、终态回答、结果卡片、关联 Artifact 元数据 | 默认以增量 Journal 写入 Core；不做周期性 snapshot |
+| Runtime state | Run、PanelSession、Context、Registration、Model/ToolCall、ToolResult、Approval、DomainEvent、PanelDelivery、审计索引 | 非 Terminal profile 仅在当前 Kael 进程内；Terminal AI 使用独立本地 JSONL |
+| Artifact state | 图片、文件和派生内容 | 被持久 Message 引用的元数据和有界提取文本进入 Core 历史投影；原始文件内容仍在 Kael 私有目录 |
 | Component identity | Core 签发的 AccessKey | 私有文件、`0600`、不进入 Store/Event/日志 |
 | Process-local state | 活动 lease/connection ownership、锁、事件唤醒、SSE connection、Provider 请求、Panel executor channel | Kael 退出后清空；持久实体在启动时收敛为安全终态 |
 
-Kael 当前不连接数据库，也不包含 ORM 或 schema migration。默认 adapter 使用组件 AccessKey 调用 Core `/api/v1/chat-ai/runtime-store/`：读取请求携带一次性 nonce 并验证覆盖 head 与全部有序结果的整页 HMAC receipt；写入使用 commit ID 幂等、请求 integrity、签名 receipt 和 `expected_revision` CAS 追加与本地 JSONL 相同的单行记录。网络/5xx 只以同一 commit ID 有限重试，最终结果不确定或 revision conflict 会 poison 本地 adapter，要求重启重放。`RUNTIME_STORE=jsonl` 是显式回退，此时才写 `data/store/runtime.jsonl` 和 `data/events/<conversation-id>.jsonl`。Runtime、领域对象、HTTP 和 Event 契约不感知具体持久化位置。
+Kael 当前不连接数据库，也不包含 ORM 或 schema migration。默认 adapter 使用组件 AccessKey 调用 Core `/api/v1/chat-ai/runtime-store/`：读取请求携带一次性 nonce 并验证覆盖 head 与全部有序结果的整页 HMAC receipt；写入使用 commit ID 幂等、请求 integrity、签名 receipt 和 `expected_revision` CAS 追加用户可见历史投影。网络/5xx 只以同一 commit ID 有限重试，最终结果不确定或 revision conflict 会 poison 本地 adapter，要求重启重放全部历史 delta。旧版完整运行态在升级首次加载后会用一次精简历史 snapshot 替换，迁移后不再周期性生成 snapshot。Terminal AI 固定写入 `data/terminal/store/runtime.jsonl`；`RUNTIME_STORE=jsonl` 显式回退仍保存完整运行态。
+
+Core history record 在发送前硬限制为 8 MiB；单条问题、终态回答或最小结果异常超限时，该 Store 事务失败但 adapter 不进入 poisoned 状态，也不会把超大 record 发送给 Core/MariaDB。
 
 ### 11.2 事务与 Outbox
 
@@ -790,7 +793,7 @@ Kael 当前不连接数据库，也不包含 ORM 或 schema migration。默认 a
 | Model 请求中断 | 按 Provider 能力恢复，否则 Run 标记 interrupted/failed |
 | ToolResult 丢失且调用幂等 | 使用原 invocation ID 查询或安全恢复 |
 | ToolResult 丢失且调用非幂等 | 标记 unknown，禁止自动重放 |
-| Kael 实例退出 | Conversation 历史保留；活动 Run 标为 interrupted，Panel/Registration/Approval 失效，工具不自动重放 |
+| Kael 实例退出 | Conversation/Message 历史保留；非 Terminal 活动 Run 随进程丢弃，Panel/Registration/Approval 失效，工具不自动重放 |
 | Event 投影或发布失败 | 已提交 Delivery 可在原 PanelSession 有效期内重发，客户端去重 |
 | Store 不可用 | 不产生未提交到 Store 的成功 Event |
 
@@ -799,9 +802,9 @@ Kael 当前不连接数据库，也不包含 ORM 或 schema migration。默认 a
 - 单进程内 Worker 通过 claim/lease 保证同一 Run 只有一个推进者；
 - PanelSession connection 有唯一 owner，ToolCall 只路由到该 owner；
 - 多个 Kael 实例可以读取同一 Core Journal，但当前内存状态不会在实例间实时同步；CAS 只拒绝覆盖，不负责冲突重载或 Run 调度；
-- 全量 snapshot 超过记录上限时，当前进程停止继续尝试 snapshot 并追加 delta；这保证小事务继续写入，但 Journal 可能增长，且单个 delta 超限仍会失败；
+- Core 不生成周期性 snapshot，历史 delta 数量和新实例启动重放时间会持续增长；单个 delta 超限仍会失败；
 - 当前生产入口必须设置 `replicas=1`，使用 `Recreate` 或严格的先停旧实例、fencing 后再启动新实例流程；实例粘性不能代替单 writer，开发、预发和生产不得让不同 Kael 同时写同一 Core `default` store；
-- 滚动或故障切换会中断活动执行，新实例可从 Core Journal 恢复历史并安全收敛活动状态；Artifact 原始字节仍需重新挂载或迁移原 `data/artifacts` 持久卷；
+- 滚动或故障切换会丢弃非 Terminal 活动执行，新实例只从 Core Journal 恢复 Conversation/Message 历史；Artifact 原始字节仍需重新挂载或迁移原 `data/artifacts` 持久卷；
 - 具备分布式 claim、事件唤醒和准确 Panel 路由前，禁止宣称无状态横向扩容、跨实例 Panel 恢复或后台执行。
 
 ## 12. Platform AI
@@ -851,7 +854,7 @@ Platform Capability 应被设计成少量语义工具，而不是把全部 REST 
 - 不被 Runtime domain/application 包导入；
 - 只通过通用 Capability Broker 与 Runtime 交互；
 - 使用短期、请求绑定、防重放的委托和 mTLS；
-- 长期可承担后台 Tool、持久 Approval、动态 Registry 和执行审计；当前按 ADR 0004/0006 只启用前台执行，历史状态写入 Core-backed Journal，活动能力仍为进程绑定；
+- 长期可承担后台 Tool、持久 Approval、动态 Registry 和执行审计；当前按 ADR 0004/0006 只启用前台执行，用户可见历史写入 Core-backed Journal，运行态和活动能力仍为进程绑定；
 - 在未来 Lina/Core Gateway 就绪后可独立移除。
 
 ADR 0001 已将领域模型扩展为可承载 Headless Gateway 的通用 CapabilityProvider/ExecutionBinding：
@@ -1024,7 +1027,7 @@ Kael component -------- registration / AccessKey / TerminalConfig / heartbeat / 
 3. 旧 Platform models/API/worker 已删除且不提供兼容；用过旧开发分支的环境须在发布前清理旧 AI 表/数据或重建开发库；
 4. Browser Cookie 和 Electron Bearer 统一由 Kael 的 Core identity adapter 实时校验并转换为 Principal；
 5. Model 配置和 API Key 来自 Core TerminalConfig，组件 AccessKey 来自 Terminal registration；
-6. 当前默认使用 Core-backed Runtime Journal，不读取 Koko 历史 event，也不自动导入或投影旧 Platform ORM 数据；JSONL 是显式回退，Artifact 原始字节继续使用私有目录；
+6. 当前默认使用 Core-backed Journal 保存用户问题、终态回答和最小结果，不读取 Koko 历史 event，也不自动导入或投影旧 Platform ORM 数据；Terminal AI 使用独立本地 JSONL，Artifact 原始字节继续使用私有目录；
 7. 当前使用单 writer 与 session stickiness；历史可由新实例从 Core Journal 重放，但不支持活动执行、Panel 能力或 Artifact 原始字节的自动跨实例恢复；
 8. Event/cursor、Artifact、审计、幂等键和历史的保留期限；
 9. worker、lease、retention、Run timeout 和 payload 限制使用 Runtime 安全默认值，不扩大部署配置面；
