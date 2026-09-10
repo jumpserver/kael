@@ -21,7 +21,7 @@ Luna bootstrap 必须收到 `agent_engine=codex`、`agent_protocol_version=1`。
 
 ## 模型与运行环境
 
-Core TerminalConfig 仍是模型凭据唯一来源；启动及每次 Run 执行前读取配置，正在执行的 turn 不热切模型。`CHAT_AI_BASE_URL` 必须支持 Responses API。DeepSeek 旧 Chat Completions 路径明确拒绝，其它兼容端点由实际 Responses 请求验证，不提供隐式降级。模型密钥只进入子进程环境，不写入参数、配置文件或前端。
+Core TerminalConfig 仍是模型凭据唯一来源；每次 Run 执行前读取配置，正在执行的 turn 不热切模型。Chat AI 未启用或模型端点未配置时 Kael 仍可启动并保持健康，仅拒绝 Run；管理员在 Core 页面保存有效配置后无需重启 Kael。`CHAT_AI_BASE_URL` 必须支持 Responses API。DeepSeek 旧 Chat Completions 路径明确拒绝，其它兼容端点由实际 Responses 请求验证，不提供隐式降级。模型密钥只进入子进程环境，不写入参数、配置文件或前端。
 
 每个活动 Panel 的进程使用独立私有 HOME/CODEX_HOME 和空工作目录，不继承用户 Codex 登录、插件、MCP 配置或应用 Secret。线程 `environments=[]`，禁用 shell、unified exec、Code Mode host、浏览器、computer use、联网搜索和 subagents。真实业务操作只能经过注册能力；内置计划、问询、技能目录等辅助工具不等于远程资产执行能力。未集成的问询表单返回空答案，不替用户决定，要求 Agent 在普通聊天中提问；未知 host request 失败关闭。stderr 不直接进入业务错误或日志。
 
