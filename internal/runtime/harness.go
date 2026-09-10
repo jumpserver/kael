@@ -100,13 +100,6 @@ func NewHarness(ctx context.Context, binary, root string, loader model.ConfigLoa
 	if err != nil || strings.TrimSpace(string(version)) != "codex-cli "+CodexVersion {
 		return nil, fmt.Errorf("Kael requires codex-cli %s", CodexVersion)
 	}
-	config, err := loader(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if err = validateConfig(config); err != nil {
-		return nil, err
-	}
 	if err = os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
@@ -114,7 +107,11 @@ func NewHarness(ctx context.Context, binary, root string, loader model.ConfigLoa
 	if err != nil {
 		return nil, err
 	}
-	h := &Harness{binary: resolved, root: directory, loader: loader, info: configInfo(config), sessions: map[string]*harnessSession{}, stop: make(chan struct{})}
+	// TerminalConfig is runtime configuration, not a process dependency. Core
+	// may intentionally keep Chat AI disabled until an administrator configures
+	// the model in the UI. Load and validate it in Execute so Kael stays healthy
+	// and picks up the first valid configuration without a restart.
+	h := &Harness{binary: resolved, root: directory, loader: loader, info: configInfo(model.Config{}), sessions: map[string]*harnessSession{}, stop: make(chan struct{})}
 	go h.reap()
 	return h, nil
 }
