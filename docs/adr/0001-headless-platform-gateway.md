@@ -31,7 +31,7 @@ ADR 0002 已覆盖本文对后台 Run、持久 Approval 和 Kael 自有数据库
 - Luna/Lina 切流后创建的 Conversation、Message、Run、Approval、Artifact 元数据和 Event 只进入 Kael Runtime，并默认以 opaque Journal 保存在 Core Runtime Store。
 - Core 的旧 Platform AI ORM Runtime、API 和 worker 已删除，migration 历史也已收敛为只创建 Runtime Store。本功能尚未上线，不提供旧数据导入、双写、只读入口或 Runtime 兼容；使用过旧开发分支的环境应删除旧 AI 表或重建开发数据库。
 - Lina 已切换到 Kael API；这不改变本 ADR 的 Capability 安全边界，也不保留旧路径或旧 DTO 回退。
-- 回滚时先停止创建新 Kael Run，排空或取消在途 Run/Approval，再成对恢复相互匹配的 Lina/Luna/Kael 构建；不得恢复已删除的 Core ChatAI Runtime，并须保留 Core Journal 与 Artifact 卷。`RUNTIME_STORE=jsonl` 不是 Core Journal 的自动 failover 或数据回滚手段。
+- 回滚时先停止创建新 Kael Run，排空或取消在途 Run/Approval，再成对恢复相互匹配的 Lina/Luna/Kael 构建；不得恢复已删除的 Core ChatAI Runtime，并须保留 Core Journal、Terminal AI 本地数据与 Artifact 卷。
 
 ## Feature 决策
 

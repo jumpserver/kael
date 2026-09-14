@@ -21,17 +21,13 @@ BOOTSTRAP_TOKEN: <PleaseChangeMe>
 # 同时写入 stdout 和 data/logs/kael.log；文件达到 50 MB 时轮转，保留 7 份、7 天。
 # LOG_LEVEL: INFO
 
-# Runtime 状态默认通过组件签名写回 JumpServer Core。
-# 仅本地开发或 Core 尚未提供 runtime-store API 时预先选择 jsonl；两种 Store 不双写，
-# 禁止在 Core 故障时自动切到 jsonl，否则会形成缺少现有历史的第二个写权威。
-# RUNTIME_STORE: core
-
-# Terminal AI 始终保留本地可读事件 JSONL，不上传 Core。
+# 普通会话的问答历史通过组件签名写回 JumpServer Core。
+# Terminal AI 固定写入 data/terminal/，保留本地可读事件 JSONL，不上传 Core。
 # 按最后一次消息/会话更新时间保留，活跃 Run 和有效 Panel 不清理。
 # 启动及每小时清理过期会话；容量达到 90% 或磁盘余量不足时，
 # 每分钟最多淘汰 100 个最旧的非活跃会话，目标降至 80%。
-# 容量统计包含本地 store/、events/ 及快照临时文件；jsonl 模式统计共享目录，
-# 但仅淘汰 terminal 会话。附件原始文件和普通服务日志不属于该配额。
+# 容量统计包含 data/terminal/ 下的 store/、events/ 及快照临时文件。
+# 附件原始文件和普通服务日志不属于该配额。
 # 新请求额外预留最多 64 MiB 给在途执行；空间不足返回 storage_capacity_exceeded。
 # 清理既有超额数据时允许有界的临时快照开销，实际磁盘必须容纳完整快照。
 # TERMINAL_AI_KEEP_DAYS: 7

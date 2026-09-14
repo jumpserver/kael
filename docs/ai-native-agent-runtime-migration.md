@@ -16,7 +16,7 @@
 
 本文是后续 AI 改造的实现、评审和验收基线。若代码与本文冲突，应先明确并记录新的架构决策，再修改本文和代码。
 
-[ADR 0002](./adr/0002-core-component-and-store-port.md)、[ADR 0004](./adr/0004-jsonl-store-and-event-protocol.md) 与 [ADR 0006](./adr/0006-core-backed-runtime-journal.md) 已冻结当前运行形态：Kael 与 Koko 一样注册为 Core Terminal component，模型配置来自 TerminalConfig，只有 `CHAT_AI_ENABLED` 控制启停；`CHAT_AI_METHOD` 和 `CHAT_AI_EMBED_URL` 已删除。Kael 不连接数据库，默认通过组件签名 API 只把用户可见问答历史 delta 保存到 Core，且不做周期性 snapshot；Terminal AI 使用独立本地 JSONL，`RUNTIME_STORE=jsonl` 仅为显式完整运行态回退。Core 旧 ChatAI Runtime/API/models/worker 已删除，`/api/v1/chat-ai/` 下只保留 `runtime-store/`。Kael 不读取或导入 Koko `data/agent/events/*.jsonl`，也不导入旧 Platform 数据。后台 Run、多实例共享、活动 Panel 能力和未决 Approval 的跨重启续接仍禁用。
+[ADR 0002](./adr/0002-core-component-and-store-port.md)、[ADR 0004](./adr/0004-jsonl-store-and-event-protocol.md) 与 [ADR 0006](./adr/0006-core-backed-runtime-journal.md) 已冻结当前运行形态：Kael 与 Koko 一样注册为 Core Terminal component，模型配置来自 TerminalConfig，只有 `CHAT_AI_ENABLED` 控制启停；`CHAT_AI_METHOD` 和 `CHAT_AI_EMBED_URL` 已删除。Kael 不连接数据库，默认通过组件签名 API 只把用户可见问答历史 delta 保存到 Core，且不做周期性 snapshot；Terminal AI 固定使用独立本地 JSONL，不提供存储模式切换。Core 旧 ChatAI Runtime/API/models/worker 已删除，`/api/v1/chat-ai/` 下只保留 `runtime-store/`。Kael 不读取或导入 Koko `data/agent/events/*.jsonl`，也不导入旧 Platform 数据。后台 Run、多实例共享、活动 Panel 能力和未决 Approval 的跨重启续接仍禁用。
 
 长期稳定的组件边界、所有权和协议不变量见 [Kael AI Runtime Architecture](./ARCHITECTURE.md)。
 
@@ -458,7 +458,7 @@ ToolResult 必须校验完整归属链，支持：
 - DomainEvent 包含 event ID、aggregate、type、timestamp、schema version 和有界 payload，并与状态同事务提交；
 - PanelDelivery 包含 PanelSession ID、该 stream 内严格递增的 sequence、event ID、audience 和投影 payload；
 - 同一 DomainEvent 可以投影到多个 Panel，各自拥有独立 sequence；
-- DomainEvent 使用 Conversation 内递增 `seq` 写入 Runtime Journal；`RUNTIME_STORE=jsonl` 回退时另写 `data/events/<conversation-id>.jsonl`，PanelDelivery 仍有 PanelSession 内 sequence；
+- DomainEvent 使用 Conversation 内递增 `seq`；Terminal AI 事件写入本地 Runtime Journal 和 `data/terminal/events/<conversation-id>.jsonl`，其他会话事件保存在进程内；PanelDelivery 仍有 PanelSession 内 sequence；
 - PanelDelivery 在 SSE 发布前写入同一 Store 事务，并允许客户端忽略未知事件类型；旧 PanelSession 重启后失效，其 cursor 不能被新 Panel 继承。
 
 ## 8. Run 与能力规则
@@ -674,7 +674,7 @@ Message 与 Run 为独立对象，以支持重试、重新运行、未来模型�
 | 方法 | 路由 | 作用 |
 |---|---|---|
 | GET | `/kael/health/live` | 只检查进程和 HTTP Server 存活，不访问外部依赖 |
-| GET | `/kael/health/ready` | 检查进程内 Store 与持久化 adapter；Core 模式在 2 秒超时内轻量探测 Runtime Store，不检查 Worker 或模型端点 |
+| GET | `/kael/health/ready` | 检查进程内 Store 与持久化 adapter；在 2 秒超时内轻量探测 Core Runtime Store，并检查 Terminal AI 本地 journal，不检查 Worker 或模型端点 |
 | GET | `/kael/health/startup` | 初始化或恢复扫描较慢时用于启动探针 |
 | GET | `/kael/internal/metrics` | 由网络策略保护的指标入口 |
 | GET | `/kael/openapi.json` | 当前稳定 API 描述 |
@@ -808,7 +808,7 @@ Principal
 
 ### 13.1 当前 Store
 
-Runtime 只依赖 `ports.Store` 和 `ports.Tx`。默认 adapter 仍以单进程 Memory 执行完整事务，但在发布 next state 前只把 Conversation、用户问题、终态回答、结果卡片和关联 Artifact 的历史 delta CAS 追加到 Core `/api/v1/chat-ai/runtime-store/`。Core 不做周期性 snapshot，启动时分页重放全部保留历史；升级旧版完整运行态时仅用一次精简 snapshot 替换旧记录。Terminal AI 使用 `data/terminal/store/runtime.jsonl`，`RUNTIME_STORE=jsonl` 回退使用 `data/store/runtime.jsonl` 和 `data/events/<conversation-id>.jsonl`。Kael 不包含 DSN、数据库 driver、ORM、schema 或 migration。
+Runtime 只依赖 `ports.Store` 和 `ports.Tx`。默认 adapter 仍以单进程 Memory 执行完整事务，但在发布 next state 前只把 Conversation、用户问题、终态回答、结果卡片和关联 Artifact 的历史 delta CAS 追加到 Core `/api/v1/chat-ai/runtime-store/`。Core 不做周期性 snapshot，启动时分页重放全部保留历史；升级旧版完整运行态时仅用一次精简 snapshot 替换旧记录。Terminal AI 固定使用 `data/terminal/store/runtime.jsonl` 和 `data/terminal/events/<conversation-id>.jsonl`。Kael 不包含 DSN、数据库 driver、ORM、schema 或 migration。
 
 Artifact 元数据和有界提取文本进入 Runtime Journal，但原始文件内容目前仍保存在 Kael 私有 `data/artifacts`；组件 AccessKey 位于 `data/keys/.access_key`。这两个目录必须使用服务账号私有持久卷，节点替换或故障切换时重新挂载或迁移 Artifact 卷，否则只能恢复元数据和提取文本。旧 Koko `data/agent/events` 和旧 Platform ORM 数据不属于新 Journal，也不由 Kael 启动流程读取。
 
@@ -900,7 +900,7 @@ Kael 当前按下列边界组织模块，不恢复旧聊天代理：
 | model | Provider、模型路由、预算和错误分类 |
 | capability | Registration、lease、invocation 和 result |
 | policy | Profile、Prompt、风险与 Approval policy |
-| store | Store/Tx port、Core Journal adapter、本地 JSONL 回退和未来分布式协调边界 |
+| store | Store/Tx port、Core Journal adapter、Terminal AI 本地 JSONL 和未来分布式协调边界 |
 | event | 持久 DomainEvent log、SSE 和 PanelSession replay |
 | audit | 审计关联与脱敏 |
 | observability | 日志、指标和 tracing |
@@ -994,7 +994,7 @@ Koko 旧 agentd 的物理删除必须在允许修改 Koko 后另立阶段。
 | T3 | Run 与 Provider | 状态机、预算、partial answer；OpenAI、compatible、DeepSeek 能力协商和 fallback |
 | T4 | Panel 精确路由 | 同用户多 Panel、同名工具、lease/revision、跨 Tab/组织拒绝 |
 | T5 | Tool 与 Approval | schema、argument repair、写防重、读刷新、digest、approve/reject、result/cancel 幂等 |
-| T6 | Store 与 Event | Core Journal 分页/CAS 与 JSONL 回退恢复、先写 Store 后发布、Panel cursor replay/过期、重启安全收敛和非幂等不重放 |
+| T6 | Store 与 Event | Core Journal 分页/CAS 与 Terminal AI 本地 JSONL 恢复、先写 Store 后发布、Panel cursor replay/过期、重启安全收敛和非幂等不重放 |
 | T7 | Luna Adapter | Terminal、File、SQL、Script 的最小 manifest fixture 与一条代表性完整执行链 |
 | T8 | 身份与环境边界 | 浏览器 Cookie/CSRF、Electron Bearer/Org、Luna/Lina 零旧 Runtime/agentd 流量，以及旧 AI 表已清理或开发库已重建 |
 
@@ -1004,7 +1004,7 @@ Koko 旧 agentd 的物理删除必须在允许修改 Koko 后另立阶段。
 
 - 不原样迁移旧测试文件；先抽取行为矩阵，再选择最少场景覆盖不变量。
 - 共享 fixture 只保留协议级最小对象，避免庞大通用 mock framework。
-- 优先真实 Store adapter 和本地 HTTP handler，减少层层接口 mock；Core adapter 验证分页、snapshot 和 revision conflict，JSONL 回退恢复使用临时目录验证。
+- 优先真实 Store adapter 和本地 HTTP handler，减少层层接口 mock；Core adapter 验证分页、snapshot 和 revision conflict，Terminal AI 本地 JSONL 恢复使用临时目录验证。
 - Provider 使用小型确定性 fake，只覆盖能力协商和异常边界。
 - UI 测试以 Controller/Adapter 为主，不重复验证 Vue 框架渲染。
 - Bug 回归测试必须对应明确不变量；修复后不添加无关组合。
@@ -1064,7 +1064,7 @@ Koko 旧 agentd 的物理删除必须在允许修改 Koko 后另立阶段。
 1. 生产网关对 `/kael/` 的保留前缀转发和 SSE 参数；`/kael/internal/metrics` 无业务用户认证，必须由网络 ACL 只开放给监控网络；
 2. 浏览器 Cookie 与 Electron Bearer 由 Kael Core identity adapter 实时校验并转换为可信 Principal；
 3. 模型配置、API Key 和 Secret 由 Kael component 使用签名身份从 Core TerminalConfig 读取；
-4. 当前默认使用 Core-backed Runtime Journal 且 Kael 不连接数据库；本地 JSONL 只作为显式回退；
+4. 普通会话历史固定使用 Core-backed Runtime Journal，Terminal AI 固定使用本地 JSONL，Kael 不连接数据库；
 5. Koko Agent Session JSONL 和旧 Platform 数据均不导入 Kael；使用过旧开发分支的环境必须清理旧 AI 表或重建开发库；
 6. Platform AI 当前已选择过渡 Headless Gateway 承接前台能力；长期 Provider 替换不改变 Runtime 协议；
 7. 当前 Platform AI 只承接前台动态 OpenAPI/Core Tool 和进程内 Approval；后台、站内信及相关跨重启能力不启用；

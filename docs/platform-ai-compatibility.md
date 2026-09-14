@@ -6,7 +6,7 @@
 
 本文与 [Kael AI Runtime Architecture](./ARCHITECTURE.md) 及 [AI Native Agent Runtime 迁移与演进方案](./ai-native-agent-runtime-migration.md) 共同构成迁移基线。
 
-当前实现以 [ADR 0002](./adr/0002-core-component-and-store-port.md)、[ADR 0004](./adr/0004-jsonl-store-and-event-protocol.md) 和 [ADR 0006](./adr/0006-core-backed-runtime-journal.md) 为准：Kael 不连接数据库，默认使用 Core-backed Journal 保留由 Kael 创建的 Conversation 历史和 DomainEvent，本地 JSONL 只作为显式回退；前台 Platform capability 可用，后台 Run、活动执行跨重启续跑及持久 Approval 均未启用。
+当前实现以 [ADR 0002](./adr/0002-core-component-and-store-port.md)、[ADR 0004](./adr/0004-jsonl-store-and-event-protocol.md) 和 [ADR 0006](./adr/0006-core-backed-runtime-journal.md) 为准：Kael 不连接数据库，普通会话的问答历史固定保存在 Core-backed Journal，Terminal AI 的完整状态与事件固定保存在本地 JSONL；前台 Platform capability 可用，后台 Run、活动执行跨重启续跑及持久 Approval 均未启用。
 
 ## 2. 真值来源
 
@@ -364,7 +364,7 @@ Koko、Chen 的 Terminal、File、SQL、Script 会话与 MCP 能力继续作为 
 | P3 | Assistant policy | general 使用当前源码默认固定 allowlist；asset/audit/ops 更窄范围；所有 Operation 静态权限全量匹配且 dynamic fail closed；management 写操作必须 Approval |
 | P4 | Artifact | 图片/文件限制、所有权、敏感信息、branch/regenerate 引用 |
 | P5 | Platform Tool 安全 | 禁止任意 URL/Method、schema/policy、请求绑定、Core 二次 RBAC |
-| P6 | Store/Recovery | Core Journal 分页/CAS、JSONL 回退恢复、进程内 queue/cancel/Panel cursor、重启安全收敛、Approval 进程绑定和非重复执行 |
+| P6 | Store/Recovery | Core Journal 分页/CAS、Terminal AI 本地 JSONL 恢复、进程内 queue/cancel/Panel cursor、重启安全收敛、Approval 进程绑定和非重复执行 |
 | P7 | 开发环境边界 | 旧 AI 表已清理或开发库已重建；无旧数据导入、只读入口、双写、旧客户端 API 或 agentd 回退流量 |
 
 每个主题使用一个表驱动或端到端场景覆盖多个状态，禁止按每个字段、路由或 SSE 事件复制独立测试文件。

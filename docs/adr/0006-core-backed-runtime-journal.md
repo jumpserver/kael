@@ -12,7 +12,7 @@ Kael 仍不得直接连接 JumpServer 数据库，也不得把 Django ORM、数�
 
 ## 决策
 
-- `RUNTIME_STORE` 默认值为 `core`。`jsonl` 只用于本地开发或预先规划的隔离环境，不是旧 Runtime 兼容入口或 Core 故障回退。
+- 存储位置由会话类型固定决定：普通会话的问答历史写 Core，Terminal AI 状态与事件写本地 JSONL；不提供存储模式选择配置。
 - Kael 使用现有 Terminal component AccessKey 调用 `/api/v1/chat-ai/runtime-store/`，不新增数据库凭据或存储 Secret。
 - Core 保存的 `record` 是 ADR 0004 的单行 `journalRecord`：包含版本、创建时间、base64 编码 payload 和 SHA-256 checksum。payload 只包含已有用户问题的 Conversation、用户 Message、非流式 Assistant Message（含结果卡片）及这些 Message 引用的 Artifact；Core 验证传输外壳，不解释其中的 Go `gob` snapshot/delta。
 - 加载使用带一次性 UUID `nonce` 的 `GET /api/v1/chat-ai/runtime-store/?after=<revision>&limit=<1..1000>&nonce=<uuid>` 分页重放。响应为 `{nonce,revision,results:[{revision,commit_id,snapshot,record}],has_more,receipt}`；Core 使用当前请求 AccessKey 对 nonce、查询游标、head、分页标记和所有有序 record digest 签发整页 HMAC receipt，Kael 验签后才解码。这样 AccessKey 轮转不要求改写历史记录，也能拒绝页面截断、重排或旧响应重放。当 cursor 早于最近 snapshot 时，Core 从该 snapshot 开始返回。
@@ -32,11 +32,11 @@ Kael 仍不得直接连接 JumpServer 数据库，也不得把 Django ORM、数�
 - 被持久 Message 引用的 Artifact 元数据和有界提取文本属于历史 Journal；原始 Artifact 文件内容仍由 Kael 的私有 `data/artifacts` 目录管理。组件 AccessKey 仍位于 `data/keys/.access_key`。
 - Core-backed Journal 只解决问答历史的持久化位置问题，不提供分布式 Run ownership。当前所有 Kael component account 都使用同一个 `default` store，必须只有一个受控活动写入者；CAS 冲突会拒绝并行写入。
 - opaque global Journal 当前不会因 Core 业务 user/org 被删除而级联，也没有按 user/org 分片的物理 purge 或 retention。Conversation `DELETE` 仍是软删；其 Message/Artifact 历史会保留到后续明确实现可验证 purge，不能把 UI 不可见等同于数据已删除。
-- 当前 readiness 检查进程内 Store 状态及持久化 adapter；Core 模式会在 2 秒超时内对当前 revision 之后执行带签名的单条轻量查询，校验整页 receipt 并确认 Core head 未与本地分叉，JSONL 模式检查 journal 仍可用。它不检查 Worker 或模型端点；提交路径仍 fail closed，运维侧还需监控 Kael 写入错误。
-- `/kael/internal/metrics` 暴露 `kael_runtime_store_snapshot_disabled`、`kael_runtime_store_revision` 和 `kael_runtime_store_records_since_snapshot`。Core 模式固定报告 snapshot disabled，并以 records counter 反映需要重放的历史 delta 数；该端点没有业务用户认证，必须由反向代理或网络 ACL 只开放给监控网络。
+- 当前 readiness 检查进程内 Store 状态及持久化 adapter；对 Core 在 2 秒超时内执行当前 revision 之后带签名的单条轻量查询，校验整页 receipt 并确认 Core head 未与本地分叉，同时检查 Terminal AI 本地 journal 仍可用。它不检查 Worker 或模型端点；提交路径仍 fail closed，运维侧还需监控 Kael 写入错误。
+- `/kael/internal/metrics` 暴露 `kael_runtime_store_snapshot_disabled`、`kael_runtime_store_revision` 和 `kael_runtime_store_records_since_snapshot`。Core Journal 固定报告 snapshot disabled，并以 records counter 反映需要重放的历史 delta 数；该端点没有业务用户认证，必须由反向代理或网络 ACL 只开放给监控网络。
 
 ## 后果
 
 Conversation、用户问题、终态回答、结果卡片、Message 幂等信息和关联 Artifact 元数据默认保存在 JumpServer Core，可在 Kael 更换节点后重新加载。Run、Context、Registration、Model/ToolCall、ToolResult、Approval、DomainEvent、PanelDelivery 和运行审计仅存在于当前进程；Kael 重启会中断而不是恢复进行中的非 Terminal 任务。Artifact 原始字节仍要求复用 `data/artifacts` 私有卷。
 
-本地 JSONL 仍可用于本地开发或预先规划的隔离环境，但两个 adapter 不是双写关系。禁止在 Core 故障时自动切到 JSONL；切换 `RUNTIME_STORE` 前必须停止写入并确认目标存储已有所需历史，避免数据回退或形成两个并行写权威。
+开发与生产使用相同的存储路由：普通会话历史写 Core，Terminal AI 写本地 JSONL。Core 故障时不会将普通会话切到本地存储。旧版完整本地存储的 `data/store/`、`data/events/` 不会自动导入；使用过该模式的环境需要先迁移所需历史，再升级到固定路由。

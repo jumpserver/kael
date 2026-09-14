@@ -756,7 +756,7 @@ Kael 保存编排审计和执行摘要；Koko、Chen、Core 保存其既有执�
 | Component identity | Core 签发的 AccessKey | 私有文件、`0600`、不进入 Store/Event/日志 |
 | Process-local state | 活动 lease/connection ownership、锁、事件唤醒、SSE connection、Provider 请求、Panel executor channel | Kael 退出后清空；持久实体在启动时收敛为安全终态 |
 
-Kael 当前不连接数据库，也不包含 ORM 或 schema migration。默认 adapter 使用组件 AccessKey 调用 Core `/api/v1/chat-ai/runtime-store/`：读取请求携带一次性 nonce 并验证覆盖 head 与全部有序结果的整页 HMAC receipt；写入使用 commit ID 幂等、请求 integrity、签名 receipt 和 `expected_revision` CAS 追加用户可见历史投影。网络/5xx 只以同一 commit ID 有限重试，最终结果不确定或 revision conflict 会 poison 本地 adapter，要求重启重放全部历史 delta。旧版完整运行态在升级首次加载后会用一次精简历史 snapshot 替换，迁移后不再周期性生成 snapshot。Terminal AI 固定写入 `data/terminal/store/runtime.jsonl`；`RUNTIME_STORE=jsonl` 显式回退仍保存完整运行态。
+Kael 当前不连接数据库，也不包含 ORM 或 schema migration。默认 adapter 使用组件 AccessKey 调用 Core `/api/v1/chat-ai/runtime-store/`：读取请求携带一次性 nonce 并验证覆盖 head 与全部有序结果的整页 HMAC receipt；写入使用 commit ID 幂等、请求 integrity、签名 receipt 和 `expected_revision` CAS 追加用户可见历史投影。网络/5xx 只以同一 commit ID 有限重试，最终结果不确定或 revision conflict 会 poison 本地 adapter，要求重启重放全部历史 delta。旧版完整运行态在升级首次加载后会用一次精简历史 snapshot 替换，迁移后不再周期性生成 snapshot。Terminal AI 固定写入 `data/terminal/store/runtime.jsonl` 和 `data/terminal/events/`，不提供存储模式切换。
 
 Core history record 在发送前硬限制为 8 MiB；单条问题、终态回答或最小结果异常超限时，该 Store 事务失败但 adapter 不进入 poisoned 状态，也不会把超大 record 发送给 Core/MariaDB。
 
@@ -959,7 +959,7 @@ Kael component -------- registration / AccessKey / TerminalConfig / heartbeat / 
 
 - Gateway 保留完整 `/kael` 前缀；
 - SSE 关闭 buffering/cache，并设置足够的 read timeout；
-- readiness 检查已初始化、未关闭且未 poisoned 的进程内 Runtime Store 及其持久化 adapter；Core 模式在 2 秒超时内执行带签名的轻量 Runtime Store 探测并校验 receipt 与 revision，JSONL 模式检查 journal 可用性；它不检查 Worker 或模型端点；
+- readiness 检查已初始化、未关闭且未 poisoned 的进程内 Runtime Store 及其持久化 adapter；对 Core 在 2 秒超时内执行带签名的轻量 Runtime Store 探测并校验 receipt 与 revision，同时检查 Terminal AI 本地 journal 可用性；它不检查 Worker 或模型端点；
 - liveness 不依赖模型、Core 或其它外部系统，避免重启风暴；
 - 首次 `SIGINT`/`SIGTERM` 必须取消 HTTP request context 和 SSE、停止 heartbeat/worker 后再执行有界 Shutdown；信号订阅随即释放，第二次信号保留系统默认的强制退出语义；
 - `/kael/internal/metrics` 没有业务用户认证，必须由反向代理或网络 ACL 只开放给监控网络；部署方根据自身容量和 SLO 定义指标阈值及回滚条件；

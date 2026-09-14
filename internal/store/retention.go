@@ -16,8 +16,8 @@ import (
 	"github.com/jumpserver/kael/internal/ports"
 )
 
-// RetentionOptions bounds local JSONL history. Only terminal conversations are
-// evicted; in jsonl mode the shared journal and all event files count as usage.
+// RetentionOptions bounds local JSONL history. The journal and all event files
+// count as usage; only terminal conversations are evicted.
 type RetentionOptions struct {
 	KeepDays     int
 	MaxBytes     int64

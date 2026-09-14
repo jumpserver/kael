@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受，2026-09-04。本文定义 JSONL 记录格式、状态恢复和 Event 协议；“本地 JSONL 是默认 Store”的实现选择已由 [ADR 0006](./0006-core-backed-runtime-journal.md) 替代。本地 JSONL 继续作为显式回退。
+已接受，2026-09-04。本文定义 JSONL 记录格式、状态恢复和 Event 协议；“本地 JSONL 是默认 Store”的实现选择已由 [ADR 0006](./0006-core-backed-runtime-journal.md) 替代。本地 JSONL 固定用于 Terminal AI。
 
 ## 背景
 
@@ -10,21 +10,21 @@ Kael 已把长期对话与浏览器执行连接拆开。若只保留内存 Store
 
 ## 决策
 
-### JSONL 回退 Store
+### Terminal AI 本地 JSONL Store
 
-- Runtime 继续只依赖 `ports.Store`/`ports.Tx`；本 ADR 定义的 adapter 是单进程、本地 JSONL Store，不连接数据库。它现在只在显式设置 `RUNTIME_STORE=jsonl` 时启用，默认 Store 见 ADR 0006。
-- `data/store/runtime.jsonl` 是事务状态 journal，保存 Conversation、Message、Run、DomainEvent、幂等索引、审计及其它 Store 状态。记录带版本与校验和，启动时只截断未完整写入的最后一条记录，并按阈值原子压缩为快照。
-- `data/events/<conversation-id>.jsonl` 是按 Conversation 分隔、可直接读取的 DomainEvent 归档。这里的 `seq` 是 Conversation 事件序列，不是某个 Panel 的 SSE cursor。
+- Runtime 继续只依赖 `ports.Store`/`ports.Tx`；本 ADR 定义的 adapter 是单进程、本地 JSONL Store，不连接数据库。它固定保存 Terminal AI 状态，其他会话的问答历史由 Core 保存，见 ADR 0006。
+- `data/terminal/store/runtime.jsonl` 是事务状态 journal，保存 Conversation、Message、Run、DomainEvent、幂等索引、审计及其它 Store 状态。记录带版本与校验和，启动时只截断未完整写入的最后一条记录，并按阈值原子压缩为快照。
+- `data/terminal/events/<conversation-id>.jsonl` 是按 Conversation 分隔、可直接读取的 DomainEvent 归档。这里的 `seq` 是 Conversation 事件序列，不是某个 Panel 的 SSE cursor。
 - DomainEvent 归档作为历史保留；bootstrap 中的 `event_retention_seconds` 当前约束 PanelDelivery/SSE 重放窗口，不删除 Conversation DomainEvent 归档。
-- Terminal AI 本地历史另外受 `TERMINAL_AI_KEEP_DAYS`（默认 7 天）、`TERMINAL_AI_MAX_BYTES`（默认 1 GiB）和 `TERMINAL_AI_MIN_FREE_BYTES`（默认 1 GiB）约束。默认 Core 模式的终端文件位于 `data/terminal/store/` 和 `data/terminal/events/`；显式 JSONL 模式使用上述共享目录。保留时间从最后一次消息/Conversation 更新时间计算，跳过活跃 Run 和租约有效的 Panel。
+- Terminal AI 本地历史另外受 `TERMINAL_AI_KEEP_DAYS`（默认 7 天）、`TERMINAL_AI_MAX_BYTES`（默认 1 GiB）和 `TERMINAL_AI_MIN_FREE_BYTES`（默认 1 GiB）约束。终端文件位于 `data/terminal/store/` 和 `data/terminal/events/`。保留时间从最后一次消息/Conversation 更新时间计算，跳过活跃 Run 和租约有效的 Panel。
 - 启动时先恢复、清理，再核对可读归档；运行期间每小时检查过期历史，容量到 90% 或磁盘低余量时每分钟最多淘汰 100 个最旧的非活跃 terminal 会话，目标降至 80%。清理将剩余完整状态原子写入快照后才删除对应事件文件；启动时移除不属于已提交状态的残留归档，避免历史重新出现。
 - 本地配额统计 `store/`、`events/` 中的文件，包括事务日志和临时文件，不包含共享的原始附件或服务日志。写入前同时检查追加字节、快照临时空间和文件系统可用空间；为新 terminal 请求额外保留配额的 10%（最多 64 MiB）供在途执行使用。预检失败返回可重试的 `storage_capacity_exceeded`，不会 poison Store。清理已有超额历史可以使用磁盘余量并临时超过配额，但必须缩小数据、且完整临时快照能够落盘；实际 I/O 失败仍使用原有 fail-closed 保护。文件系统余量检查不能消除其他进程并发写满磁盘的可能。
 - 领域状态与新 DomainEvent 先持久写入，再对订阅者发布；持久化失败时该事务不对 Runtime 可见。
-- Kael 不读取或导入 Koko `data/agent/events/*.jsonl`。JSONL 回退 Store 只保存启用该 adapter 后由 Kael 自身创建的 Runtime 状态与事件，也不会与 Core-backed Journal 双写。
+- Kael 不读取或导入 Koko `data/agent/events/*.jsonl`。本地 JSONL 保存 Kael 的 Terminal AI 状态与事件，其他会话的问答历史由 Core-backed Journal 保存。
 
 ### 重启恢复
 
-- Conversation、Message、已完成 Run、DomainEvent 和审计可从同一份已配置 Journal 跨 Kael 重启恢复；JSONL 回退要求复用同一数据目录，Core-backed adapter 则从 Core 重新加载。
+- Terminal AI 的 Conversation、Message、已完成 Run、DomainEvent 和审计可从本地 Journal 跨 Kael 重启恢复，要求复用同一数据目录；其他会话只从 Core 重新加载用户可见的问答历史。
 - 启动时尚未完成的 Run 统一收敛为 `interrupted/process_restarted`；相关未完成 Message 标为 `cancelled`，活动 ToolCall 标为 `cancelled`，未决 Approval 标为 `expired`。
 - PanelSession 与 Registration 标为 `expired`，因为浏览器连接、executor channel 和 lease owner 不可能由磁盘安全恢复。Luna 重新打开会话时必须建立新 PanelSession、提交最新 Context 并重新注册工具。
 - PanelDelivery 的历史可以留在 Store 中作审计，但旧 PanelSession 的 cursor 不能作为新连接的续传能力；新 PanelSession 从自己的 sequence 开始。
@@ -64,4 +64,4 @@ Luna 当前的 `AgentClient` 为降低一次性 UI 改动，仍在内部暴露 `
 
 ## 后果
 
-Kael 不需要直接连接数据库即可保留自身会话与事件。本地 JSONL 回退只支持单写实例；Core-backed Journal 同样尚不提供状态同步、分布式 ownership 或非幂等工具恢复。后台 Run、跨实例共享、未决 Approval 续接和浏览器 ToolCall 恢复仍未启用。旧 Koko 历史的保留或迁移不属于 Kael 启动流程。
+Kael 不需要直接连接数据库即可保留自身会话与事件。Terminal AI 本地 JSONL 只支持单写实例；Core-backed Journal 同样尚不提供状态同步、分布式 ownership 或非幂等工具恢复。后台 Run、跨实例共享、未决 Approval 续接和浏览器 ToolCall 恢复仍未启用。旧 Koko 历史的保留或迁移不属于 Kael 启动流程。
