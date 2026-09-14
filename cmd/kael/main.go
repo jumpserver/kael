@@ -70,11 +70,12 @@ func run(settings config.Config, logger *zap.Logger) error {
 	}
 	defer engine.Close()
 	var runtimeStore ports.Store
+	retention := store.RetentionOptions{KeepDays: settings.TerminalAIKeepDays, MaxBytes: settings.TerminalAIMaxBytes, MinFreeBytes: settings.TerminalAIMinFreeBytes}
 	switch settings.RuntimeStore {
 	case "core":
-		runtimeStore, err = store.NewCore(componentClient, settings.RuntimeDataFolderPath)
+		runtimeStore, err = store.NewCore(componentClient, settings.RuntimeDataFolderPath, retention)
 	case "jsonl":
-		runtimeStore, err = store.NewJSONL(settings.RuntimeDataFolderPath)
+		runtimeStore, err = store.NewJSONL(settings.RuntimeDataFolderPath, retention)
 	default:
 		return fmt.Errorf("unsupported runtime store %q", settings.RuntimeStore)
 	}

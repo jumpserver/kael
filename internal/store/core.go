@@ -30,7 +30,7 @@ type corePersistence struct {
 	poisoned             error
 }
 
-func NewCore(client *component.Client, runtimeRoot string) (*Memory, error) {
+func NewCore(client *component.Client, runtimeRoot string, options ...RetentionOptions) (*Memory, error) {
 	if client == nil {
 		return nil, fmt.Errorf("Core runtime store client is required")
 	}
@@ -38,7 +38,7 @@ func NewCore(client *component.Client, runtimeRoot string) (*Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	terminal, loadedTerminal, err := openJSONLRoot(filepath.Join(runtimeRoot, "terminal"))
+	terminal, loadedTerminal, err := openJSONLRoot(filepath.Join(runtimeRoot, "terminal"), options...)
 	if err != nil {
 		return nil, fmt.Errorf("open Terminal AI runtime store: %w", err)
 	}

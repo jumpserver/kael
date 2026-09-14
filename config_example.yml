@@ -26,6 +26,18 @@ BOOTSTRAP_TOKEN: <PleaseChangeMe>
 # 禁止在 Core 故障时自动切到 jsonl，否则会形成缺少现有历史的第二个写权威。
 # RUNTIME_STORE: core
 
+# Terminal AI 始终保留本地可读事件 JSONL，不上传 Core。
+# 按最后一次消息/会话更新时间保留，活跃 Run 和有效 Panel 不清理。
+# 启动及每小时清理过期会话；容量达到 90% 或磁盘余量不足时，
+# 每分钟最多淘汰 100 个最旧的非活跃会话，目标降至 80%。
+# 容量统计包含本地 store/、events/ 及快照临时文件；jsonl 模式统计共享目录，
+# 但仅淘汰 terminal 会话。附件原始文件和普通服务日志不属于该配额。
+# 新请求额外预留最多 64 MiB 给在途执行；空间不足返回 storage_capacity_exceeded。
+# 清理既有超额数据时允许有界的临时快照开销，实际磁盘必须容纳完整快照。
+# TERMINAL_AI_KEEP_DAYS: 7
+# TERMINAL_AI_MAX_BYTES: 1073741824
+# TERMINAL_AI_MIN_FREE_BYTES: 1073741824
+
 # 标准浏览器部署由 Lina 所在站点把 /kael/ 同源反向代理到 Kael。若网关终止 HTTPS，
 # 优先在这里精确填写 Lina 的外部 origin，避免 Kael 所见内部 HTTP 导致 Origin 拒绝。
 # 此项只扩展 Kael 的 Origin/CSRF 放行列表，不会发送 CORS 响应头。

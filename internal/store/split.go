@@ -19,6 +19,13 @@ func (p *splitPersistence) Commit(previous, next *memoryState) error {
 	if err := p.terminal.Commit(previousTerminal, nextTerminal); err != nil {
 		return fmt.Errorf("persist Terminal AI runtime state: %w", err)
 	}
+	removed := make(map[string]struct{})
+	for id, conversation := range next.conversations {
+		if _, exists := nextTerminal.conversations[id]; conversation.Profile == "terminal" && !exists {
+			removed[id] = struct{}{}
+		}
+	}
+	removeConversationSubgraphs(next, removed)
 	if err := p.core.Commit(previous, next); err != nil {
 		return fmt.Errorf("persist Core runtime state: %w", err)
 	}

@@ -8,6 +8,7 @@ import (
 )
 
 var ErrNotFound = domainError("not found")
+var ErrCapacity = domainError("local AI storage capacity exhausted")
 var ErrConflict = domainError("conflict")
 var ErrUnavailable = domainError("unavailable")
 
