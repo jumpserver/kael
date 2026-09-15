@@ -535,20 +535,31 @@ func (s *Service) waitToolResult(ctx context.Context, run *domain.Run, call *dom
 		if err != nil && !errors.Is(err, ports.ErrNotFound) {
 			return agentruntime.ToolObservation{}, err
 		}
+		// Progress is a receipt too. Executor contexts and the run context bound
+		// the operation; this timer only detects an executor that stopped replying.
+		if result != nil && !result.Done && result.Status == "running" {
+			deadline.Reset(time.Until(result.CreatedAt.Add(wait)))
+		}
 		select {
 		case <-ctx.Done():
 			return agentruntime.ToolObservation{}, ctx.Err()
 		case <-deadline.C:
-			return s.expireToolWait(ctx, run, call)
+			observation, expireErr := s.expireToolWait(ctx, run, call, wait)
+			if errors.Is(expireErr, errToolWaitProgress) {
+				continue
+			}
+			return observation, expireErr
 		case <-notifications:
 		case <-ticker.C:
 		}
 	}
 }
 
+var errToolWaitProgress = errors.New("tool progress advanced the receipt deadline")
+
 // A lost executor receipt is an observation for the model, never permission to
 // retry a write. The transaction arbitrates with a concurrently arriving result.
-func (s *Service) expireToolWait(ctx context.Context, run *domain.Run, call *domain.ToolCall) (agentruntime.ToolObservation, error) {
+func (s *Service) expireToolWait(ctx context.Context, run *domain.Run, call *domain.ToolCall, wait time.Duration) (agentruntime.ToolObservation, error) {
 	var observation agentruntime.ToolObservation
 	now := time.Now().UTC()
 	err := s.store.Transaction(ctx, func(tx ports.Tx) error {
@@ -559,6 +570,9 @@ func (s *Service) expireToolWait(ctx context.Context, run *domain.Run, call *dom
 		}
 		if err != nil && !errors.Is(err, ports.ErrNotFound) {
 			return err
+		}
+		if latest != nil && latest.Status == "running" && now.Before(latest.CreatedAt.Add(wait)) {
+			return errToolWaitProgress
 		}
 		current, err := tx.RunInternal(run.ID, true)
 		if err != nil {
