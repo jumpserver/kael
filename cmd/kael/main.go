@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -17,13 +18,13 @@ import (
 	"github.com/jumpserver/kael/internal/config"
 	"github.com/jumpserver/kael/internal/event"
 	"github.com/jumpserver/kael/internal/identity"
+	kaellogger "github.com/jumpserver/kael/internal/logger"
 	"github.com/jumpserver/kael/internal/platformgateway"
 	"github.com/jumpserver/kael/internal/ports"
 	agentruntime "github.com/jumpserver/kael/internal/runtime"
 	"github.com/jumpserver/kael/internal/service"
 	"github.com/jumpserver/kael/internal/store"
 	"go.uber.org/zap"
-	"path/filepath"
 )
 
 var (
@@ -41,22 +42,23 @@ func main() {
 		fmt.Printf("kael %s (%s, %s, %s)\n", Version, Githash, Buildstamp, Goversion)
 		return
 	}
-	logger, err := zap.NewProduction()
+	settings, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "load config:", err)
+		os.Exit(1)
+	}
+	logger, err := kaellogger.New(settings.LogDirPath, settings.LogLevel)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "create logger:", err)
 		os.Exit(1)
 	}
 	defer func() { _ = logger.Sync() }()
-	if err = run(*configPath, logger); err != nil {
+	if err = run(settings, logger); err != nil {
 		logger.Fatal("kael stopped", zap.Error(err))
 	}
 }
 
-func run(configPath string, logger *zap.Logger) error {
-	settings, err := config.Load(configPath)
-	if err != nil {
-		return err
-	}
+func run(settings config.Config, logger *zap.Logger) error {
 	tlsVerify := !settings.IgnoreVerifyCerts
 	componentClient, err := component.Connect(component.Options{CoreURL: settings.CoreHost, TLSVerify: tlsVerify, Timeout: settings.HTTPRequestTimeout, Name: settings.Name, BootstrapToken: settings.BootstrapToken, AccessKeyFile: settings.AccessKeyFilePath})
 	if err != nil {
@@ -67,15 +69,8 @@ func run(configPath string, logger *zap.Logger) error {
 		return err
 	}
 	defer engine.Close()
-	var runtimeStore ports.Store
-	switch settings.RuntimeStore {
-	case "core":
-		runtimeStore, err = store.NewCore(componentClient)
-	case "jsonl":
-		runtimeStore, err = store.NewJSONL(settings.RuntimeDataFolderPath)
-	default:
-		return fmt.Errorf("unsupported runtime store %q", settings.RuntimeStore)
-	}
+	retention := store.RetentionOptions{KeepDays: settings.TerminalAIKeepDays, MaxBytes: settings.TerminalAIMaxBytes, MinFreeBytes: settings.TerminalAIMinFreeBytes}
+	runtimeStore, err := store.NewCore(componentClient, settings.RuntimeDataFolderPath, retention)
 	if err != nil {
 		return err
 	}
@@ -89,7 +84,7 @@ func run(configPath string, logger *zap.Logger) error {
 			return err
 		}
 	}
-	runtimeService, err := service.New(service.Options{Store: runtimeStore, Engine: engine, Bus: bus, Logger: logger, InstanceID: settings.Name, Workers: 4, ToolResultTimeout: settings.ToolResultTimeout, ArtifactDir: settings.ArtifactFolderPath, Capability: capability, StorageKind: settings.RuntimeStore, StorageDurable: true})
+	runtimeService, err := service.New(service.Options{Store: runtimeStore, Engine: engine, Bus: bus, Logger: logger, InstanceID: settings.Name, Workers: 4, ToolResultTimeout: settings.ToolResultTimeout, ArtifactDir: settings.ArtifactFolderPath, Capability: capability, StorageKind: "core", StorageDurable: true})
 	if err != nil {
 		return err
 	}
@@ -112,7 +107,7 @@ func run(configPath string, logger *zap.Logger) error {
 	heartbeatContext, cancelHeartbeat := context.WithCancel(context.Background())
 	defer cancelHeartbeat()
 	go componentClient.RunHeartbeat(heartbeatContext, logger)
-	logger.Info("kael started", zap.String("address", httpServer.Addr), zap.String("version", Version), zap.String("component", settings.Name), zap.String("model", engine.Info().Model), zap.String("storage", settings.RuntimeStore))
+	logger.Info("kael started", zap.String("address", httpServer.Addr), zap.String("version", Version), zap.String("component", settings.Name), zap.String("model", engine.Info().Model), zap.String("storage", "core"), zap.String("terminal_storage", "jsonl"))
 	signals, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	var serveErr error

@@ -323,6 +323,7 @@ type Approval struct {
 	PolicyVersion     string          `json:"policy_version"`
 	State             string          `json:"status"`
 	DecisionDigest    string          `json:"-"`
+	Remembered        bool            `json:"remembered,omitempty"`
 	Reason            string          `json:"reason,omitempty"`
 	ExpiresAt         time.Time       `json:"expires_at"`
 	CreatedAt         time.Time       `json:"date_created"`

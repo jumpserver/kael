@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -18,34 +19,88 @@ import (
 const (
 	coreStorePageSize       = 1000
 	coreStoreCommitAttempts = 3
+	coreStoreMaxRecordBytes = 8 * 1024 * 1024
 )
+
+type coreRuntimeStoreClient interface {
+	AppendRuntimeStore(string, uint64, bool, string) (uint64, error)
+	LoadRuntimeStoreContext(context.Context, uint64, int) (component.RuntimeStorePage, error)
+}
 
 type corePersistence struct {
 	mu                   sync.Mutex
-	client               *component.Client
+	client               coreRuntimeStoreClient
 	revision             uint64
 	recordsSinceSnapshot int
 	poisoned             error
-	snapshotDisabled     bool
 }
 
-func NewCore(client *component.Client) (*Memory, error) {
+func NewCore(client *component.Client, runtimeRoot string, options ...RetentionOptions) (*Memory, error) {
 	if client == nil {
 		return nil, fmt.Errorf("Core runtime store client is required")
 	}
-	persistence, state, err := openCorePersistence(client)
+	core, loadedCore, err := openCorePersistence(client)
 	if err != nil {
 		return nil, err
 	}
-	next := state.clone()
-	recoverProcessLocalState(next, time.Now().UTC())
-	if !reflect.DeepEqual(state, next) {
-		if err = persistence.Commit(state, next); err != nil {
-			return nil, fmt.Errorf("recover persisted runtime state: %w", err)
-		}
-		state = next
+	terminal, loadedTerminal, err := openJSONLRoot(filepath.Join(runtimeRoot, "terminal"), options...)
+	if err != nil {
+		return nil, fmt.Errorf("open Terminal AI runtime store: %w", err)
 	}
-	return &Memory{state: state, persistence: persistence}, nil
+	closeTerminal := true
+	defer func() {
+		if closeTerminal {
+			_ = terminal.Close()
+		}
+	}()
+
+	coreState := corePersistableState(loadedCore)
+	rewriteCoreHistory := !reflect.DeepEqual(loadedCore, coreState)
+	loadedTerminal = terminalPersistableState(loadedTerminal)
+	terminalState := loadedTerminal
+	if terminal.records == 0 {
+		terminalState = mergeMemoryStates(
+			terminalPersistableState(loadedCore),
+			loadedTerminal,
+		)
+		if !reflect.DeepEqual(loadedTerminal, terminalState) {
+			if err = terminal.Commit(loadedTerminal, terminalState); err != nil {
+				return nil, fmt.Errorf("migrate Terminal AI runtime state: %w", err)
+			}
+		}
+	}
+	if rewriteCoreHistory {
+		if err = core.ReplaceSnapshot(coreState); err != nil {
+			return nil, fmt.Errorf("compact Core conversation history: %w", err)
+		}
+	}
+
+	now := time.Now().UTC()
+	coreState, err = recoverPersistence(core, coreState, now)
+	if err != nil {
+		return nil, fmt.Errorf("recover Core runtime state: %w", err)
+	}
+	terminalState, err = recoverPersistence(terminal, terminalState, now)
+	if err != nil {
+		return nil, fmt.Errorf("recover Terminal AI runtime state: %w", err)
+	}
+	closeTerminal = false
+	return &Memory{
+		state:       mergeMemoryStates(coreState, terminalState),
+		persistence: &splitPersistence{core: core, terminal: terminal},
+	}, nil
+}
+
+func recoverPersistence(persistence statePersistence, state *memoryState, now time.Time) (*memoryState, error) {
+	next := state.clone()
+	recoverProcessLocalState(next, now)
+	if reflect.DeepEqual(state, next) {
+		return state, nil
+	}
+	if err := persistence.Commit(state, next); err != nil {
+		return nil, err
+	}
+	return next, nil
 }
 
 func openCorePersistence(client *component.Client) (*corePersistence, *memoryState, error) {
@@ -122,29 +177,44 @@ func (p *corePersistence) Commit(previous, next *memoryState) error {
 	if p.poisoned != nil {
 		return p.unavailableLocked()
 	}
+	previous = corePersistableState(previous)
+	next = corePersistableState(next)
 	delta := diffPersistentState(previous, next)
 	if delta.empty() {
 		return nil
 	}
-	snapshot := !p.snapshotDisabled && p.recordsSinceSnapshot >= compactJournalRecords
-	payload := journalPayload{Delta: &delta}
-	if snapshot {
-		state := persistentStateFromMemory(next)
-		payload = journalPayload{Snapshot: &state}
-	}
-	line, err := encodeJournalRecord(payload)
-	if snapshot && errors.Is(err, errJournalRecordTooLarge) {
-		p.snapshotDisabled = true
-		snapshot = false
-		payload = journalPayload{Delta: &delta}
-		line, err = encodeJournalRecord(payload)
-	}
+	line, err := encodeJournalRecord(journalPayload{Delta: &delta})
 	if err != nil {
 		return err
+	}
+	return p.appendLocked(false, line)
+}
+
+// ReplaceSnapshot immediately replaces an older Core runtime snapshot with the
+// durable conversation-history projection. This is used once when loading a
+// store written by a version that persisted process-local runtime state.
+func (p *corePersistence) ReplaceSnapshot(state *memoryState) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.poisoned != nil {
+		return p.unavailableLocked()
+	}
+	projected := persistentStateFromMemory(corePersistableState(state))
+	line, err := encodeJournalRecord(journalPayload{Snapshot: &projected})
+	if err != nil {
+		return err
+	}
+	return p.appendLocked(true, line)
+}
+
+func (p *corePersistence) appendLocked(snapshot bool, line []byte) error {
+	if len(line) > coreStoreMaxRecordBytes {
+		return fmt.Errorf("%w: Core history record is %d bytes, limit is %d", errJournalRecordTooLarge, len(line), coreStoreMaxRecordBytes)
 	}
 	record := strings.TrimSuffix(string(line), "\n")
 	commitID := uuid.NewString()
 	var revision uint64
+	var err error
 	uncertainSeen := false
 	for attempt := 0; attempt < coreStoreCommitAttempts; attempt++ {
 		revision, err = p.client.AppendRuntimeStore(commitID, p.revision, snapshot, record)
@@ -154,15 +224,25 @@ func (p *corePersistence) Commit(previous, next *memoryState) error {
 		if errors.Is(err, component.ErrRuntimeStoreRevisionConflict) {
 			return p.poisonLocked(fmt.Errorf("runtime store revision conflict: %v", err))
 		}
-		if !errors.Is(err, component.ErrRuntimeStoreCommitUncertain) {
+		uncertain := errors.Is(err, component.ErrRuntimeStoreCommitUncertain)
+		unavailable := errors.Is(err, component.ErrRuntimeStoreUnavailable)
+		if !uncertain && !unavailable {
 			if uncertainSeen {
 				return p.poisonLocked(fmt.Errorf("%w: retry after uncertain outcome failed: %v", component.ErrRuntimeStoreCommitUncertain, err))
 			}
 			return err
 		}
-		uncertainSeen = true
+		uncertainSeen = uncertainSeen || uncertain
 		if attempt+1 == coreStoreCommitAttempts {
-			return p.poisonLocked(err)
+			if uncertainSeen {
+				if !uncertain {
+					err = fmt.Errorf("%w: last retry failed before sending: %v", component.ErrRuntimeStoreCommitUncertain, err)
+				}
+				return p.poisonLocked(err)
+			}
+			// No attempt could have committed. Leave the store usable for
+			// the next call after Core recovers.
+			return fmt.Errorf("%w: %w", ports.ErrUnavailable, err)
 		}
 		time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
 	}
@@ -173,6 +253,193 @@ func (p *corePersistence) Commit(previous, next *memoryState) error {
 		p.recordsSinceSnapshot++
 	}
 	return nil
+}
+
+// corePersistableState is the durable, user-visible conversation history stored
+// in Core. It keeps questions, finalized assistant answers (including result
+// cards), and artifacts attached to those messages. Process-local execution
+// state is deliberately excluded: runs cannot be resumed safely after restart,
+// and panels, contexts, registrations, events, deliveries, approvals, tool
+// records, and runtime audits are not required to render conversation history.
+// Terminal AI continues to use its separate local JSONL store.
+func corePersistableState(state *memoryState) *memoryState {
+	result := newMemoryState()
+	durableConversations := make(map[string]struct{})
+	for _, message := range state.messages {
+		if message.Role != "user" {
+			continue
+		}
+		conversation, exists := state.conversations[message.ConversationID]
+		if exists && conversation.Profile != "terminal" {
+			durableConversations[message.ConversationID] = struct{}{}
+		}
+	}
+	for id := range durableConversations {
+		result.conversations[id] = cloneStoredValue(state.conversations[id])
+	}
+
+	durableMessages := make(map[string]struct{})
+	for id, message := range state.messages {
+		if _, durable := durableConversations[message.ConversationID]; !durable {
+			continue
+		}
+		if message.Role != "user" && !finalAssistantMessage(message.Role, message.Status) {
+			continue
+		}
+		result.messages[id] = cloneStoredValue(message)
+		durableMessages[id] = struct{}{}
+	}
+	for id, artifact := range state.artifacts {
+		if _, durable := durableMessages[artifact.MessageID]; durable {
+			result.artifacts[id] = cloneStoredValue(artifact)
+		}
+	}
+	return result
+}
+
+func finalAssistantMessage(role, status string) bool {
+	if role != "assistant" {
+		return false
+	}
+	switch status {
+	case "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func terminalPersistableState(state *memoryState) *memoryState {
+	result := state.clone()
+	nonTerminalConversations := make(map[string]struct{})
+	for id, conversation := range result.conversations {
+		if conversation.Profile != "terminal" {
+			nonTerminalConversations[id] = struct{}{}
+		}
+	}
+	return removeConversationSubgraphs(result, nonTerminalConversations)
+}
+
+func removeConversationSubgraphs(result *memoryState, conversations map[string]struct{}) *memoryState {
+	for id := range conversations {
+		delete(result.conversations, id)
+	}
+	if len(conversations) == 0 {
+		return result
+	}
+
+	transientMessages := make(map[string]struct{})
+	for id, message := range result.messages {
+		if _, transient := conversations[message.ConversationID]; transient {
+			transientMessages[id] = struct{}{}
+			delete(result.messages, id)
+		}
+	}
+	for id, artifact := range result.artifacts {
+		if _, transient := transientMessages[artifact.MessageID]; transient {
+			delete(result.artifacts, id)
+		}
+	}
+
+	transientPanels := make(map[string]struct{})
+	for id, panel := range result.panels {
+		if _, transient := conversations[panel.ConversationID]; transient {
+			transientPanels[id] = struct{}{}
+			delete(result.panels, id)
+		}
+	}
+	for id, snapshot := range result.contexts {
+		if _, transient := transientPanels[snapshot.PanelSessionID]; transient {
+			delete(result.contexts, id)
+		}
+	}
+	for id, registration := range result.registrations {
+		if _, transient := transientPanels[registration.PanelSessionID]; transient {
+			delete(result.registrations, id)
+		}
+	}
+
+	transientRuns := make(map[string]struct{})
+	for id, run := range result.runs {
+		if _, transient := conversations[run.ConversationID]; transient {
+			transientRuns[id] = struct{}{}
+			delete(result.runs, id)
+		}
+	}
+	for id, call := range result.modelCalls {
+		if _, transient := transientRuns[call.RunID]; transient {
+			delete(result.modelCalls, id)
+		}
+	}
+
+	transientToolCalls := make(map[string]struct{})
+	for id, call := range result.toolCalls {
+		_, transientConversation := conversations[call.ConversationID]
+		_, transientRun := transientRuns[call.RunID]
+		_, transientPanel := transientPanels[call.PanelSessionID]
+		if transientConversation || transientRun || transientPanel {
+			transientToolCalls[id] = struct{}{}
+			delete(result.toolCalls, id)
+		}
+	}
+	for id, value := range result.toolResults {
+		_, transientCall := transientToolCalls[value.ToolCallID]
+		_, transientRun := transientRuns[value.RunID]
+		_, transientPanel := transientPanels[value.PanelSessionID]
+		if transientCall || transientRun || transientPanel {
+			delete(result.toolResults, id)
+		}
+	}
+
+	transientApprovals := make(map[string]struct{})
+	for id, approval := range result.approvals {
+		_, transientConversation := conversations[approval.ConversationID]
+		_, transientRun := transientRuns[approval.RunID]
+		_, transientPanel := transientPanels[approval.PanelSessionID]
+		_, transientCall := transientToolCalls[approval.ToolCallID]
+		if transientConversation || transientRun || transientPanel || transientCall {
+			transientApprovals[id] = struct{}{}
+			delete(result.approvals, id)
+		}
+	}
+
+	transientEvents := make(map[string]struct{})
+	for id, value := range result.events {
+		if _, transient := conversations[value.ConversationID]; transient {
+			transientEvents[id] = struct{}{}
+			delete(result.events, id)
+		}
+	}
+	for id := range conversations {
+		delete(result.eventHighWater, id)
+	}
+	for id, delivery := range result.deliveries {
+		_, transientConversation := conversations[delivery.ConversationID]
+		_, transientPanel := transientPanels[delivery.PanelSessionID]
+		_, transientRun := transientRuns[delivery.RunID]
+		_, transientMessage := transientMessages[delivery.MessageID]
+		_, transientCall := transientToolCalls[delivery.ToolCallID]
+		_, transientApproval := transientApprovals[delivery.ApprovalID]
+		_, transientEvent := transientEvents[delivery.EventID]
+		if transientConversation || transientPanel || transientRun || transientMessage || transientCall || transientApproval || transientEvent {
+			delete(result.deliveries, id)
+		}
+	}
+	for id := range transientPanels {
+		delete(result.deliveryHighWater, id)
+	}
+
+	for id, audit := range result.audits {
+		_, transientConversation := conversations[audit.ConversationID]
+		_, transientPanel := transientPanels[audit.PanelSessionID]
+		_, transientRun := transientRuns[audit.RunID]
+		_, transientCall := transientToolCalls[audit.ToolCallID]
+		_, transientApproval := transientApprovals[audit.ApprovalID]
+		if transientConversation || transientPanel || transientRun || transientCall || transientApproval {
+			delete(result.audits, id)
+		}
+	}
+	return result
 }
 
 func (p *corePersistence) Ready(ctx context.Context) error {
@@ -211,12 +478,8 @@ func (p *corePersistence) unavailableLocked() error {
 func (p *corePersistence) RuntimeMetrics() map[string]int64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	disabled := int64(0)
-	if p.snapshotDisabled {
-		disabled = 1
-	}
 	return map[string]int64{
-		"runtime_store_snapshot_disabled":      disabled,
+		"runtime_store_snapshot_disabled":      1,
 		"runtime_store_revision":               int64(p.revision),
 		"runtime_store_records_since_snapshot": int64(p.recordsSinceSnapshot),
 	}

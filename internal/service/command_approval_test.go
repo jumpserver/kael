@@ -99,3 +99,80 @@ func TestCommandApprovalModes(t *testing.T) {
 		})
 	}
 }
+
+func TestRememberedCommandApprovalIsExactAndPanelScoped(t *testing.T) {
+	ctx := context.Background()
+	s := &Service{store: store.NewMemory(), bus: event.NewBus(), panelLease: time.Minute, registrationLease: time.Minute, eventRetention: time.Hour}
+	principal := domain.Principal{SubjectID: "user", OrganizationID: "org"}
+	if err := s.store.Transaction(ctx, func(tx ports.Tx) error {
+		return tx.CreateConversation(&domain.Conversation{ID: "conversation", SubjectID: principal.SubjectID, OrganizationID: principal.OrganizationID, Kind: "capability", Profile: "terminal", Status: "active"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	panel, err := s.CreatePanel(ctx, principal, CreatePanelRequest{ConversationID: "conversation", ClientInstanceID: "resource", ApprovalMode: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := s.ReplaceRegistrations(ctx, principal, panel.ID, ReplaceRegistrationsRequest{Registrations: []RegistrationDefinition{
+		{
+			Name: "execute_shell", InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false}`),
+			Annotations: map[string]any{"readOnlyHint": false, "openWorldHint": true}, Meta: map[string]any{policy.CommandPolicyMetaKey: policy.ShellReadOnlyPolicy},
+		},
+		{
+			Name: "other_tool", InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false}`),
+			Annotations: map[string]any{"readOnlyHint": false, "openWorldHint": true},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := registry.Registrations[0]
+	prepare := func(registration domain.Registration, runID, command string) (*domain.ToolCall, *domain.Approval) {
+		run := &domain.Run{ID: runID, ConversationID: panel.ConversationID, PanelSessionID: panel.ID, SubjectID: principal.SubjectID, OrganizationID: principal.OrganizationID, RegistryRevision: registry.RegistryRevision, State: "running"}
+		if createErr := s.store.Transaction(ctx, func(tx ports.Tx) error { return tx.CreateRun(run) }); createErr != nil {
+			t.Fatal(createErr)
+		}
+		args, _ := json.Marshal(map[string]any{"command": command})
+		call, approval, prepareErr := s.prepareToolCall(ctx, run, registration, args, 0)
+		if prepareErr != nil {
+			t.Fatal(prepareErr)
+		}
+		return call, approval
+	}
+
+	_, first := prepare(registration, "run-1", "rm /tmp/report")
+	if first == nil {
+		t.Fatal("mutating command did not require initial approval")
+	}
+	if _, _, err = s.DecideApproval(ctx, principal, first.ID, ApprovalDecisionRequest{Decision: "approve", Remember: true}); err != nil {
+		t.Fatal(err)
+	}
+	call, repeated := prepare(registration, "run-2", "rm /tmp/report")
+	if repeated != nil || call.RequiresConfirmation {
+		t.Fatal("exact remembered command required approval again")
+	}
+	if _, changed := prepare(registration, "run-3", "rm /tmp/other"); changed == nil {
+		t.Fatal("different command reused a remembered approval")
+	}
+	_, otherApproval := prepare(registry.Registrations[1], "run-other", "rm /tmp/report")
+	if otherApproval == nil {
+		t.Fatal("unclassified tool did not require approval")
+	}
+	if _, _, rememberErr := s.DecideApproval(ctx, principal, otherApproval.ID, ApprovalDecisionRequest{Decision: "approve", Remember: true}); rememberErr == nil {
+		t.Fatal("unclassified tool accepted a remembered approval")
+	}
+
+	if err = s.store.Transaction(ctx, func(tx ports.Tx) error {
+		current, panelErr := tx.Panel(panel.ID, principal, true)
+		if panelErr != nil {
+			return panelErr
+		}
+		current.ApprovalMode = "always"
+		return tx.SavePanel(current)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, forced := prepare(registration, "run-4", "rm /tmp/report"); forced == nil {
+		t.Fatal("always mode reused a remembered approval")
+	}
+}

@@ -3,6 +3,7 @@ package component
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestComponentRegistrationModelConfigAndHeartbeat(t *testing.T) {
@@ -94,5 +97,33 @@ func assertSigned(t *testing.T, request *http.Request) {
 	t.Helper()
 	if !strings.HasPrefix(request.Header.Get("Authorization"), "Signature ") || request.Header.Get("X-JMS-ORG") != "ROOT" {
 		t.Errorf("request was not signed as a component: authorization=%q org=%q", request.Header.Get("Authorization"), request.Header.Get("X-JMS-ORG"))
+	}
+}
+
+func TestRuntimeStoreAppendTransportFailure(t *testing.T) {
+	for _, refused := range []bool{true, false} {
+		name, want := "response_lost", ErrRuntimeStoreCommitUncertain
+		if refused {
+			name, want = "connection_refused", ErrRuntimeStoreUnavailable
+		}
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				_ = conn.Close()
+			}))
+			defer server.Close()
+			if refused {
+				server.Close()
+			}
+			client := connectedClient(Options{CoreURL: server.URL, Timeout: time.Second}, nil, accessKey{ID: "id", Secret: "secret"})
+			defer client.openAPIClient.CloseIdleConnections()
+			if _, err := client.AppendRuntimeStore(uuid.NewString(), 0, false, "record"); !errors.Is(err, want) {
+				t.Fatalf("expected %v, got %v", want, err)
+			}
+		})
 	}
 }

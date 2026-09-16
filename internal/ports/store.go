@@ -8,6 +8,7 @@ import (
 )
 
 var ErrNotFound = domainError("not found")
+var ErrCapacity = domainError("local AI storage capacity exhausted")
 var ErrConflict = domainError("conflict")
 var ErrUnavailable = domainError("unavailable")
 
@@ -27,7 +28,7 @@ type Tx interface {
 	Conversation(id string, principal domain.Principal, lock bool) (*domain.Conversation, error)
 	SaveConversation(*domain.Conversation) error
 	ListConversations(principal domain.Principal, kind string, offset, limit int) ([]domain.Conversation, int64, error)
-	ListConversationsByOrganization(organizationID string, offset, limit int) ([]domain.Conversation, int64, error)
+	ListQuestionedConversationsByOrganization(organizationID string, offset, limit int) ([]domain.Conversation, int64, error)
 	ConversationByOrganization(id, organizationID string) (*domain.Conversation, error)
 	ActiveRunCount(conversationID string) (int64, error)
 
@@ -84,6 +85,7 @@ type Tx interface {
 	ApprovalInternal(id string, lock bool) (*domain.Approval, error)
 	ApprovalByToolCall(toolCallID string, lock bool) (*domain.Approval, error)
 	PendingApprovalForRun(runID string, lock bool) (*domain.Approval, error)
+	RememberedApproval(panelID, registrationID, definitionVersion, argumentsDigest string) (bool, error)
 	SaveApproval(*domain.Approval) error
 	ListApprovals(conversationID string, principal domain.Principal, offset, limit int) ([]domain.Approval, int64, error)
 

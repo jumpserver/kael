@@ -11,7 +11,7 @@ import (
 	"sync"
 )
 
-const CodexVersion = "0.153.2"
+const CodexMinimumVersion = "0.153.2"
 const maxProtocolBytes = 8 * 1024 * 1024
 
 type rpcMessage struct {

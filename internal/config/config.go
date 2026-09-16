@@ -21,12 +21,16 @@ type Config struct {
 	IgnoreVerifyCerts      bool
 	HTTPRequestTimeout     time.Duration
 	ToolResultTimeout      time.Duration
+	LogLevel               string
+	LogDirPath             string
 	AllowedOrigins         []string
 	TrustForwardedHeaders  bool
 	AccessKeyFilePath      string
 	ArtifactFolderPath     string
 	RuntimeDataFolderPath  string
-	RuntimeStore           string
+	TerminalAIKeepDays     int
+	TerminalAIMaxBytes     int64
+	TerminalAIMinFreeBytes int64
 	PlatformGatewayEnabled bool
 	PlatformDelegationKey  string
 	PlatformDelegationID   string
@@ -69,12 +73,16 @@ func Load(path string) (Config, error) {
 		IgnoreVerifyCerts:      v.GetBool("IGNORE_VERIFY_CERTS"),
 		HTTPRequestTimeout:     time.Duration(v.GetInt("HTTP_REQUEST_TIMEOUT")) * time.Second,
 		ToolResultTimeout:      v.GetDuration("TOOL_RESULT_TIMEOUT"),
+		LogLevel:               strings.ToUpper(strings.TrimSpace(v.GetString("LOG_LEVEL"))),
+		LogDirPath:             filepath.Join(dataFolder, "logs"),
 		AllowedOrigins:         v.GetStringSlice("ALLOWED_ORIGINS"),
 		TrustForwardedHeaders:  v.GetBool("TRUST_FORWARDED_HEADERS"),
 		AccessKeyFilePath:      filepath.Join(dataFolder, "keys", ".access_key"),
 		ArtifactFolderPath:     filepath.Join(dataFolder, "artifacts"),
 		RuntimeDataFolderPath:  dataFolder,
-		RuntimeStore:           strings.ToLower(strings.TrimSpace(v.GetString("RUNTIME_STORE"))),
+		TerminalAIKeepDays:     v.GetInt("TERMINAL_AI_KEEP_DAYS"),
+		TerminalAIMaxBytes:     v.GetInt64("TERMINAL_AI_MAX_BYTES"),
+		TerminalAIMinFreeBytes: v.GetInt64("TERMINAL_AI_MIN_FREE_BYTES"),
 		PlatformGatewayEnabled: v.GetBool("PLATFORM_GATEWAY_ENABLED"),
 		PlatformDelegationKey:  strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_KEY")),
 		PlatformDelegationID:   strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_KEY_ID")),
@@ -131,7 +139,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("HTTPD_PORT", 8083)
 	v.SetDefault("HTTP_REQUEST_TIMEOUT", 30)
 	v.SetDefault("TOOL_RESULT_TIMEOUT", "45s")
-	v.SetDefault("RUNTIME_STORE", "core")
+	v.SetDefault("LOG_LEVEL", "INFO")
+	v.SetDefault("TERMINAL_AI_KEEP_DAYS", 7)
+	v.SetDefault("TERMINAL_AI_MAX_BYTES", int64(1<<30))
+	v.SetDefault("TERMINAL_AI_MIN_FREE_BYTES", int64(1<<30))
 	v.SetDefault("PLATFORM_GATEWAY_ENABLED", true)
 	v.SetDefault("PLATFORM_DELEGATION_KEY_ID", "v1")
 	v.SetDefault("PLATFORM_DELEGATION_ISSUER", "jumpserver-ai")
@@ -172,8 +183,8 @@ func (c Config) Validate() error {
 			return fmt.Errorf("ALLOWED_ORIGINS contains an invalid HTTP/HTTPS origin")
 		}
 	}
-	if c.RuntimeStore != "core" && c.RuntimeStore != "jsonl" {
-		return fmt.Errorf("RUNTIME_STORE must be core or jsonl")
+	if c.TerminalAIKeepDays < 1 || c.TerminalAIKeepDays > 3650 || c.TerminalAIMaxBytes < 256<<20 || c.TerminalAIMinFreeBytes < 64<<20 {
+		return fmt.Errorf("TERMINAL_AI_KEEP_DAYS must be 1..3650, TERMINAL_AI_MAX_BYTES at least 256 MiB, and TERMINAL_AI_MIN_FREE_BYTES at least 64 MiB")
 	}
 	if !c.PlatformGatewayEnabled {
 		return fmt.Errorf("PLATFORM_GATEWAY_ENABLED must be true because the default general assistant requires the Platform Gateway")

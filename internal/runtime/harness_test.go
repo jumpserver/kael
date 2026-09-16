@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -17,15 +18,38 @@ import (
 	"github.com/jumpserver/kael/internal/model"
 )
 
-// Runs the actual pinned Codex executable against a local Responses fixture.
+func TestCompatibleCodexVersion(t *testing.T) {
+	tests := map[string]bool{
+		"codex-cli 0.144.4":   false,
+		"codex-cli 0.153.1":   false,
+		"codex-cli 0.153.2":   true,
+		"codex-cli 0.153.999": true,
+		"codex-cli 0.154.0":   true,
+		"codex-cli 1.0.0":     true,
+		"codex-cli 0.153":     false,
+		"codex-cli 0.153.dev": false,
+		"codex 0.153.2":       false,
+	}
+	for output, want := range tests {
+		t.Run(output, func(t *testing.T) {
+			if got := compatibleCodexVersion(output); got != want {
+				t.Fatalf("compatibleCodexVersion(%q) = %t, want %t", output, got, want)
+			}
+		})
+	}
+}
+
+// Runs an actual compatible Codex executable against a local Responses fixture.
 // No real model request or external API credential is used.
 func TestCodexAppServerIntegration(t *testing.T) {
 	binary := os.Getenv("KAEL_TEST_CODEX")
 	if binary == "" {
-		t.Skip("set KAEL_TEST_CODEX to the pinned Codex binary for the protocol integration test")
+		t.Skip("set KAEL_TEST_CODEX to a compatible Codex binary for the protocol integration test")
 	}
 	var mu sync.Mutex
 	requests := 0
+	var firstInput []any
+	var firstInstructions any
 	releaseCancelledRequest := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" || !strings.HasSuffix(r.URL.Path, "/responses") {
@@ -60,7 +84,22 @@ func TestCodexAppServerIntegration(t *testing.T) {
 		mu.Lock()
 		requests++
 		n := requests
+		currentInput := body["input"].([]any)
+		if n == 1 {
+			firstInput, firstInstructions = currentInput, body["instructions"]
+		}
+		if n == 3 && (len(currentInput) < len(firstInput) || !reflect.DeepEqual(firstInput, currentInput[:len(firstInput)]) || !reflect.DeepEqual(firstInstructions, body["instructions"])) {
+			t.Error("switching response language changed the existing model request prefix")
+		}
 		mu.Unlock()
+		expectedLanguage := "Simplified Chinese"
+		if n > 2 {
+			expectedLanguage = "Traditional Chinese"
+		}
+		preference := strings.LastIndex(string(encodedInput), "Luna response language: ")
+		if preference < 0 || !strings.HasPrefix(string(encodedInput)[preference:], "Luna response language: "+expectedLanguage) {
+			t.Errorf("model request is missing the current response language: %s", expectedLanguage)
+		}
 		if n%2 == 0 && !strings.Contains(string(encodedInput), "healthy") {
 			t.Error("tool receipt was not returned to the model")
 		}
@@ -102,6 +141,7 @@ func TestCodexAppServerIntegration(t *testing.T) {
 	defer harness.Close()
 	input := Input{Run: domain.Run{SubjectID: "user", OrganizationID: "org", ConversationID: "conversation", PanelSessionID: "panel"}, OutputMessageID: "out-1", Messages: []domain.Message{{ID: "in-1", Role: "user", Content: "Inspect the service and verify health."}}, Registrations: []domain.Registration{{ID: "registration", Name: "inspect", InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`), AnnotationsJSON: json.RawMessage(`{"readOnlyHint":true}`)}}}
 	calls := 0
+	input.Context = &domain.ContextSnapshot{Data: json.RawMessage(`{"response_language":"zh"}`)}
 	output := ""
 	callbacks := Callbacks{ModelStarted: func(int, model.Info) error { return nil }, ModelCompleted: func(int, model.Result, time.Duration) error { return nil }, MessageDelta: func(text string) error { output += text; return nil }, CallTool: func(_ context.Context, reg domain.Registration, args json.RawMessage, _ int64) (ToolObservation, error) {
 		calls++
@@ -121,6 +161,7 @@ func TestCodexAppServerIntegration(t *testing.T) {
 	firstThread := harness.sessions[key].thread
 	input.Messages = append(input.Messages, domain.Message{ID: "out-1", Role: "assistant", Content: result.Answer}, domain.Message{ID: "in-2", Role: "user", Content: "Verify again."})
 	input.OutputMessageID = "out-2"
+	input.Context = &domain.ContextSnapshot{Data: json.RawMessage(`{"response_language":"zh_hant"}`)}
 	output = ""
 	result, err = harness.Execute(ctx, input, callbacks)
 	if err != nil {

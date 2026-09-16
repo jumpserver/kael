@@ -377,10 +377,16 @@ func (t *memoryTx) ListConversations(principal domain.Principal, kind string, of
 	return page(values, offset, limit), int64(len(values)), nil
 }
 
-func (t *memoryTx) ListConversationsByOrganization(organizationID string, offset, limit int) ([]domain.Conversation, int64, error) {
+func (t *memoryTx) ListQuestionedConversationsByOrganization(organizationID string, offset, limit int) ([]domain.Conversation, int64, error) {
+	questioned := make(map[string]struct{})
+	for _, message := range t.state.messages {
+		if message.OrganizationID == organizationID && message.Role == "user" {
+			questioned[message.ConversationID] = struct{}{}
+		}
+	}
 	values := make([]domain.Conversation, 0)
 	for _, value := range t.state.conversations {
-		if value.OrganizationID == organizationID {
+		if _, hasQuestion := questioned[value.ID]; value.OrganizationID == organizationID && hasQuestion {
 			values = append(values, value)
 		}
 	}
@@ -939,6 +945,17 @@ func (t *memoryTx) PendingApprovalForRun(runID string, _ bool) (*domain.Approval
 		return nil, ports.ErrNotFound
 	}
 	return selected, nil
+}
+
+func (t *memoryTx) RememberedApproval(panelID, registrationID, definitionVersion, argumentsDigest string) (bool, error) {
+	for _, value := range t.state.approvals {
+		if value.PanelSessionID == panelID && value.RegistrationID == registrationID &&
+			value.DefinitionVersion == definitionVersion && value.ArgumentsDigest == argumentsDigest &&
+			value.State == "approved" && value.Remembered {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (t *memoryTx) SaveApproval(value *domain.Approval) error {

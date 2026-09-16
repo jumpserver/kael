@@ -53,6 +53,9 @@ func serviceError(kind ErrorKind, code, detail string, cause error) error {
 	return &Error{Kind: kind, Code: code, Detail: detail, cause: cause}
 }
 func translateStore(err error) error {
+	if errors.Is(err, ports.ErrCapacity) {
+		return &Error{Kind: Unavailable, Code: "storage_capacity_exceeded", Detail: "local AI history storage is full or disk space is low; retry after space has been freed", Retryable: true, cause: err}
+	}
 	if errors.Is(err, ports.ErrUnavailable) {
 		return &Error{Kind: Unavailable, Code: "storage_unavailable", Detail: "runtime storage is temporarily unavailable", Retryable: true, cause: err}
 	}

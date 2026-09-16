@@ -1,4 +1,4 @@
-FROM jumpserver/kael-base:20260904_102707 AS stage-build
+FROM jumpserver/kael-base:20260909_014534 AS stage-build
 ARG TARGETARCH
 
 WORKDIR /opt/kael
@@ -7,7 +7,7 @@ ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o /opt/kael/kael ./cmd/kael
 
 FROM node:22-trixie-slim AS stage-codex
-RUN npm install --global @openai/codex@0.153.2 \
+RUN npm install --global '@openai/codex@>=0.153.2' \
     && codex --version
 
 FROM node:22-trixie-slim
