@@ -1,0 +1,10 @@
+FROM golang:1.26.3-trixie
+ARG TARGETARCH
+
+WORKDIR /opt/kael
+RUN wget https://github.com/jumpserver-dev/healthcheck/releases/latest/download/check_linux_${TARGETARCH}.deb \
+    && dpkg -i check_linux_${TARGETARCH}.deb \
+    && rm -f check_linux_${TARGETARCH}.deb
+
+COPY go.mod go.sum ./
+RUN go mod download

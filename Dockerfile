@@ -1,103 +1,26 @@
-FROM node:16.20-bullseye-slim as ui-build
-ARG TARGETARCH
-ARG NPM_REGISTRY="https://registry.npmmirror.com"
-ENV NPM_REGISTY=$NPM_REGISTRY
-
-RUN set -ex \
-    && npm config set registry ${NPM_REGISTRY} \
-    && yarn config set registry ${NPM_REGISTRY}
-
-WORKDIR /opt/kael/ui
-ADD ui/package.json ui/yarn.lock .
-RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,sharing=locked,id=kael \
-    yarn install
-
-ADD ui .
-RUN --mount=type=cache,target=/usr/local/share/.cache/yarn,sharing=locked,id=kael \
-    yarn build
-
-FROM golang:1.21-bullseye as kael-build
+FROM jumpserver/kael-base:20260909_014534 AS stage-build
 ARG TARGETARCH
 
 WORKDIR /opt/kael
-
-ADD go.mod go.sum .
-
-ARG GOPROXY=https://goproxy.io
-ENV CGO_ENABLED=0
-ENV GO111MODULE=on
-ENV GOOS=linux
-
-RUN --mount=type=cache,target=/root/.cache \
-    --mount=type=cache,target=/go/pkg/mod \
-    go mod download -x
-
 COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o /opt/kael/kael ./cmd/kael
 
-ARG VERSION
-ENV VERSION=$VERSION
+FROM node:22-trixie-slim AS stage-codex
+RUN npm install --global '@openai/codex@>=0.153.2' \
+    && codex --version
 
-RUN --mount=type=cache,target=/root/.cache \
-    --mount=type=cache,target=/go/pkg/mod \
-    set +x \
-    && export GOFlAGS="-X 'main.Buildstamp=`date -u '+%Y-%m-%d %I:%M:%S%p'`'" \
-    && export GOFlAGS="$GOFlAGS -X 'main.Githash=`git rev-parse HEAD`'" \
-    && export GOFlAGS="${GOFlAGS} -X 'main.Goversion=`go version`'" \
-    && export GOFlAGS="$GOFlAGS -X 'main.Version=$VERSION'" \
-    && go build -ldflags "$GOFlAGS" -o kael ./cmd/kael \
-    && set -x && ls -al .
-
-RUN mkdir /opt/kael/release \
-    && chmod +x /opt/kael/entrypoint.sh \
-    && mv /opt/kael/entrypoint.sh /opt/kael/release
-
-FROM debian:bullseye-slim
-ARG TARGETARCH
-ENV LANG=zh_CN.UTF-8
-
-ARG DEPENDENCIES="                    \
-        ca-certificates               \
-        curl                          \
-        git                           \
-        net-tools                     \
-        unzip                         \
-        vim                           \
-        locales                       \
-        wget"
-
-ARG APT_MIRROR=http://mirrors.ustc.edu.cn
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=kael \
-    sed -i "s@http://.*.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list \
-    && rm -f /etc/apt/apt.conf.d/docker-clean \
-    && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends ${DEPENDENCIES} \
-    && apt-get update \
-    && echo "no" | dpkg-reconfigure dash \
-    && echo "zh_CN.UTF-8" | dpkg-reconfigure locales \
-    && sed -i "s@# export @export @g" ~/.bashrc \
-    && sed -i "s@# alias @alias @g" ~/.bashrc \
+FROM node:22-trixie-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /opt
-
-ARG WISP_VERSION=v0.1.21
-RUN set -ex \
-    && wget https://github.com/jumpserver/wisp/releases/download/${WISP_VERSION}/wisp-${WISP_VERSION}-linux-${TARGETARCH}.tar.gz \
-    && tar -xf wisp-${WISP_VERSION}-linux-${TARGETARCH}.tar.gz -C /usr/local/bin/ --strip-components=1 \
-    && chown root:root /usr/local/bin/wisp \
-    && chmod 755 /usr/local/bin/wisp \
-    && rm -f /opt/*.tar.gz
-
+COPY --from=stage-codex /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex
 WORKDIR /opt/kael
-
-COPY --from=ui-build /opt/kael/ui/dist ./ui/dist
-COPY --from=kael-build /opt/kael/kael .
-COPY --from=kael-build /opt/kael/release .
-
-ARG VERSION
-ENV VERSION=$VERSION
-
+COPY --from=stage-build /opt/kael/kael ./kael
+COPY --from=stage-build /usr/local/bin/check /usr/local/bin/check
+COPY config_example.yml ./config_example.yml
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod 0755 ./entrypoint.sh ./kael
 EXPOSE 8083
-
-CMD ["./entrypoint.sh"]
+ENTRYPOINT ["./entrypoint.sh"]
