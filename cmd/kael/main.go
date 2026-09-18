@@ -60,7 +60,7 @@ func main() {
 
 func run(settings config.Config, logger *zap.Logger) error {
 	tlsVerify := !settings.IgnoreVerifyCerts
-	componentClient, err := component.Connect(component.Options{CoreURL: settings.CoreHost, TLSVerify: tlsVerify, Timeout: settings.HTTPRequestTimeout, Name: settings.Name, BootstrapToken: settings.BootstrapToken, AccessKeyFile: settings.AccessKeyFilePath})
+	componentClient, err := component.Connect(component.Options{CoreURL: settings.CoreHost, TLSVerify: tlsVerify, Timeout: settings.HTTPRequestTimeout, Name: settings.Name, BootstrapToken: settings.BootstrapToken, AccessKeyFile: settings.AccessKeyFilePath, Logger: logger})
 	if err != nil {
 		return err
 	}

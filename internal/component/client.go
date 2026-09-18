@@ -35,6 +35,8 @@ const (
 	runtimeStorePath   = "/api/v1/chat-ai/runtime-store/"
 	openAPIPath        = "/api/swagger.json"
 	maxOpenAPIBytes    = int64(32 * 1024 * 1024)
+	connectAttempts    = 10
+	connectRetryDelay  = 5 * time.Second
 )
 
 var errInvalidAccessKey = errors.New("component access key file is invalid")
@@ -52,6 +54,7 @@ type Options struct {
 	Name           string
 	BootstrapToken string
 	AccessKeyFile  string
+	Logger         *zap.Logger
 }
 
 type Client struct {
@@ -115,8 +118,15 @@ type runtimeStoreAppendResponse struct {
 }
 
 func Connect(options Options) (*Client, error) {
+	return connect(options, time.Sleep)
+}
+
+func connect(options Options, wait func(time.Duration)) (*Client, error) {
 	if strings.TrimSpace(options.Name) == "" || strings.TrimSpace(options.AccessKeyFile) == "" {
 		return nil, fmt.Errorf("component identity is incomplete")
+	}
+	if options.Logger == nil {
+		options.Logger = zap.NewNop()
 	}
 	if options.Timeout < 30*time.Second {
 		options.Timeout = 30 * time.Second
@@ -133,16 +143,28 @@ func Connect(options Options) (*Client, error) {
 		if clientErr != nil {
 			return nil, clientErr
 		}
-		if valid, validationErr := validateAccessKey(client); validationErr == nil && valid {
-			return connectedClient(options, client, key), nil
-		} else if validationErr != nil {
+		var valid bool
+		validationErr := retryConnect(options.Logger, wait, func() error {
+			var err error
+			valid, err = validateAccessKey(client)
+			return err
+		})
+		if validationErr != nil {
 			return nil, validationErr
 		}
+		if valid {
+			return connectedClient(options, client, key), nil
+		}
+		options.Logger.Warn("Kael component access key unauthorized; registering a new access key")
 	}
 	if strings.TrimSpace(options.BootstrapToken) == "" {
 		return nil, fmt.Errorf("component access key is missing or unauthorized; set BOOTSTRAP_TOKEN to register Kael")
 	}
-	key, err = register(options)
+	err = retryConnect(options.Logger, wait, func() error {
+		var registerErr error
+		key, registerErr = register(options)
+		return registerErr
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -154,6 +176,20 @@ func Connect(options Options) (*Client, error) {
 		return nil, err
 	}
 	return connectedClient(options, client, key), nil
+}
+
+func retryConnect(logger *zap.Logger, wait func(time.Duration), request func() error) error {
+	var err error
+	for attempt := 1; attempt <= connectAttempts; attempt++ {
+		if err = request(); err == nil {
+			return nil
+		}
+		logger.Warn("Core component request failed", zap.Int("attempt", attempt), zap.Int("max_attempts", connectAttempts), zap.Error(err))
+		if attempt < connectAttempts {
+			wait(connectRetryDelay)
+		}
+	}
+	return fmt.Errorf("connect to Core failed after %d attempts: %w", connectAttempts, err)
 }
 
 func connectedClient(options Options, client *httplib.Client, key accessKey) *Client {
