@@ -8,3 +8,7 @@
 配置项和默认值见 [config_example.yml](../config_example.yml)，启动装配见 [cmd/kael/main.go](../cmd/kael/main.go)。
 
 修改组件职责、模型执行、领域对象、协议、审批或持久化行为时，同步更新对应设计说明。文档不维护迁移计划、历史契约或尚未实现的目标方案；接口字段和校验以链接的实现为准。
+
+## 许可证
+
+本项目采用 GNU General Public License version 3（GPLv3），与 [JumpServer 主库](https://github.com/jumpserver/jumpserver)保持一致。完整许可条款见 [LICENSE](../LICENSE)。
