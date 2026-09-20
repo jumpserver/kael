@@ -36,7 +36,7 @@ Core TerminalConfig 仍是模型凭据唯一来源；每次 Run 执行前读取�
 ## 试用
 
 1. 安装 `npm install -g '@openai/codex@>=0.153.2'`，用 `codex --version` 核对不低于 `0.153.2`。
-2. Core 开启 Chat AI，配置支持 Responses 的模型、base URL 和 API key。保留原组件注册和 Platform Gateway delegation 配置。
+2. Core 开启 Chat AI，配置支持 Responses 的模型、base URL 和 API key。保留原组件注册；Platform Gateway 业务调用沿用用户凭据，无需额外共享密钥。
 3. 使用 `CODEX_BINARY` 指定可执行路径，或使用默认 PATH 中的 `codex`。运行 `make run`；同时使用 Luna 的 `harness` 分支。
 4. 验证终端只读排查、SQL/脚本 proposal 审批、拒绝审批、停止、多轮追问及断连。真实模型效果和真实 Core/Koko/Chen 联调需要试用环境验收。
 

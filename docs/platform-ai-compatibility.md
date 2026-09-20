@@ -14,7 +14,7 @@
 
 1. Kael 当前代码、OpenAPI 和可执行协议；
 2. 当前 Luna/Lina 客户端代码；
-3. Core 当前的 Runtime Store、组件配置、身份和委托接口；
+3. Core 当前的 Runtime Store、组件配置和身份接口；
 4. 当前自动化测试和可录制协议。
 
 旧 `jumpserver/apps/chat_ai` Runtime、models、worker 和业务 API 已删除，`/api/v1/chat-ai/` 下只剩仅供 Kael 组件访问的 `runtime-store/`。旧 `chat_ai_backend.md`、SSE Schema、历史代码和产品设计稿只用于理解已删除行为。
@@ -76,7 +76,7 @@ Assistant 是可信策略与能力组合，不是 Conversation 类型，也不�
 | 方法 | 路径 | 旧版行为 |
 |---|---|---|
 | GET | `assistants/` | 返回当前用户可用的 Assistant/Profile |
-| GET | `approvals/{id}/` | 返回安全预览，不暴露签名、nonce 或凭据 |
+| GET | `approvals/{id}/` | 返回安全预览，不暴露用户凭据 |
 | POST | `approvals/{id}/confirm/` | 锁定、复验并单次执行写操作 |
 | POST | `approvals/{id}/cancel/` | 原子取消 Approval 及关联运行状态 |
 | POST | `openapi/refresh/` | 超级管理员刷新动态 OpenAPI Registry |
@@ -130,7 +130,7 @@ Kael 新创建的数据保留了下列业务语义，但不会导入这些旧记
 - Message role、status、Token、error 和 result cards；
 - regenerate/branch 关系；
 - Run 状态、step/api call 计数、模型耗时和 task ID；
-- Approval 的请求摘要、hash、nonce、签名版本、风险和状态；
+- Approval 的请求摘要、参数 digest、策略版本、风险和状态；
 - API 调用的请求/响应摘要、状态、耗时和风险审计。
 
 ### 5.2 附件
@@ -210,7 +210,7 @@ Lina 在用户显式选中页面引用后，以 Message `data` Part 持久化最
 - 使用组件身份读取 Core OpenAPI；Core 的 Schema 缓存使用进程级版本前缀，部署重启后不会继续命中旧契约；
 - 按引用环而不是普通对象层级截断 `$ref`，并把共享响应 Schema 转成请求 Schema：移除 `readOnly` 字段、同步清理 `required`、规范化 `nullable`，关联对象明确要求真实 `id` 及正确主键类型；
 - 按 Assistant/Profile 固定范围、全局 method allowlist、敏感路径和用户权限筛选 Operation；OpenAPI 权限元数据缺失、非法或标记 dynamic 的 Operation fail closed；
-- Run 使用创建时 admin flags/permissions 快照保持搜索与调用选择一致；delegated Core 请求仍以用户实时状态和 RBAC 做最终复核，快照不能绕过权限撤销；
+- Run 使用创建时 admin flags/permissions 快照保持搜索与调用选择一致；Core 用户凭据请求仍以用户实时状态和 RBAC 做最终复核，快照不能绕过权限撤销；
 - 先搜索候选 Operation，再让模型选择；搜索结果只返回有界的紧凑 Schema，常用中文资产意图会映射到稳定的 Operation 关键词；
 - 只允许模型提交 operation ID、path/query/body 参数；
 - 由可信 Request Builder 决定 Method 和 URL；
@@ -222,18 +222,11 @@ Lina 在用户显式选中页面引用后，以 Message `data` Part 持久化最
 
 这不是少量静态 API wrapper 能完全等价替代的能力。
 
-### 6.2 Core 调用委托
+### 6.2 Core 调用鉴权
 
-当前服务不把用户 Cookie、Bearer 或 Access Key 重放给 Core，而是为每次请求生成短期、一次性 HMAC 委托。委托绑定：
+业务请求直接沿用用户 Cookie（或已有 Authorization）和当前组织头；写请求同时携带经过 Kael 验证的 CSRF token。Gateway 只请求配置的 Core 地址且禁止重定向，Core 通过正常会话认证继续执行用户状态检查、RBAC、Serializer 和业务逻辑。
 
-- user、org；
-- Conversation、Approval；
-- operation ID；
-- Method、Path；
-- Query 和 Body hash；
-- issuer、audience、key ID、时间和 nonce。
-
-Core 验证签名、请求绑定和一次性 nonce，恢复真实用户后再次执行正常 RBAC、Serializer 和业务逻辑。
+用户凭据按 Run 保存在进程内存中，不进入 Journal、模型输入或审计。Run 执行结束或取消后释放；进程重启后不恢复凭据，恢复尚未执行的 Run 时重新绑定当前已认证请求的凭据。用户会话失效时业务调用失败，不回退到组件身份。组件 AccessKey 仍用于读取 OpenAPI 和 Runtime Store。
 
 ### 6.3 Approval
 
@@ -241,7 +234,7 @@ Core 验证签名、请求绑定和一次性 nonce，恢复真实用户后再次
 
 - 锁定 Approval；
 - 校验当前用户、组织、状态和过期时间；
-- 校验签名与 request hash；
+- 校验 ToolCall 和参数 digest 的绑定；
 - 重新执行 policy、schema 和敏感字段检查；
 - 只允许执行一次；
 - 记录结果摘要和 API 审计；
@@ -336,7 +329,7 @@ Lina 只调用 `/kael/api/v1`，会话、消息、Artifact、Panel/前台 Run/SS
 
 - Kael 负责统一 Runtime；Lina 直接使用 Kael 原生 DTO 与 PanelDelivery，Luna 通过当前 Panel Adapter 接入同一 Runtime；
 - 隔离的 Headless Platform Gateway 负责动态 Core OpenAPI、前台 Core Tool、进程内 Approval 和结果审计，Runtime core 不直接包含 Core 业务实现；
-- Core 只保留组件签名的 Runtime Store 以及身份、配置和委托校验接口，不再运行 ChatAI Runtime/API/models/worker；
+- Core 只保留组件签名的 Runtime Store 以及身份和配置接口，不再运行 ChatAI Runtime/API/models/worker；
 - Core-backed Journal 只保存 Kael 新产生的历史，旧 Platform ORM 数据和 Koko Agent Session JSONL 均不读取、不导入、不双写；
 - 后台 Run、跨重启继续活动 ToolCall/Approval 和多实例 writer 仍明确禁用，不通过旧 Core 或旧 agentd 补齐。
 

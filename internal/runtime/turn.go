@@ -142,16 +142,20 @@ func runTurn(ctx context.Context, session *harnessSession, turnID string, input 
 				case validationErr != nil:
 					reply = replyText("Arguments failed the registered JSON schema: "+bounded(validationErr.Error(), 1024), false)
 				default:
-					writeKey := toolFingerprint(contract.registration.ID, arguments)
+					writeKey := toolFingerprint(contract.registration, arguments)
 					if writes[writeKey] {
 						reply = replyText("Duplicate write blocked. The prior operation may already have executed. Inspect actual state before proposing any different action.", false)
 					} else {
-						if risk, _ := policy.InvocationPolicy(contract.registration, arguments); risk != "read" {
-							writes[writeKey] = true
-						}
 						observation, callErr := callbacks.CallTool(ctx, contract.registration, arguments, 0)
 						if callErr != nil {
 							return completion, callErr
+						}
+						risk := observation.Risk
+						if risk == "" {
+							risk, _ = policy.InvocationPolicy(contract.registration, arguments)
+						}
+						if risk != "read" {
+							writes[writeKey] = true
 						}
 						if observation.Status == "success" && contract.output != nil && len(observation.Result) > 0 {
 							if err = validateJSON(contract.output, observation.Result); err != nil {

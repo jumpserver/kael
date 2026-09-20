@@ -171,7 +171,7 @@ Kael Runtime 核心包不得依赖：
 - SSH、RDP、数据库、SFTP 或浏览器 UI executor；
 - 某个产品固定的工具名。
 
-本期已按 ADR 0001 选择 Headless Platform Gateway 承接前台 Platform Capability。它必须是独立 Adapter 或独立部署单元，不能反向污染 Runtime 核心；Lina 默认 `general` 依赖它，因此 Kael 启动时必须装配成功，见 12.3 节和第 19 节。Gateway 启动加载 Core `/api/swagger.json` 时复用 Kael component AccessKey 签名身份，Core 不为此开放匿名 schema；实际 operation 请求仍使用绑定最终用户和组织的 delegation token。
+本期已按 ADR 0001 选择 Headless Platform Gateway 承接前台 Platform Capability。它必须是独立 Adapter 或独立部署单元，不能反向污染 Runtime 核心；Lina 默认 `general` 依赖它，因此 Kael 启动时必须装配成功，见 12.3 节和第 19 节。Gateway 启动加载 Core `/api/swagger.json` 时复用 Kael component AccessKey 签名身份，Core 不为此开放匿名 schema；实际 operation 请求沿用用户 Cookie（或已有 Authorization）与组织头，写请求同时携带 CSRF token；凭据仅按 Run 保存在进程内存中。
 
 ## 5. 产品交互模式
 
@@ -820,7 +820,7 @@ Platform AI 纳入 Kael，而不是只迁移 Luna 的文本聊天子集。当前
 - quota、cleanup、服务端 stats API 和脱敏 audit；
 - general、management、asset、session_audit、ops Assistant/Profile。
 
-Lina 未指定 Profile 时使用 `general`，其语义是旧统一 JumpServer Assistant：产品问答加与旧源码默认 allowlist 等价的编译期固定范围内的授权 Core 搜索/调用。Kael 不读取旧 Chat AI operation IDs、paths/tags 或 method policies 的部署自定义配置，生产切流必须先比较并显式处置差异。`management` 仍是管理员专用的更宽静态权限范围；asset、session_audit、ops 保持各自更窄范围。Platform Gateway 默认且必须启用，并配置与 Core 匹配的 delegation secret；关闭 Gateway 或缺少密钥时 Kael 启动失败，而不是带着不可用的默认 Assistant 进入 ready。
+Lina 未指定 Profile 时使用 `general`，其语义是旧统一 JumpServer Assistant：产品问答加与旧源码默认 allowlist 等价的编译期固定范围内的授权 Core 搜索/调用。Kael 不读取旧 Chat AI operation IDs、paths/tags 或 method policies 的部署自定义配置，生产切流必须先比较并显式处置差异。`management` 仍是管理员专用的更宽静态权限范围；asset、session_audit、ops 保持各自更窄范围。Platform Gateway 默认且必须启用，业务请求直接沿用用户凭据，无需配置共享密钥；关闭 Gateway 或 Registry 初始化失败时 Kael 启动失败。
 
 旧 Lina 曾包含 iframe/embed、background、Web Search、服务端 STT 和 stats 面板；这些兼容面已从当前 UI、状态和请求层删除，不是本期必须恢复的产品能力。Kael bootstrap 继续把 background、Web Search、服务端 STT 和通知标记为不可用，`/transcriptions` 仅为固定 unavailable 的占位端点。浏览器原生 `SpeechRecognition` 保留在 Lina，它既不上传音频也不经过 Kael。旧文档中的 Scheduled Report 没有对应实现，同样不属于迁移基线。
 

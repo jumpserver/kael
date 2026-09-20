@@ -30,10 +30,6 @@ type Config struct {
 	RuntimeDataFolderPath  string
 	RuntimeStore           string
 	PlatformGatewayEnabled bool
-	PlatformDelegationKey  string
-	PlatformDelegationID   string
-	PlatformIssuer         string
-	PlatformAudience       string
 	PlatformCACert         string
 	PlatformClientCert     string
 	PlatformClientKey      string
@@ -80,10 +76,6 @@ func Load(path string) (Config, error) {
 		RuntimeDataFolderPath:  dataFolder,
 		RuntimeStore:           strings.ToLower(strings.TrimSpace(v.GetString("RUNTIME_STORE"))),
 		PlatformGatewayEnabled: v.GetBool("PLATFORM_GATEWAY_ENABLED"),
-		PlatformDelegationKey:  strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_KEY")),
-		PlatformDelegationID:   strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_KEY_ID")),
-		PlatformIssuer:         strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_ISSUER")),
-		PlatformAudience:       strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_AUDIENCE")),
 		PlatformCACert:         v.GetString("PLATFORM_CA_CERT"),
 		PlatformClientCert:     v.GetString("PLATFORM_CLIENT_CERT"),
 		PlatformClientKey:      v.GetString("PLATFORM_CLIENT_KEY"),
@@ -138,9 +130,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("LOG_LEVEL", "INFO")
 	v.SetDefault("RUNTIME_STORE", "core")
 	v.SetDefault("PLATFORM_GATEWAY_ENABLED", true)
-	v.SetDefault("PLATFORM_DELEGATION_KEY_ID", "v1")
-	v.SetDefault("PLATFORM_DELEGATION_ISSUER", "jumpserver-ai")
-	v.SetDefault("PLATFORM_DELEGATION_AUDIENCE", "jumpserver-core")
 	v.SetDefault("PLATFORM_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "PATCH"})
 	v.SetDefault("PLATFORM_REGISTRY_TTL", "1h")
 	v.SetDefault("PLATFORM_TIMEOUT", "15s")
@@ -183,10 +172,7 @@ func (c Config) Validate() error {
 	if !c.PlatformGatewayEnabled {
 		return fmt.Errorf("PLATFORM_GATEWAY_ENABLED must be true because the default general assistant requires the Platform Gateway")
 	}
-	if len(c.PlatformDelegationKey) < 32 {
-		return fmt.Errorf("PLATFORM_DELEGATION_KEY must contain at least 32 characters after trimming surrounding whitespace and match Core")
-	}
-	if c.PlatformDelegationID == "" || c.PlatformIssuer == "" || c.PlatformAudience == "" || c.PlatformRegistryTTL <= 0 || c.PlatformTimeout <= 0 || c.PlatformMaxResponse < 1 {
+	if c.PlatformRegistryTTL <= 0 || c.PlatformTimeout <= 0 || c.PlatformMaxResponse < 1 {
 		return fmt.Errorf("Platform Gateway configuration is incomplete")
 	}
 	if (c.PlatformClientCert == "") != (c.PlatformClientKey == "") {

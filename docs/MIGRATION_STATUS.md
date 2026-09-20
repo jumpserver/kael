@@ -24,7 +24,7 @@ Runtime 仍只依赖 `ports.Store`/`ports.Tx` 抽象。默认 adapter 通过组�
 | Background Run | 禁用 | bootstrap `background=false`；Lina 已删除入口、状态和请求；Kael 仍以历史错误码 `background_requires_durable_store` 拒绝手工提交的 background Run，实际尚缺分布式 claim/ownership、状态同步和安全工具恢复 |
 | Panel capability | 完成（进程绑定） | Context/Registry version、lease、准确 PanelSession/Registration binding、Approval、ToolResult、cancel；重启后必须新建 PanelSession 并重新注册工具 |
 | Luna 四域 | 完成 | Terminal、File、SQL、Script 保留现有 Koko/Chen/本地 executor；资源凭据不进入 Kael |
-| Platform AI | 前台可用（启动必备） | Lina 默认 `general` 是旧统一 JumpServer Assistant：只搜索与当前源码中旧默认 operation allowlist 等价的固定范围、权限元数据可静态解析且当前用户拥有全部 required permissions 的 Core API；隔离 Headless Gateway、service binding、请求绑定 HMAC、Core 最终 RBAC、脱敏结果卡；Approval 不跨 Kael 重启 |
+| Platform AI | 前台可用（启动必备） | Lina 默认 `general` 是旧统一 JumpServer Assistant：只搜索与当前源码中旧默认 operation allowlist 等价的固定范围、权限元数据可静态解析且当前用户拥有全部 required permissions 的 Core API；隔离 Headless Gateway、service binding、用户 Cookie 鉴权、Core 最终 RBAC、脱敏结果卡；Approval 不跨 Kael 重启 |
 | Artifact | 部分迁移 | 元数据和有界提取文本进入 Core-backed Journal，元数据可由 `GET /kael/api/v1/artifacts/{id}` 按所有权读取；原始文件内容目前仍保存在 Kael 私有 Artifact 目录，尚未迁入 JumpServer 文件存储 |
 | Web Search/服务端 STT/通知 | 已从 Lina 移除 | bootstrap 明确返回 `false`；Lina 已删除 Web Search、服务端 STT 和通知的 UI、状态与请求代码，不回退旧 Runtime；浏览器支持时仍可使用浏览器原生 `SpeechRecognition`，它不经过 Kael |
 
@@ -42,9 +42,9 @@ Kael 的管理员 stats API 仍接受 `days=1..365`（默认 30），保留 flat
 - 配置文件和环境变量统一使用 Koko 风格的平铺大写键；核心键为 `CORE_HOST`、`BOOTSTRAP_TOKEN`、`NAME`、`BIND_HOST`、`HTTPD_PORT`、`HTTP_REQUEST_TIMEOUT`、`IGNORE_VERIFY_CERTS` 和 `RUNTIME_STORE`，不再维护嵌套配置及同义别名。
 - AccessKey 默认保存在 `data/keys/.access_key`，权限为 `0600`；已有 Key 会先通过 Core profile 校验，未注册或已失效时使用 BootstrapToken 注册。
 - 模型配置只来自 TerminalConfig，并在每次 Run 执行前刷新；仅 `CHAT_AI_ENABLED` 控制功能启停，`CHAT_AI_METHOD`、`CHAT_AI_EMBED_URL` 及 Lina iframe/embed 分支已删除。Chat AI 被禁用或模型端点不完整时 Kael 进程保持健康、Run fail closed；Core 组件注册或持久化不可用时仍 fail closed。
-- 所有 `/kael/api/v1` 用户请求继续要求旧 `chat_ai.use_chatai` 权限（superuser 除外）。Platform Gateway 默认且必须启用，因为 Lina 默认 `general` 依赖它；显式关闭或缺少有效 `PLATFORM_DELEGATION_KEY` 时 Kael 在监听端口前失败，不能出现 ready 但默认会话固定返回 503 的部署。Kael 的 delegation key/ID/issuer/audience 必须分别匹配 Core 对应 `CHAT_AI_*` 配置，其中 secret 去除首尾空白后至少 32 字符；仓库和镜像不提供可工作的默认共享密钥。
+- 所有 `/kael/api/v1` 用户请求继续要求旧 `chat_ai.use_chatai` 权限（superuser 除外）。Platform Gateway 默认且必须启用，因为 Lina 默认 `general` 依赖它；显式关闭或 Registry 初始化失败时 Kael 在监听端口前失败。业务调用直接沿用用户 Cookie（或已有 Authorization），写请求同时携带 CSRF token；凭据仅按 Run 保存在内存中，不写入 Journal 或模型输入。
 - Platform Gateway 默认允许 `GET/POST/PUT/PATCH`，不默认允许 `DELETE`。`general` 使用与当前 JumpServer 源码默认 `CHAT_AI_ALLOWED_OPERATION_IDS` 等价的编译期固定范围；它不会读取生产环境对 operation IDs、allowed/blocked paths/tags 或 method policies 的自定义配置。切流前必须比较现网策略，任何差异都要显式评审并收窄。asset/session_audit/ops 继续叠加各自更窄范围，management 仅管理员可用。所有范围再叠加 method allowlist、敏感路径拒绝、OpenAPI 静态 required-permissions 全量检查；动态权限或缺少权限元数据的 operation 一律不可搜索、不可调用。
-- Run 创建时固化 admin flags 与 permission 列表供异步搜索和选择保持同一授权可见性；Core 在实际 delegated request 上仍按当前用户状态和权限实时复核，权限撤销后不能凭旧 Run 快照执行。
+- Run 创建时固化 admin flags 与 permission 列表供异步搜索和选择保持同一授权可见性；Core 在实际用户凭据请求 上仍按当前用户状态和权限实时复核，权限撤销后不能凭旧 Run 快照执行。
 - Runtime journal 默认通过 `/api/v1/chat-ai/runtime-store/` 保存在 Core；提交使用 commit ID 幂等、expected revision CAS、请求 HMAC integrity 和签名 receipt，读取使用一次性 nonce 与整页签名 receipt。网络/5xx 以同一 commit ID 有限重试；最终结果不确定或 CAS 冲突会 poison 本地 Store，必须重启恢复。
 - Core 正常运行不再生成周期性 snapshot，只追加精简历史 delta；升级首次加载旧版完整运行态时会用一次精简 snapshot 完成迁移。Terminal AI 写 `data/terminal/store/runtime.jsonl`；`RUNTIME_STORE=jsonl` 回退写 `data/store/runtime.jsonl` 和 `data/events/*.jsonl`。
 - Kael 不读取或导入 Koko `data/agent/events/*.jsonl`，也不导入或投影旧 Platform `chat_ai_*` 数据。Core 中旧 ChatAI Runtime/API/models/worker 已删除，`/api/v1/chat-ai/` 下只保留供 Kael 组件签名访问的 `runtime-store/`；当前没有旧 Runtime 写入口或历史只读兼容入口。本功能尚未上线，因此不提供旧 AI 数据迁移；使用过旧开发分支的环境应在部署前删除旧 AI 表或重建开发数据库。
@@ -68,7 +68,7 @@ Kael 的管理员 stats API 仍接受 `days=1..365`（默认 30），保留 flat
 - Core 已包含 `kael` Terminal component type，并允许组件账户读取 `/api/v1/terminal/terminals/config/` 和提交 component heartbeat。
 - 为首次注册配置有效 BootstrapToken，确认 Core 已应用 Runtime Store 数据库 migration，并提供仅允许 Kael 组件访问的 `/api/v1/chat-ai/runtime-store/`；为 `data/keys` 与 `data/artifacts` 提供服务账号私有持久卷。
 - TerminalConfig 中 `CHAT_AI_ENABLED` 必须启用，并提供可访问的 provider、base URL、API key 和 model；不再存在 method 或 embed URL 配置。
-- 按 `config_example.yml` 为必启用的 Platform Gateway 配置与 Core 完全匹配的 delegation key/ID/issuer/audience，确认 Redis nonce 防重放可用、Kael component AccessKey 可签名读取 `/api/swagger.json` 且 schema 含静态权限元数据，并验证普通用户具有 `chat_ai.use_chatai`；Core schema 不应改成匿名公开。同时对比现网自定义 Chat AI allowlist/policy 与 Kael 编译期范围。只启动模型而未完成这些检查不算旧统一 Assistant 完整切流。
+- 按 `config_example.yml` 启用 Platform Gateway，确认反向代理转发用户 Cookie、CSRF token 和组织头、Kael component AccessKey 可签名读取 `/api/swagger.json` 且 schema 含静态权限元数据，并验证普通用户具有 `chat_ai.use_chatai`；Core schema 不应改成匿名公开。同时对比现网自定义 Chat AI allowlist/policy 与 Kael 编译期范围。只启动模型而未完成这些检查不算旧统一 Assistant 完整切流。
 - `/kael/` 保留前缀转发，SSE 禁用 buffering/cache；HTTPS 终止代理必须配置精确 `ALLOWED_ORIGINS`，或在保证覆盖客户端 forwarded headers 后启用 `TRUST_FORWARDED_HEADERS`；`/kael/internal/metrics` 只允许监控网络访问。Core-backed Store 必须以 `replicas=1` 和 `Recreate`/先停后启 fencing 维持单活动写入者，revision 冲突必须触发失败与运维处置。部署方需自行定义指标阈值和回滚条件，当前仓库不臆造统一阈值。
 - 发布前确认 Core 路由清单中 `/api/v1/chat-ai/` 只剩 `runtime-store/`，并清理旧开发分支留下的 AI 表/数据。回滚时先停止创建新 Kael Run，排空或取消在途 Run/Approval，再成对回滚相互匹配的 Lina/Luna/Kael 构建；不得回退到已删除的 Core ChatAI Runtime。Core Journal 与 Artifact 卷必须保留，也不得把切换 `RUNTIME_STORE=jsonl` 当作数据回滚。
 - 普通对话和四个 Luna 能力域各完成一条真实链路；同用户多 Tab、Approval、cancel 和进程内断线重连通过。

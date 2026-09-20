@@ -170,7 +170,7 @@ Koko 和 Chen 保持现有 Session Capability Provider 身份，继续负责：
 当前 Platform Capability 使用与 Runtime core 隔离的 Headless Gateway，Lina 已原生切换到 Kael，Capability Provider 边界如下：
 
 - Kael 仓库内的隔离 Headless Gateway 提供 Platform Capability；
-- Gateway 使用请求绑定的一次性 HMAC 委托传递当前 user/org，Core 执行最终 RBAC；
+- Gateway 沿用用户 Cookie（或已有 Authorization）与组织头，写请求携带 CSRF token，Core 执行最终 RBAC；
 - 动态 OpenAPI 只通过受控 operation registry 暴露，并按 Profile、HTTP method、schema 和敏感路径限制；
 - Kael Runtime core 只识别通用 Registration、ExecutionBinding 和 ToolResult；
 - 后续如替换同名或新版语义能力的 Provider，不改变 Kael Runtime 协议。
@@ -266,7 +266,7 @@ Koko/Chen 的执行协议和 Luna 当前安全检查保持不变。
 
 这些 preset 是模型策略和能力组合，不是新的 Conversation 类型。
 
-Kael 的默认 `general` 恢复旧统一 JumpServer Assistant 语义：产品问答与迁移时旧源码默认 operation allowlist 等价的编译期固定范围内的授权 Core 搜索/调用。Kael 不读取旧 Chat AI operation IDs、allowed/blocked paths/tags 或 method policies 配置；功能尚未上线，旧开发分支的自定义配置不迁移，当前编译期策略是唯一生效配置。`management` 是管理员专用、范围更宽的静态权限能力；asset、session_audit、ops 继续使用更窄 scope。所有 operation 都必须具有可静态解析的 OpenAPI 权限元数据，创建 Run 的 Principal 必须拥有全部 required permissions；Core 执行 delegated request 时再按实时权限复核。Scheduled Report 当前没有代码实现，不纳入现状基线。
+Kael 的默认 `general` 恢复旧统一 JumpServer Assistant 语义：产品问答与迁移时旧源码默认 operation allowlist 等价的编译期固定范围内的授权 Core 搜索/调用。Kael 不读取旧 Chat AI operation IDs、allowed/blocked paths/tags 或 method policies 配置；功能尚未上线，旧开发分支的自定义配置不迁移，当前编译期策略是唯一生效配置。`management` 是管理员专用、范围更宽的静态权限能力；asset、session_audit、ops 继续使用更窄 scope。所有 operation 都必须具有可静态解析的 OpenAPI 权限元数据，创建 Run 的 Principal 必须拥有全部 required permissions；Core 使用用户凭据执行请求时再按实时权限复核。Scheduled Report 当前没有代码实现，不纳入现状基线。
 
 Luna 现有 Platform Panel 只使用上述能力的一个子集。旧 Lina 曾使用附件、联网、branch、regenerate、后台、STT、stats 和 audit；当前 Lina 只保留会话、消息、Artifact、前台 Run/SSE、cancel、Approval、branch、regenerate、result card 和 audit，并直接使用 `/kael/api/v1` 原生资源与 PanelDelivery dot 事件。background、服务端 STT、Web Search 的 UI/状态/请求及旧 stats 面板已经删除，不再以“请求后返回 unsupported”维持兼容；浏览器原生 `SpeechRecognition` 保留且不属于 Kael 服务端 STT。
 
@@ -279,7 +279,7 @@ Luna 现有 Platform Panel 只使用上述能力的一个子集。旧 Lina 曾�
 - 长生命周期，可在没有资源会话时创建、查看和继续；
 - 不隐式绑定当前 Terminal、File、SQL 或 Script；
 - 支持 assistant/preset；
-- `general` 是 Lina 默认的旧统一 JumpServer Assistant，使用受控 Platform service capability；Platform Gateway 默认且必须启用，关闭或缺少与 Core 匹配的 delegation secret 时 Kael 启动失败；
+- `general` 是 Lina 默认的旧统一 JumpServer Assistant，使用受控 Platform service capability；Platform Gateway 默认且必须启用，关闭或 Registry 初始化失败时 Kael 启动失败；业务调用沿用用户凭据，无需额外共享密钥；
 - 其他 preset 可绑定明确授权的 Platform Capability；
 - 当前 Luna 恰好打开某个 SSH Tab，不会使普通对话自动获得 SSH 工具；
 - 页面焦点变化不能改变既有 Conversation 的类型。
