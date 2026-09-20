@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jumpserver/kael/internal/domain"
 	"github.com/jumpserver/kael/internal/event"
+	"github.com/jumpserver/kael/internal/identity"
 	"github.com/jumpserver/kael/internal/ports"
 	agentruntime "github.com/jumpserver/kael/internal/runtime"
+	"go.uber.org/zap"
 )
 
 func (s *Service) callServiceCapability(ctx context.Context, run *domain.Run, registration domain.Registration, arguments json.RawMessage, modelDurationMS int64) (agentruntime.ToolObservation, error) {
@@ -93,10 +97,34 @@ func (s *Service) callServiceCapability(ctx context.Context, run *domain.Run, re
 	if err = s.startServiceCapability(ctx, run, call, approval); err != nil {
 		return agentruntime.ToolObservation{}, err
 	}
-	result, executeErr := s.capability.Execute(ctx, request)
+	result, executeErr := s.capability.Execute(s.capabilityContext(ctx, run.ID), request)
 	if executeErr != nil {
-		result.Status = "error"
-		result.Error = json.RawMessage(`{"code":"capability_failed","message":"The authorized capability request failed."}`)
+		if ctx.Err() != nil {
+			return agentruntime.ToolObservation{}, ctx.Err()
+		}
+		code, message := "capability_failed", "The authorized capability request failed."
+		var networkErr net.Error
+		switch {
+		case errors.Is(executeErr, identity.ErrUnauthenticated):
+			code, message = "core_credentials_missing", "This run has no user credentials. Start a new run from an authenticated session."
+		case errors.Is(executeErr, identity.ErrCSRFRejected):
+			code, message = "core_csrf_failed", "The user's CSRF credentials are missing or invalid. Refresh the page and start a new run."
+		case errors.As(executeErr, &networkErr):
+			code, message = "core_connection_failed", "The Core request could not be completed."
+			if networkErr.Timeout() {
+				code, message = "core_request_timeout", "The Core request timed out; a write may already have executed. Check its state before retrying."
+			}
+		}
+		// URL errors include request paths and query arguments. Keep those out of
+		// logs, along with credentials and sensitive free-form error text.
+		diagnostic := executeErr
+		var requestErr *url.Error
+		if errors.As(executeErr, &requestErr) {
+			diagnostic = requestErr.Err
+		}
+		s.logger.Warn("service capability failed", zap.String("run_id", run.ID), zap.String("tool_call_id", call.ID), zap.String("code", code), zap.String("error", bounded(sanitizeAuditText(diagnostic.Error()), 1024)))
+		encoded, _ := json.Marshal(map[string]string{"code": code, "message": message})
+		result = ports.CapabilityResult{Status: "error", Error: encoded}
 	}
 	return s.finishServiceCapability(ctx, run, call, result)
 }
@@ -282,5 +310,5 @@ func (s *Service) finishServiceCapability(ctx context.Context, run *domain.Run, 
 		return agentruntime.ToolObservation{}, translateOrService(err)
 	}
 	s.bus.Notify(notify...)
-	return agentruntime.ToolObservation{ToolCallID: call.ID, Status: result.Status, Result: result.Result, Error: result.Error}, nil
+	return agentruntime.ToolObservation{ToolCallID: call.ID, Status: result.Status, Result: result.Result, Error: result.Error, Risk: call.Risk}, nil
 }

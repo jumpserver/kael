@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/jumpserver/kael/internal/domain"
@@ -105,8 +106,20 @@ func canonicalArguments(raw json.RawMessage) (json.RawMessage, error) {
 	encoded, err := domain.CanonicalJSON(value)
 	return json.RawMessage(encoded), err
 }
-func toolFingerprint(registrationID string, arguments json.RawMessage) string {
-	sum := sha256.Sum256(append([]byte(registrationID+"\x00"), arguments...))
+func toolFingerprint(registration domain.Registration, arguments json.RawMessage) string {
+	if registration.BindingKind == "service" && registration.Name == "call_core_api" && strings.HasPrefix(registration.ExecutionBindingID, "platform-gateway:") {
+		// These fields only describe progress in the UI. Changing their wording
+		// must not allow the same Core write to execute again.
+		var values map[string]json.RawMessage
+		if json.Unmarshal(arguments, &values) == nil && values != nil {
+			delete(values, "progress")
+			delete(values, "action")
+			if encoded, err := json.Marshal(values); err == nil {
+				arguments = encoded
+			}
+		}
+	}
+	sum := sha256.Sum256(append([]byte(registration.ID+"\x00"), arguments...))
 	return hex.EncodeToString(sum[:])
 }
 

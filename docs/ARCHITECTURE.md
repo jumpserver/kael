@@ -14,7 +14,7 @@
 | [internal/runtime](../internal/runtime/harness.go) | 通过 stdio JSON-RPC 管理 Codex App Server、上下文、动态工具和回调 |
 | [internal/model](../internal/model/types.go) | 模型配置、消息、usage 和错误值类型 |
 | [internal/policy](../internal/policy/profiles.go) | Profile、工具风险、审批模式和 shell 参数级只读判定 |
-| [internal/platformgateway](../internal/platformgateway/gateway.go) | Core OpenAPI Registry、Operation 筛选、请求构建、委托与结果脱敏 |
+| [internal/platformgateway](../internal/platformgateway/gateway.go) | Core OpenAPI Registry、Operation 筛选、请求构建、用户凭据转发与结果脱敏 |
 | [internal/ports](../internal/ports/store.go) | Store/Tx 和 CapabilityProvider 接口 |
 | [internal/store](../internal/store/core.go) | 内存事务、Core 历史 Journal、Terminal 本地 JSONL 与保留策略 |
 | [internal/event](../internal/event/bus.go) | DomainEvent、PanelDelivery 投影及提交后的订阅通知 |
@@ -79,7 +79,7 @@ Core TerminalConfig 的 `CHAT_AI_*` 是模型配置与凭据来源。每次 Run 
 
 每个缓存会话使用私有 HOME、CODEX_HOME 和空工作目录，不继承用户登录、插件、MCP 配置和应用 Secret。线程使用 `ephemeral=true`、`environments=[]`，禁用 shell、unified exec、Code Mode、浏览器、computer use、联网搜索、hooks、apps 和 subagents 等能力。
 
-业务工具以 `kael_` 安全别名暴露为 dynamic tools。Kael 校验 thread、turn、Registration 与输入输出 schema，再进入业务审批和执行通道。相同 callId 的相同重投复用回执，修改参数则失败；同一 turn 内相同写操作不自动重复执行。成功的 final-result 工具之后拒绝后续业务工具并要求模型总结。
+业务工具以 `kael_` 安全别名暴露为 dynamic tools。Kael 校验 thread、turn、Registration 与输入输出 schema，再进入业务审批和执行通道。相同 callId 的相同重投复用回执，修改参数则失败；同一 turn 内相同写操作不自动重复执行。Service 调用使用执行端解析的实际 Operation 风险，允许重复只读查询；Core 写入的去重摘要不包含 `progress`、`action` 等展示文案。成功的 final-result 工具之后拒绝后续业务工具并要求模型总结。
 
 未集成的问询表单返回空答案，提示模型在普通对话中提问；未知 host request 拒绝执行。子进程 stderr 不直接进入业务错误或日志。
 
@@ -87,7 +87,7 @@ Core TerminalConfig 的 `CHAT_AI_*` 是模型配置与凭据来源。每次 Run 
 
 同一用户、组织、Conversation、Panel，模型配置、Profile 指令、工具注册未变且历史仍为追加关系时，复用进程内 Codex thread，只提交新增历史和本轮 Context。历史变化、能力变更、模型配置变化或上次执行失败会使缓存失效；新线程从 Kael 的业务历史构建输入。
 
-Context 是不可信数据，不构成权限或指令。`response_language` 只接受 `zh`、`zh_hant`、`en`、`ja`、`pt_br`、`es`、`ru`、`ko`、`vi`，映射为固定语言名称后附于本轮输入。用户明确指定语言时优先遵循；字段缺失或无效时跟随最新问题，无法判断时使用英语。语言变化不改变 thread 复用签名，当前 Run 仍使用已冻结快照。
+Context 是不可信数据，不构成权限或指令。`response_language` 只接受 `zh`、`zh_hant`、`en`、`ja`、`pt_br`、`es`、`ru`、`ko`、`vi`，映射为固定语言名称后附于本轮输入。用户明确指定语言时优先遵循；字段缺失或无效时跟随最新问题，无法判断时使用英语。语言偏好覆盖工具调用前说明、进度、工具参数中的展示文案、提问及最终回答，API 描述与工具输出不改变该偏好。语言变化不改变 thread 复用签名，当前 Run 仍使用已冻结快照。
 
 输入上限为 4 MiB，超限明确报错，不按固定历史条数静默裁剪；上下文压缩由 Codex 负责。同一 turn 最多处理 128 个动态工具请求。最多缓存 16 个 Panel 进程，空闲超过 5 分钟回收；容量满时优先回收空闲进程。
 
@@ -130,13 +130,13 @@ Gateway 通过组件身份加载 Core OpenAPI，按内容 hash 版本化，缓�
 
 Method 和 URL 由可信 Registry 构建。默认允许 `GET/POST/PUT/PATCH`，`DELETE` 需配置显式启用。`general` 使用源码内固定 Operation 范围，asset/audit/ops 进一步收窄，management 为管理员提供较宽范围；Kael 不读取 Core 自定义 Operation allowlist 配置。
 
-搜索和调用使用相同权限筛选：读取 `x-jms-required-permissions`、`x-jms-permission-dynamic`，缺失、非法或 dynamic 元数据均拒绝，Principal 必须具备全部静态权限。Run 保留创建时权限快照用于一致选择，Core 对委托请求仍执行实时 RBAC。
+搜索和调用使用相同权限筛选：读取 `x-jms-required-permissions`、`x-jms-permission-dynamic`，缺失、非法或 dynamic 元数据均拒绝，Principal 必须具备全部静态权限。Run 保留创建时权限快照用于一致选择，Core 对用户凭据认证的业务请求仍执行实时 RBAC。
 
 Gateway 解析引用、移除请求 schema 的 `readOnly` 字段并规范化 required/nullable，验证参数及 query 序列化，拒绝敏感路径与字段。参数错误可作为结构化结果返回模型修正。
 
-业务请求使用短期一次性 HMAC 委托，绑定 user/org、Conversation、Approval、Operation、Method、Path、query/body hash、issuer/audience/key ID、时间和 nonce。用户 Cookie/Bearer 仅用于身份查询，不用于 Gateway 业务请求；Core 负责验签、防重放与最终授权。
+业务请求沿用发起 Run 的用户 Cookie（或已有 Authorization），Cookie 写请求同时携带 CSRF token；组织头来自已验证的 Principal。凭据只按 Run 保存在当前进程内存中，不进入 Journal、工具参数、模型输入或审计；创建、重新生成及显式恢复 Run 时从已认证请求绑定，运行结束、取消或服务关闭后清理。Gateway 不再需要平台委托共享密钥，Core 使用现有用户认证、CSRF 和 RBAC 校验。
 
-Service 写操作必须经过独立 Approval，不受 Panel 的 never 模式豁免；执行前重新校验请求和原审批绑定。HTTP 默认超时 15 秒、响应上限 1 MiB，结果限长、脱敏后写入 ToolResult、结果卡片及审计。Gateway 不继承进程代理，支持私有 CA 与客户端证书。
+Service 写操作必须经过独立 Approval，不受 Panel 的 never 模式豁免；执行前重新校验请求和原审批绑定。HTTP 默认超时 15 秒、响应上限 1 MiB，结果限长、脱敏后写入 ToolResult、结果卡片及审计。凭据缺失、CSRF 失败、连接失败与超时返回独立错误码，并记录脱敏诊断。Gateway 不继承进程代理、不跟随重定向，支持私有 CA 与客户端证书。
 
 ## 5. HTTP 与事件协议
 
@@ -230,11 +230,11 @@ Terminal 本地历史默认保留 7 天、容量上限 1 GiB、磁盘最低余�
 
 ### 身份和部署入口
 
-业务请求要求 `X-JMS-ORG`。Kael 使用请求 Cookie/Bearer 向 Core 的 profile 与 permissions 接口验证用户，每次请求重新取得权限；除 superuser 外要求 `chat_ai.use_chatai`。会话及关联资源按用户、组织校验所有权，管理接口另行校验管理员权限。
+业务请求要求 `X-JMS-ORG`。Kael 使用请求 Cookie/Bearer 向 Core 的 profile 与 permissions 接口验证用户，每次请求重新取得权限；除 superuser 外要求 `chat_ai.use_chatai`。带 Authorization 时仅使用该头认证，不回退到 Cookie；鉴权请求不跟随重定向。会话及关联资源按用户、组织校验所有权，管理接口另行校验管理员权限。
 
 Origin 校验默认关闭；只有 `ALLOWED_ORIGINS` 包含非空值时启用，允许精确列表或当前同源 Origin，不发送 CORS 响应头。Cookie 写请求另行校验 CSRF。网关终止 HTTPS 时可配置外部 Origin；`TRUST_FORWARDED_HEADERS` 默认关闭，仅在可信网关覆盖 forwarded headers 且 Kael 端口不直接暴露时使用。
 
-Kael 不直接连接业务数据库。首次通过 BootstrapToken 注册 `kael` 组件，后续使用私有 AccessKey 文件。Platform Gateway 是必需依赖：`PLATFORM_GATEWAY_ENABLED` 必须为 true，delegation key 去除首尾空白后至少 32 字符且与 Core 匹配，Registry 初始化失败会阻止监听端口。
+Kael 不直接连接业务数据库。首次通过 BootstrapToken 注册 `kael` 组件，后续使用私有 AccessKey 文件。Platform Gateway 是必需依赖：`PLATFORM_GATEWAY_ENABLED` 必须为 true，组件签名必须可访问 Core OpenAPI；不再配置 `PLATFORM_DELEGATION_KEY` 等委托参数。Registry 初始化失败会阻止监听端口。
 
 ### 配置与启动
 

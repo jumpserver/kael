@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jumpserver/kael/internal/domain"
 	"github.com/jumpserver/kael/internal/event"
+	"github.com/jumpserver/kael/internal/identity"
 	"github.com/jumpserver/kael/internal/model"
 	"github.com/jumpserver/kael/internal/policy"
 	"github.com/jumpserver/kael/internal/ports"
@@ -114,6 +115,8 @@ type Service struct {
 	startErr          error
 	activeMu          sync.Mutex
 	active            map[string]context.CancelFunc
+	credentialsMu     sync.Mutex
+	runCredentials    map[string]identity.CoreCredentials
 }
 
 func New(options Options) (*Service, error) {
@@ -191,6 +194,11 @@ func (s *Service) Start(ctx context.Context) error {
 
 func (s *Service) Close() {
 	s.stopOnce.Do(func() {
+		defer func() {
+			s.credentialsMu.Lock()
+			clear(s.runCredentials)
+			s.credentialsMu.Unlock()
+		}()
 		s.lifecycleMu.Lock()
 		started := s.started
 		s.lifecycleMu.Unlock()
@@ -258,6 +266,9 @@ func (s *Service) maintenance() {
 			now := time.Now().UTC()
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			err := s.store.Transaction(ctx, func(tx ports.Tx) error { return tx.Maintain(now, now.Add(-s.eventRetention)) })
+			if err == nil {
+				err = s.pruneRunCredentials(ctx)
+			}
 			cancel()
 			if err != nil {
 				s.logger.Error("maintain runtime state", zap.Error(err))

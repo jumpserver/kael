@@ -34,7 +34,10 @@ func NewCoreAuthenticator(baseURL string, verifyTLS bool, timeout time.Duration)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: !verifyTLS} //nolint:gosec -- deployment-controlled compatibility option
-	return &CoreAuthenticator{BaseURL: strings.TrimRight(baseURL, "/"), Client: &http.Client{Transport: transport, Timeout: timeout}}
+	return &CoreAuthenticator{BaseURL: strings.TrimRight(baseURL, "/"), Client: &http.Client{
+		Transport: transport, Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}}
 }
 
 func (a *CoreAuthenticator) Authenticate(ctx context.Context, source *http.Request) (domain.Principal, error) {
@@ -101,10 +104,13 @@ func (a *CoreAuthenticator) coreJSON(ctx context.Context, source *http.Request, 
 	request.Header.Set("X-JMS-ORG", organizationID)
 	if authorization := strings.TrimSpace(source.Header.Get("Authorization")); authorization != "" {
 		request.Header.Set("Authorization", authorization)
-	}
-	for _, cookie := range source.Cookies() {
-		if cookie.Name != "" && cookie.Value != "" {
-			request.AddCookie(cookie)
+	} else {
+		// Header authentication bypasses CSRF checks, so Core must not fall back
+		// to session cookies when that header is unrecognized or invalid.
+		for _, cookie := range source.Cookies() {
+			if cookie.Name != "" && cookie.Value != "" {
+				request.AddCookie(cookie)
+			}
 		}
 	}
 	response, err := a.Client.Do(request)

@@ -3,12 +3,8 @@ package platformgateway
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jumpserver/kael/internal/domain"
+	"github.com/jumpserver/kael/internal/identity"
 	"github.com/jumpserver/kael/internal/ports"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -33,20 +30,16 @@ const (
 )
 
 type Config struct {
-	CoreURL         string
-	CoreTLSVerify   bool
-	DelegationKey   string
-	DelegationKeyID string
-	Issuer          string
-	Audience        string
-	CACert          string
-	ClientCert      string
-	ClientKey       string
-	AllowedMethods  map[string]bool
-	RegistryTTL     time.Duration
-	Timeout         time.Duration
-	MaxResponse     int64
-	OpenAPILoader   func(context.Context) (map[string]any, error)
+	CoreURL        string
+	CoreTLSVerify  bool
+	CACert         string
+	ClientCert     string
+	ClientKey      string
+	AllowedMethods map[string]bool
+	RegistryTTL    time.Duration
+	Timeout        time.Duration
+	MaxResponse    int64
+	OpenAPILoader  func(context.Context) (map[string]any, error)
 }
 
 type parameter struct {
@@ -91,17 +84,8 @@ func New(config Config) (*Gateway, error) {
 	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
 		return nil, fmt.Errorf("platform gateway Core URL is invalid")
 	}
-	if len(config.DelegationKey) < 32 || config.DelegationKeyID == "" {
-		return nil, fmt.Errorf("platform gateway delegation key is invalid")
-	}
 	if config.OpenAPILoader == nil {
 		return nil, fmt.Errorf("platform gateway OpenAPI loader is required")
-	}
-	if config.Issuer == "" {
-		config.Issuer = "jumpserver-ai"
-	}
-	if config.Audience == "" {
-		config.Audience = "jumpserver-core"
 	}
 	if config.RegistryTTL <= 0 {
 		config.RegistryTTL = time.Hour
@@ -234,8 +218,9 @@ func (g *Gateway) Execute(ctx context.Context, request ports.CapabilityRequest) 
 	if len(bodyBytes) > 0 {
 		httpRequest.Header.Set("Content-Type", "application/json")
 	}
-	requestHash := bindingHash(operation.Method, path, []byte(query), bodyBytes)
-	httpRequest.Header.Set("X-JMS-AI-Delegation", g.delegation(request, *operation, path, requestHash))
+	if err = identity.CoreCredentialsFromContext(ctx).Apply(httpRequest); err != nil {
+		return ports.CapabilityResult{}, err
+	}
 	response, err := g.client.Do(httpRequest)
 	if err != nil {
 		return ports.CapabilityResult{}, err
@@ -911,26 +896,6 @@ func validateValue(schema map[string]any, value any) error {
 	return compiled.Validate(value)
 }
 
-func (g *Gateway) delegation(request ports.CapabilityRequest, operation operation, path, requestHash string) string {
-	now := time.Now().Unix()
-	payload := map[string]any{"issuer": g.config.Issuer, "audience": g.config.Audience, "key_id": g.config.DelegationKeyID, "user_id": request.Principal.SubjectID, "org_id": request.Principal.OrganizationID, "conversation_id": request.ConversationID, "approval_id": request.ApprovalID, "allowed_operation_id": operation.ID, "method": operation.Method, "path": path, "request_hash": requestHash, "issued_at": now, "expires_at": now + min64(60, int64(g.config.Timeout.Seconds())+5), "nonce": strings.ReplaceAll(uuid.NewString(), "-", "")}
-	encodedPayload, _ := domain.CanonicalJSON(payload)
-	encoded := base64.RawURLEncoding.EncodeToString(encodedPayload)
-	signer := hmac.New(sha256.New, []byte(g.config.DelegationKey))
-	_, _ = signer.Write([]byte(encoded))
-	return encoded + "." + hex.EncodeToString(signer.Sum(nil))
-}
-
-func bindingHash(method, path string, query, body []byte) string {
-	hasher := sha256.New()
-	for index, value := range [][]byte{[]byte(strings.ToUpper(method)), []byte(path), query, body} {
-		if index > 0 {
-			_, _ = hasher.Write([]byte{0})
-		}
-		_, _ = hasher.Write(value)
-	}
-	return hex.EncodeToString(hasher.Sum(nil))
-}
 func methodRisk(method string) string {
 	if !requiresApproval(method) {
 		return "read"
@@ -1270,10 +1235,4 @@ func boundedString(value string, limit int) string {
 		return value
 	}
 	return value[:limit]
-}
-func min64(left, right int64) int64 {
-	if left < right {
-		return left
-	}
-	return right
 }
