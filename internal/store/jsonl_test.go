@@ -18,7 +18,8 @@ func TestJSONLStorePersistsHistoryAndInterruptsProcessState(t *testing.T) {
 	root := t.TempDir()
 	principal := domain.Principal{SubjectID: "user-1", OrganizationID: "org-1"}
 	now := time.Now().UTC()
-	value, err := NewJSONL(root)
+	options := RetentionOptions{KeepDays: 7, MaxBytes: 1 << 20}
+	value, err := NewJSONL(root, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +54,7 @@ func TestJSONLStorePersistsHistoryAndInterruptsProcessState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	value, err = NewJSONL(root)
+	value, err = NewJSONL(root, options)
 	if err != nil {
 		t.Fatal(err)
 	}

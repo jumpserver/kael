@@ -28,7 +28,9 @@ type Config struct {
 	AccessKeyFilePath      string
 	ArtifactFolderPath     string
 	RuntimeDataFolderPath  string
-	RuntimeStore           string
+	TerminalAIKeepDays     int
+	TerminalAIMaxBytes     int64
+	TerminalAIMinFreeBytes int64
 	PlatformGatewayEnabled bool
 	PlatformCACert         string
 	PlatformClientCert     string
@@ -74,7 +76,9 @@ func Load(path string) (Config, error) {
 		AccessKeyFilePath:      filepath.Join(dataFolder, "keys", ".access_key"),
 		ArtifactFolderPath:     filepath.Join(dataFolder, "artifacts"),
 		RuntimeDataFolderPath:  dataFolder,
-		RuntimeStore:           strings.ToLower(strings.TrimSpace(v.GetString("RUNTIME_STORE"))),
+		TerminalAIKeepDays:     v.GetInt("TERMINAL_AI_KEEP_DAYS"),
+		TerminalAIMaxBytes:     v.GetInt64("TERMINAL_AI_MAX_BYTES"),
+		TerminalAIMinFreeBytes: v.GetInt64("TERMINAL_AI_MIN_FREE_BYTES"),
 		PlatformGatewayEnabled: v.GetBool("PLATFORM_GATEWAY_ENABLED"),
 		PlatformCACert:         v.GetString("PLATFORM_CA_CERT"),
 		PlatformClientCert:     v.GetString("PLATFORM_CLIENT_CERT"),
@@ -128,7 +132,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("HTTP_REQUEST_TIMEOUT", 30)
 	v.SetDefault("TOOL_RESULT_TIMEOUT", "45s")
 	v.SetDefault("LOG_LEVEL", "INFO")
-	v.SetDefault("RUNTIME_STORE", "core")
+	v.SetDefault("TERMINAL_AI_KEEP_DAYS", 7)
+	v.SetDefault("TERMINAL_AI_MAX_BYTES", int64(1<<30))
+	v.SetDefault("TERMINAL_AI_MIN_FREE_BYTES", int64(1<<30))
 	v.SetDefault("PLATFORM_GATEWAY_ENABLED", true)
 	v.SetDefault("PLATFORM_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "PATCH"})
 	v.SetDefault("PLATFORM_REGISTRY_TTL", "1h")
@@ -166,8 +172,8 @@ func (c Config) Validate() error {
 			return fmt.Errorf("ALLOWED_ORIGINS contains an invalid HTTP/HTTPS origin")
 		}
 	}
-	if c.RuntimeStore != "core" && c.RuntimeStore != "jsonl" {
-		return fmt.Errorf("RUNTIME_STORE must be core or jsonl")
+	if c.TerminalAIKeepDays < 1 || c.TerminalAIKeepDays > 3650 || c.TerminalAIMaxBytes < 256<<20 || c.TerminalAIMinFreeBytes < 64<<20 {
+		return fmt.Errorf("TERMINAL_AI_KEEP_DAYS must be 1..3650, TERMINAL_AI_MAX_BYTES at least 256 MiB, and TERMINAL_AI_MIN_FREE_BYTES at least 64 MiB")
 	}
 	if !c.PlatformGatewayEnabled {
 		return fmt.Errorf("PLATFORM_GATEWAY_ENABLED must be true because the default general assistant requires the Platform Gateway")

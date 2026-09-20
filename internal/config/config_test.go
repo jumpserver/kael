@@ -65,6 +65,31 @@ func TestLoadRejectsNestedConfig(t *testing.T) {
 	}
 }
 
+func TestTerminalHistoryRetentionConfig(t *testing.T) {
+	settings, err := Load(writeConfig(t, "{}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.TerminalAIKeepDays != 7 || settings.TerminalAIMaxBytes != 1<<30 || settings.TerminalAIMinFreeBytes != 1<<30 {
+		t.Fatal("unexpected terminal history defaults")
+	}
+	t.Setenv("TERMINAL_AI_KEEP_DAYS", "14")
+	t.Setenv("TERMINAL_AI_MAX_BYTES", "536870912")
+	t.Setenv("TERMINAL_AI_MIN_FREE_BYTES", "134217728")
+	settings, err = Load(writeConfig(t, "{}\n"))
+	if err != nil || settings.TerminalAIKeepDays != 14 || settings.TerminalAIMaxBytes != 512<<20 || settings.TerminalAIMinFreeBytes != 128<<20 {
+		t.Fatalf("terminal history settings were not loaded: %v", err)
+	}
+	for _, key := range []string{"TERMINAL_AI_KEEP_DAYS", "TERMINAL_AI_MAX_BYTES", "TERMINAL_AI_MIN_FREE_BYTES"} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, "0")
+			if _, err := Load(writeConfig(t, "{}\n")); err == nil {
+				t.Fatal("unbounded terminal history setting was accepted")
+			}
+		})
+	}
+}
+
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")

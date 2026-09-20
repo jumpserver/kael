@@ -1,1056 +1,264 @@
-# Kael AI Runtime Architecture
+# Kael 当前架构
 
-## 1. 文档定位
+本文描述当前仓库的实现。Kael 是注册到 JumpServer Core 的 Terminal component，提供统一 AI 会话、运行、审批和事件服务；Codex App Server 负责模型推理与工具循环，Luna 和 Platform Gateway 负责实际能力执行。
 
-| 项目 | 内容 |
+## 1. 组件与依赖
+
+| 模块 | 当前职责 |
 |---|---|
-| 状态 | 目标架构基线 |
-| 日期 | 2026-09-04 |
-| 适用范围 | Kael AI Runtime、Luna/Lina AI Panel 及其能力适配边界 |
-| 当前实现状态 | harness 分支已用 Codex 替换手写 Agent Loop（ADR 0007）；Kael 使用 Core component + Core-backed Runtime Journal，边界见 ADR 0002/0004/0006 |
-| 本期代码范围 | Kael、Luna、Lina 与 JumpServer Core 的 Runtime Store 接口 |
-
-本文将《JumpServer AI Native Agent Runtime 完整方案》的核心思想，与现有 Koko agentd、Platform AI、Luna/Lina 客户端的真实能力合并为 Kael 的长期架构约束。
-
-三类文档的职责不同：
-
-- 本文定义稳定架构、所有权和不可破坏的不变量；
-- [AI Native Agent Runtime 迁移与演进方案](./ai-native-agent-runtime-migration.md) 定义迁移阶段、实施范围、验收标准和精简测试策略；
-- [旧版 Platform AI 契约与当前迁移边界](./platform-ai-compatibility.md) 将已删除实现作为历史参考，并记录当前迁移边界。
-
-初稿中未加 Kael 前缀的路径、示例代码、示例 TTL、目录树和技术选型建议不是最终协议。
-
-文档和事实的权威边界是：
-
-- 目标架构由本文和已经批准的 ADR 定义；
-- 当前行为由实际代码和可执行契约定义；
-- 迁移顺序与兼容方式由专题迁移文档定义；
-- 三者冲突时不得自行选择其一，必须先记录 ADR，并同步更新受影响的文档、代码和契约。
-
-## 2. 架构目标
-
-Kael 采用：
-
-> AI Panel Host + Headless Agent Runtime + Local Capability Gateway
-
-Kael 是注册到 Core 的 Terminal component，也是通用推理与编排 Runtime；AI Panel 是 Agent Host。模型配置来自 Core TerminalConfig，只有 `CHAT_AI_ENABLED` 控制启停，不再存在 method/embed 模式。Koko、Chen 和本地 UI/Script 通过 Luna 的 panel binding 提供；Core API 通过 ADR 0001 的 service binding 提供，并由通用 Capability Broker 与 Runtime core 隔离。
-
-核心不变量：
-
-1. Kael Runtime 核心对象包括 Principal、Conversation、Message、Artifact、PanelSession、ContextSnapshot、Registration、ExecutionBinding、Run、Step/ModelCall、ToolCall、ToolResult、Approval、DomainEvent 和 PanelDelivery。
-2. Kael Runtime 不理解 Lina、Luna、Koko、Chen、MCP、SSH、数据库或具体业务 API。
-3. Luna 持有当前环境、能力执行器和结果渲染；Kael 不持有资源连接凭据。
-4. 普通对话和 Luna 能力对话共用一套 Conversation、Run、Event 和模型调用链。
-5. 所有 AI 业务接口只使用 `/kael/api/v1`，不提供其它业务根路径或按对话类型拆分的入口；Lina 不保留 iframe/embed、旧 DTO 或旧 SSE 事件映射。
-6. Conversation、用户 Message、终态 Assistant Message 及其结果卡片默认通过 Core-backed Journal 跨 Kael 节点恢复；Run、PanelSession、Context、Registration、Event/Delivery 和 executor 连接不跨进程恢复。每次 Run 仍在当前进程内固定本次执行环境和能力快照。
-7. ToolCall 必须路由到 Registration 绑定的准确 ExecutionBinding；当前启用的 panel binding 必须返回原 PanelSession，禁止广播、按用户猜测或自动转移到其它 Tab。
-8. Context 是不可信数据，不是指令或权限。
-9. Registration 只是能力声明；真正执行时仍由 Core、Koko、Chen 或本地执行器复验权限。
-10. 状态与 Event 先提交到 Store 事务，再通知订阅者；Core adapter 只持久化用户可见历史投影，DomainEvent/PanelDelivery 属于当前进程，PanelDelivery cursor 只属于具体 PanelSession。Terminal AI 的完整运行态由独立本地 JSONL 保存。
-11. 非幂等操作结果未知时不得自动重放。
-12. 产品差异只存在于 Profile、Context、Capability Adapter 和 Renderer 边界，不能进入 Runtime 核心。
-
-## 3. 系统上下文
-
-### 3.1 当前逻辑架构
-
-```text
-Browser / Electron
-        |
-        v
-+------------------------------------------------------+
-| Luna / Lina AI Panel                                 |
-|                                                      |
-| Chat Surface | Context Adapter | Local Registry      |
-| Tool Dispatcher | Approval Surface | Result Renderer |
-+-------------------------+----------------------------+
-                          |
-                 HTTP commands + SSE events
-                          |
-                          v
-+------------------------------------------------------+
-| Kael                                                 |
-|                                                      |
-| Identity Adapter | API | Conversation | Run          |
-| Context Builder | Agent Loop | Model Router          |
-| Capability Broker | Approval | Event log | Audit    |
-+--------------+---------------------------+-----------+
-               |                           |
-               v                           v
-        Model Providers             Store Port
-                                      |
-                         Core Journal adapter (default)
-                              / JSONL fallback
-
-Panel-scoped tool execution remains behind Luna:
-
-Luna MCP Adapter ------------------> Koko / Chen
-Luna Local Adapter ----------------> Script / UI
-
-Service-scoped Platform execution:
-
-Kael Capability Broker ------------> Headless Platform Gateway ------------> Core API
-```
-
-普通对话命令由 Luna 或 Lina 通过 HTTP 提交给 Kael；Kael 按 PanelDelivery audience 通过 SSE 投递状态。Lina 直接读取 PanelDelivery DTO 及其 dot 事件名（如 `message.delta`、`tool.call`、`approval.required`、`run.completed`），不经过 Legacy DTO/SSE adapter。Luna 的 panel-scoped 文本增量、ToolCall 和 Approval 回到原 Panel；可共享的脱敏终态可以投影给同一 Conversation 的其它授权 Panel。panel-scoped ToolResult 由 Luna 通过 HTTP 回传。
-
-service binding 已按 ADR 0001 启用：Capability Broker 把调用路由给 Headless Provider，该执行路径不使用 Panel SSE，状态和 Approval 仍通过统一 Event/PanelDelivery 投影。按 ADR 0004/0006，用户问题、终态回答和结果卡片可从 Core Journal 恢复；DomainEvent、未决 Approval、活动 ToolCall 和 Panel capability 不跨 Kael 重启续接。
-
-### 3.2 当前迁移形态与长期形态
-
-当前迁移形态由 Luna、Lina、Kael 和 Core Runtime Store 接口共同组成：
-
-- Luna 同时承载普通对话 UI 和 Luna 能力对话 UI；
-- Lina 的普通对话 API 层只使用 Kael 原生资源和 PanelDelivery dot 事件，不保留 iframe/embed、旧 DTO/SSE adapter 或旧 Platform Runtime 回退；
-- Kael 的隔离 Headless Platform Gateway 承载 Platform Capability，Luna 只负责 UI、事件和 Approval 交互；
-- Koko、Chen 和本地执行器继续提供现有 Session Capability；
-- Core 的旧 ChatAI Runtime/API/models/worker 已删除；`/api/v1/chat-ai/` 下只保留持久化并返回组件签名 opaque Runtime Journal 的 `runtime-store/`。Core 不执行 Kael Runtime，Magnus、Lion 和 Koko 的执行边界不变；
-- Koko agentd 的能力和业务流量迁入 Kael，不代表本期删除 Koko 中的旧代码。
-
-长期允许 Lina 成为 Platform Agent Host，Magnus、Lion 或其它组件成为新的能力来源。替换 Capability Provider 不得改变 Kael 的 Conversation、Run 或 Event 协议。
-
-### 3.3 信任边界
-
-系统至少包含以下信任域：
-
-| 信任域 | 信任程度 | 处理原则 |
-|---|---|---|
-| Luna browser renderer | 通过 Core 登录认证的可信工具客户端 | 接受工具声明和结果；保留请求、schema、会话绑定校验，Context 内容不作为指令 |
-| Luna Electron renderer | 通过 Core 登录认证的可信工具客户端 | 使用现有桌面认证适配；凭据不进入工具定义、上下文或模型 |
-| Electron main process | 受控身份代理 | 注入最新 Bearer、组织和时区，隔离窗口流 |
-| 同源入口/身份适配器 | 可信入口 | 验证身份并生成 Kael 可消费的 Principal |
-| Kael Runtime | 可信编排层 | 不保存资源凭据，不越过执行端权限 |
-| Core/Koko/Chen/本地执行器 | 最终执行权威 | 每次执行重新校验 RBAC、ACL 和资源状态 |
-| Model Provider | 外部不可信处理方 | 只发送允许的数据，输出和 Tool Arguments 必须校验 |
-
-## 4. 组件职责与所有权
-
-### 4.1 组件职责
-
-| 组件 | 必须负责 | 禁止负责 |
-|---|---|---|
-| Kael API | 身份边界、DTO 校验、`/kael/api/v1`、SSE、幂等入口 | 具体业务工具执行 |
-| Kael Runtime | Context Builder、模型路由、Agent Loop、Run 状态和工具决策 | 解析 MCP、调用 Koko/Chen/Core 业务 API |
-| Kael Capability Broker | Registration 校验、精确路由、等待结果、取消传播 | 根据工具名或用户 ID 猜 executor |
-| Kael Store/Event | 权威状态、事务、Outbox、事件恢复和审计关联 | 保存浏览器 executor 句柄 |
-| Luna AI Panel | UI、Context、Registry、Tool Dispatcher、Approval 和 Renderer | 成为 Conversation/Run 权威存储 |
-| Luna Adapter | Platform、MCP、本地能力与通用协议互转 | 把产品协议泄漏进 Kael Runtime |
-| Lina AI Panel | Kael 原生 Conversation/Message/Artifact/前台 Run、Approval、audit UI；直接消费 PanelDelivery | iframe/embed、旧 DTO/SSE 映射、background/Web Search/服务端 STT 请求或旧 stats 面板 |
-| Koko/Chen | 真实 Session 执行、连接凭据、ACL 和既有审计 | 承担新的通用 Agent Loop |
-| Core | Platform 业务数据、最终 RBAC、Serializer 和后台业务 Job | 相信 AI Registration 代替授权 |
-| Model Provider | 生成文本或结构化 ToolCall | 获得用户凭据或直接访问业务组件 |
-
-### 4.2 权威所有权
-
-| 对象或责任 | 权威所有者 | 说明 |
-|---|---|---|
-| 用户与组织身份事实 | 可信入口，Kael 保存验证后的 Principal | 客户端 user/org 字段不能自证身份 |
-| Conversation、Message、Artifact 元数据 | Kael Store port；默认 Journal 由 JumpServer Core 保存 | Panel 本地状态只是视图缓存；Core 只保存 Kael opaque Journal，不导入遗留数据库表或数据 |
-| Run、Step、ModelCall、DomainEvent、PanelDelivery | Kael | 旧 agentd 或旧 Platform runner 不能同时推进同一 Run |
-| PanelSession、lease、连接 ownership | Kael；活动连接由具体 Kael 实例持有 | 不能退化为“最近活跃 Tab” |
-| Context 原始采集 | Luna | Kael 保存经校验的版本化快照 |
-| Registration 定义、版本和租约 | Kael | executor 函数不上传到 Kael |
-| 本地 Registration 路由表 | Luna | 绑定本地 client key、资源会话和 adapter |
-| ToolCall 与 Approval 编排 | Kael | Luna 只执行已校验的调用和展示决定 |
-| Terminal/File 真实执行 | Koko、Chen 或既有会话层 | Kael 不持有 SSH、SFTP 凭据 |
-| DB context/schema/validate | Chen 或既有数据库会话层 | 不代表授权执行任意 SQL |
-| SQL proposal apply | Luna 编辑器本地动作 | 只修改编辑器，不直接执行 SQL |
-| Script proposal apply | Luna 编辑器本地动作 | draft-only，不保存、不执行 |
-| UI action | Luna 本地执行器 | 必须保留目标、revision 和安全校验 |
-| Platform 最终业务授权 | Core | Kael Approval 不能替代 Core RBAC |
-| 模型凭据和 Provider 配置 | Core TerminalConfig；Kael 组件身份按需读取 | 不写入 Kael 配置，不下发给 Luna |
-| 旧开发分支遗留的 Platform 表/数据 | 不属于当前 Runtime | 功能尚未上线且旧 Core models/API 已删除；部署前清理旧 AI 表或重建开发库，不提供迁移或兼容入口 |
-
-### 4.3 禁止依赖
-
-Kael Runtime 核心包不得依赖：
-
-- Luna、Lina、Koko、Chen、Magnus 或 Lion 的业务包；
-- MCP SDK 或具体 Session Component 帧格式；
-- JumpServer Core 的业务 URL、Serializer 或数据模型；
-- SSH、RDP、数据库、SFTP 或浏览器 UI executor；
-- 某个产品固定的工具名。
-
-本期已按 ADR 0001 选择 Headless Platform Gateway 承接前台 Platform Capability。它必须是独立 Adapter 或独立部署单元，不能反向污染 Runtime 核心；Lina 默认 `general` 依赖它，因此 Kael 启动时必须装配成功，见 12.3 节和第 19 节。Gateway 启动加载 Core `/api/swagger.json` 时复用 Kael component AccessKey 签名身份，Core 不为此开放匿名 schema；实际 operation 请求沿用用户 Cookie（或已有 Authorization）与组织头，写请求同时携带 CSRF token；凭据仅按 Run 保存在进程内存中。
-
-## 5. 产品交互模式
-
-### 5.1 两类对话
-
-| 类型 | 用户语义 | Capability |
-|---|---|---|
-| 普通对话 | 不绑定当前 Luna 资源会话的长期对话 | 纯模型，或由可信 Assistant/Profile 明确启用的 Platform Capability |
-| Luna 能力对话 | 在当前 Luna Panel 中使用动态环境能力 | 只使用本次 PanelSession 注册并被 Profile 允许的 Terminal、File、SQL、Script 等能力 |
-
-普通对话不会因为用户当前打开 SSH、File、SQL 或 Script 页面而自动获得对应能力。Luna 能力对话失去能力时必须显示不可用、等待或失败，不能静默降级为普通回答。
-
-### 5.1.1 Lina 页面引用、结果导航与执行故障说明
-
-Lina 普通对话可由用户显式选择“引用当前页面”。所有已登录的平台页面都可提供经过清理的路由标识、页面名称和组织；资产页还可附带有界的资产标识、名称等允许字段。资产选择来自业务组件的数据，不读取 DOM、任意表单、密码、查询参数或整行记录。引用内容在发送时固化，作为用户 Message 的 `data` Part（`kind=page_context`）持久化，并在创建 Run 前写入既有 `PUT /panel-sessions/{id}/context`。重试、重新生成和编辑分支沿用原问题的引用，不使用后来打开的页面；路由或组织切换时取消当前输入框的引用状态。Context 仍是不可信数据，必须由现有 Profile、静态权限检查和 Core 最终 RBAC 重新查询和核实。
-
-Platform 结果表格的 `_resource_id` 仅来自返回对象的真实 `id/pk`，与可能回退为数组序号的 `_key` 分离。Lina 根据已允许的 Core operation、资源 ID、当前权限和已注册路由生成详情链接，不执行模型或结果正文提供的 URL。无对应详情页或未确认成功的结果只展示数据。
-
-Message 和 Run 可附加 `failure` 对象，终态 SSE 同步返回。其字段为 `stage`、稳定错误 `code`、可选 `tool_name`/`failed_step`、`completed_steps`、`uncertain_steps` 和 `next_action`。步骤仅含工具名、可选 operation ID、可信策略导出的 `read_only` 和确认状态；不包含凭据、完整参数或上游异常原文。成功回执才计入已完成；已发送但没有可靠回执的操作标为结果未确认，审批拒绝或过期的未执行步骤不计入其中。模型请求超时与整个 Run 超时分别报告。停止不等于撤销，已完成或结果未确认的写操作必须先核对实际资源，界面不提供直接重复生成整个操作的快捷入口。故障摘要随 Journal 保存，重启恢复也保留确认与未确认结果的区别。
-
-### 5.2 相互独立的维度
-
-| 维度 | 示例 | 作用 |
-|---|---|---|
-| Conversation Kind | general、capability | 产品分类和历史展示 |
-| Assistant/Preset | general、management、asset、session_audit、ops | 模型策略与 Platform 能力组合 |
-| Surface | general.chat、session.terminal、session.file | 当前交互环境和审计 |
-| Runtime Profile | general、platform.management、terminal、file、sql、script | 服务端可信运行策略 |
-| Execution Mode | foreground、background | 决定 Run 的调度、离线、配额、通知和清理策略 |
-| Capability Mode | disabled、panel、service | 决定本次 Run 不使用能力、依赖原 Panel，或使用可信 Headless Provider |
-| Registration | 某个 Panel 注册的一项具体能力 | 工具定义和精确路由 |
-
-这些维度不能互相替代。URL、页面焦点、Context、Assistant 名称或客户端提供的工具集合都不能单独授予权限。
-
-ADR 0001 后的合法组合：
-
-| Execution Mode | Capability Mode | 语义 |
-|---|---|---|
-| foreground | disabled | 交互优先调度的普通纯模型 Run，客户端通常实时订阅 |
-| foreground | panel | 交互优先调度并使用原 Panel 注册能力 |
-| foreground | service | 使用可信 Headless Provider 的交互 Run；执行不依赖 Panel 在线 |
-| background | 任意 | 当前非法；虽保留历史错误码 `background_requires_durable_store`，实际需先补齐分布式 claim/ownership、状态同步与安全工具恢复 |
-
-`service` capability mode 已由 [ADR 0001](./adr/0001-headless-platform-gateway.md) 冻结。它只允许服务端可信 Profile 和已装配的 CapabilityProvider 创建，不能由客户端注册或伪装成 Panel 能力。
-
-所有组合的 `POST /runs` 都立即返回 Run 资源；foreground 不表示 HTTP 请求阻塞到 Run 结束，流式结果统一由独立 SSE 订阅获得。
-
-### 5.3 Profile
-
-Profile 由 Kael 服务端配置并版本化，至少固定：
-
-- system policy；
-- 允许的模型与 Provider 能力；
-- capability namespace 和风险上限；
-- Agent Loop 预算；
-- Approval policy；
-- Context 和 History 限制；
-- 输出与 result card 能力。
-
-客户端只能请求自己有权使用的 Profile，不能提交任意 system prompt 或最终工具集合。
-
-## 6. 领域模型与生命周期
-
-### 6.1 对象关系
-
-```text
-Principal
-  |
-  +-- Conversation
-        |
-        +-- Message -------- Artifact references
-        |
-        +-- Run
-              |
-              +-- Step / ModelCall
-              +-- ToolCall -- Approval
-                     |
-                     +------ ToolResult
-
-Conversation
-  |
-  +-- PanelSession
-        |
-        +-- ContextSnapshot
-        +-- Registration
-        +-- PanelDelivery stream
-
-Conversation / PanelSession / Registration / Run / Artifact / Approval
-        |
-        +-- DomainEvent / OutboxRecord
-                    |
-                    v
-              Event Projector
-                    |
-                    +-- PanelDelivery --> PanelSession stream
-```
-
-### 6.2 一级对象
-
-| 对象 | 语义 | 关键约束 |
-|---|---|---|
-| Principal | 经可信入口验证的用户和组织身份 | 不能由请求体自报 |
-| Conversation | 长生命周期对话容器 | 不保存活动连接或 executor |
-| Message | 结构化用户、助手或工具消息 | Message 与 Run 分离 |
-| Artifact | 图片、文件和派生文本的受控引用 | 大对象不进入 Event |
-| PanelSession | 一个具体 Browser/Electron Panel 实例 | 多 Tab 各自独立 |
-| ContextSnapshot | 当前环境的最小化语义数据 | 有 version、digest 和保留策略 |
-| Registration | Panel 能力定义及路由声明 | 属于一个 PanelSession，有 lease/revision |
-| Run | 一次用户请求的执行实例 | 固定 execution mode、Profile、Context 和 Registry 快照 |
-| Step/ModelCall | Harness turn 记录（scope=agent_turn） | 受预算、超时和审计约束 |
-| ToolCall | 模型提出、Kael 校验后的能力调用 | 绑定 Run、Panel、Registration 和 arguments digest |
-| ToolResult | executor 回传的有界结构化结果 | sequence 递增，重复提交幂等 |
-| Approval | 风险操作的受控决定 | 绑定主体、调用、参数和过期时间；重启时未决项统一过期，不续接执行 |
-| DomainEvent | 权威状态变化及待发布事实 | 与领域状态同 Store 事务提交 |
-| PanelDelivery | DomainEvent 对某个 Panel 的有序投影 | 按 PanelSession 分配 sequence 和 audience |
-
-ExecutionBinding 是 Run 中“本次能力由谁执行”的精确路由概念。panel binding 使用 PanelSession + Registration；ADR 0001 增加 service binding，由服务端可信 CapabilityProvider 提供。两者都不是用户级全局工具集合，也不能相互接管。
-
-### 6.3 Conversation、PanelSession 与 Run
-
-Conversation 的生命周期长于 Tab 和资源连接。用户可以在新的 Panel 中重新打开历史 Conversation，但新的 Panel 不会继承旧 Panel 的 Registration。
-
-每个由 Panel 发起的 Run 必须记录原始 PanelSession，用于：
-
-- 固定 Context 与 Registry 快照；
-- 投递本次交互事件；
-- 展示 Approval；
-- 形成多 Tab 审计边界。
-
-PanelSession ID 与运行依赖必须区分：
-
-- `capability_mode=disabled` 的纯模型 Run 不依赖 Panel executor，SSE 断开后可以继续；
-- `capability_mode=panel` 的 Run 只能调用快照中的 Panel Registration，派发 ToolCall 时要求有效 lease；
-- 当前所有 `execution_mode=background` 组合都非法；Core-backed Journal 之外还需具备分布式 ownership、状态同步与安全工具恢复后才能重新启用；
-- Headless Platform Capability 使用 `capability_mode=service` 和服务端快照，不能伪装成 Panel Run，也不能接受客户端创建 service-scoped Registration。
-
-### 6.4 Run 快照
-
-Run 从 queued 进入执行前，必须原子固定：
-
-- Profile ID 与版本；
-- execution mode；
-- capability mode；
-- Context version 与 digest；
-- Registry revision；
-- 可见 Registration ID、definition version 和 digest；
-- model routing 与 fallback policy；
-- Approval policy；
-- 输入 Message 与 idempotency identity。
-
-Panel 后续切换页面、更新选区、刷新 manifest 或改变 Profile，只影响后续 Run。
-
-### 6.5 状态机
-
-核心状态：
-
-| 对象 | 状态 |
+| [cmd/kael](../cmd/kael/main.go) | 装配组件客户端、Harness、Store、身份适配器、Gateway、Service 和 HTTP 服务 |
+| [internal/component](../internal/component/client.go) | Core 组件注册、AccessKey、TerminalConfig、heartbeat、OpenAPI 与签名 Runtime Journal 通信 |
+| [internal/api](../internal/api/server.go) | `/kael/api/v1` 路由、身份入口、请求校验、HTTP 与 SSE |
+| [internal/identity](../internal/identity/identity.go) | Core 用户身份与权限查询、Origin 和 CSRF 校验 |
+| [internal/service](../internal/service/service.go) | Conversation、Message、Panel、Run、工具调用、审批、Artifact、审计与 worker 调度 |
+| [internal/runtime](../internal/runtime/harness.go) | 通过 stdio JSON-RPC 管理 Codex App Server、上下文、动态工具和回调 |
+| [internal/model](../internal/model/types.go) | 模型配置、消息、usage 和错误值类型 |
+| [internal/policy](../internal/policy/profiles.go) | Profile、工具风险、审批模式和 shell 参数级只读判定 |
+| [internal/platformgateway](../internal/platformgateway/gateway.go) | Core OpenAPI Registry、Operation 筛选、请求构建、用户凭据转发与结果脱敏 |
+| [internal/ports](../internal/ports/store.go) | Store/Tx 和 CapabilityProvider 接口 |
+| [internal/store](../internal/store/core.go) | 内存事务、Core 历史 Journal、Terminal 本地 JSONL 与保留策略 |
+| [internal/event](../internal/event/bus.go) | DomainEvent、PanelDelivery 投影及提交后的订阅通知 |
+| [internal/domain](../internal/domain/types.go) | 领域对象、协议版本和大小限制 |
+| [internal/logger](../internal/logger/logger.go) | stdout 与轮转文件日志 |
+
+模型执行只依赖 Harness 的通用输入与回调。Platform 业务通过 `CapabilityProvider` 隔离；Runtime 不直接调用 Core 业务 API，也不解析 MCP 或持有 SSH、SFTP、数据库连接凭据。
+
+两条能力执行路径：
+
+- `panel`：Kael → 原 PanelSession 的 SSE → Luna 本地 Registration 路由 → Koko、Chen 或本地执行器；结果通过 HTTP 回传。
+- `service`：Kael → Platform Gateway → Core API；Panel 接收过程、结果与审批事件，不执行这次 Core 请求。
+
+Lina 使用 Kael 的原生资源和 PanelDelivery。Luna 同时承载普通对话及 workspace、terminal、file、sql、script 等能力对话，负责采集 Context、注册工具、关联真实会话与渲染结果。实际资源权限和执行审计仍由执行组件负责。
+
+## 2. 领域对象与一次 Run
+
+| 对象 | 含义与生命周期 |
 |---|---|
-| Conversation | active、archived、deleted |
-| PanelSession | creating、active、disconnected、expired、closed |
-| Registration | pending、active、expired、revoked、superseded |
-| Message | pending、streaming、completed、failed、cancelled |
-| Run | queued、running、waiting_capability、waiting_approval、cancelling、completed、failed、cancelled、interrupted |
-| ToolCall | created、waiting_approval、dispatched、running、succeeded、failed、cancelled、timeout、unknown |
-| Approval | pending、approved、rejected、expired、cancelled、consumed |
-| Artifact | uploaded、validated、attached、quarantined、deleted |
+| Principal | 经 Core 验证的用户、组织及权限事实；客户端字段不能自证身份 |
+| Conversation / Message | 对话及用户问题、回答、附件引用、结果卡片；与浏览器 Tab 分离 |
+| Artifact | 附件元数据、摘要和有界提取文本；原始字节独立存储 |
+| PanelSession | 某个客户端与一个 Conversation 的临时绑定，包含 lease、resume token、审批模式和独立 cursor |
+| ContextSnapshot | Panel 的版本化上下文，包含 digest、domain、surface 和有界数据 |
+| Registration | 能力定义、schema、注解、版本、digest、namespace、执行绑定和 lease |
+| Run | 一次问题的编排，固定发起 Panel、Context、Registration 与策略快照 |
+| ModelCall | 一次完整 Harness turn 的记录 |
+| ToolCall / ToolResult | 一次准确绑定的能力调用及带 sequence、done、status 的回执 |
+| Approval | 对原 ToolCall 和参数摘要的一次审批，默认有效期 10 分钟 |
+| DomainEvent / PanelDelivery | Conversation 内领域事实与针对某个 Panel 的投递；两者序列独立 |
+| AuditRecord | 身份、会话、Run、工具与审批操作的审计关联 |
 
-状态约束：
-
-- Run 的 completed、failed、cancelled 是终态；interrupted 是显式可恢复状态；
-- queued 只能由获得执行权的 Worker 进入 running；
-- interrupted 只能由显式 resume 在重新校验身份、Profile 和执行绑定后回到 queued；
-- waiting_capability 只能在原执行绑定恢复后继续，超过配置期限后以 capability timeout 失败；
-- waiting_approval 只能由有效且未过期的决定继续；
-- cancelling 必须向未完成 ToolCall 传播取消并最终收敛；
-- PanelSession 的 expired、closed 不可恢复；disconnected 只能在 lease 窗口内经 resume 回到 active；
-- Registration 的 expired、revoked、superseded 对该 revision 不可逆；
-- Approval 只能消费一次；approved 后由执行 claim 原子进入 consumed，执行失败记录在 ToolCall/Run，不回退 Approval；
-- Run 在 consume 前取消时，未消费 Approval 同步进入 cancelled；
-- ToolCall 的 unknown 只能通过原 invocation 查询或人工处置解析，不能被当作 failed 后重新调用；
-- 状态变化和对应 DomainEvent/OutboxRecord 必须在同一事务边界提交。
-
-## 7. Codex Agent Harness
-
-当前实现由 [ADR 0007](./adr/0007-codex-harness.md) 定义，直接替换原手写 Loop 与官方 Go SDK adapter。
+一个 Conversation 可被同一用户、组织的多个 Panel 显式打开。每个 Panel 只绑定一个 Conversation；新 Panel 不继承旧 Panel 的工具、cursor 或未完成调用。Panel 和 Registration 默认租约均为 2 分钟，客户端通过 heartbeat 续租。
 
-### 7.1 标准流程
-
-```text
-Message -> Kael Run / frozen Context and Registration
-        -> Codex App Server turn
-        -> dynamic tool request
-        -> Kael schema / approval / exact binding
-        -> Luna -> Koko / Chen / local executor
-        -> tool result -> Codex continues -> streamed answer
-```
-
-service binding 仍由现有 Headless Platform Gateway 执行。
-
-### 7.2 Runtime 不变量
-
-- Codex 负责推理循环和上下文压缩，Kael 负责业务状态与执行边界。
-- 取消、超时、错误不自动重放写操作；相同 callId 回执幂等，参数变更失败关闭。
-- 工具输入/输出 schema 和准确 Panel/Registration/Run 绑定继续校验。
-- final-result 后拒绝后续业务工具，模型解释已记录的 proposal 决定。
-- 限制为现有 Run 总超时、输入/输出字节上限和每 turn 128 次动态工具请求；不再实施 30 条历史、20 轮/40 次模型请求裁剪。
-- 进程内复用 Codex thread；重启、缓存回收、能力或历史变化后从 Kael 历史重建，不恢复未决工具和审批。
-
-### 7.3 引擎与模型配置
-
-唯一引擎为固定版本 Codex App Server。Go `Engine` 接口只隔离协议和业务层，不提供旧引擎开关。模型配置仍来自 Core TerminalConfig，要求 Responses API；删除 Chat Completions/DeepSeek fallback。
-
-Codex 使用私有 HOME、空工作目录和无执行环境的线程。业务工具必须通过 Kael Broker；服务端本地 shell、浏览器、插件等不是 Luna 的资产能力。模型密钥仅通过子进程环境注入。
-
-`model.*` 事件带 `scope=agent_turn`，记录完整 Agent turn 而非内部单次请求；usage 为 turn 内累计增量，Luna 不将其完整耗时作为某个工具前的模型思考时间。
-
-### 7.4 关键调用时序
-
-普通对话：
-
-```text
-Luna -> bootstrap -> Conversation -> PanelSession
-     -> Message -> Run(disabled) -> Model
-     <- PanelDelivery/SSE <- DomainEvent
-```
-
-Luna 能力对话：
-
-```text
-Luna discovers Koko/Chen manifest
-  -> normalize Context + Registration
-  -> create Run(panel) and freeze snapshot
-  <- tool.call SSE to the same PanelSession
-  -> Luna local lookup -> MCP/local executor
-  -> ToolResult HTTP -> Kael -> next model turn
-```
-
-Approval 与取消：
-
-```text
-Kael persists Approval -> original Panel renders decision
-  -> Kael validates binding/digest/expiry
-  -> executor revalidates ACL/RBAC -> ToolResult
-
-Run cancel -> tool.cancel to original Panel
-  -> Luna MCP/local cancel -> terminal ToolResult
-  -> Kael converges Run to cancelled/failed
-```
-
-断线、后台与新 Panel：
+一次请求依次执行：
 
-```text
-SSE disconnect -> subscription closes; Run is not implicitly cancelled
-Panel reconnect -> verify Principal/resume token -> replay same PanelDelivery stream
-New Panel -> read Conversation/Message history -> start a new stream
-New Panel never takes over an old panel-local invocation
-```
+1. 创建或打开 Conversation，为当前客户端创建 PanelSession。
+2. 提交 Context；能力对话原子替换 Registration。
+3. 创建用户 Message，再用 Conversation、Message、Panel ID 创建 Run。
+4. Kael 固定 Context version/digest、Registry revision、工具定义、Profile 及授权快照，写入 `queued` 并通知 worker。
+5. Worker 领取 Run，创建输出 Message，由 Harness 提交模型输入。文本增量经 Service 合并后写入状态与事件。
+6. 动态工具调用经 schema、绑定、风险及审批校验后执行，结果回到同一 Harness turn。
+7. 保存最终回答、usage、结果卡片或失败说明，提交终态事件。
 
-## 8. Context 与 Capability
+同一 Conversation 同时只允许一个非终态 Run。Run 的执行态包括 `queued`、`running`、`waiting_capability`、`waiting_approval` 和 `cancelling`；终态包括 `completed`、`failed`、`cancelled`、`interrupted`。当前只接受前台执行；请求后台 Run 返回 `background_requires_durable_store`。
 
-### 8.1 Context
+Message、Run 和结果提交各有幂等校验：同一个幂等键或回执序列不能对应不同内容。用户消息可携带 `text`、`artifact` 和 `data` Parts；branch/regenerate 使用已有消息及其附件、上下文关系，不以当前页面内容悄悄替换原问题。
 
-Context 由 Luna 的语义 Adapter 从当前页面和资源会话生成，而不是上传整个前端 Store。Context 必须：
+## 3. Codex Harness
 
-- 最小化、结构化、版本化；
-- 有大小、字段、敏感级别和保留限制；
-- 明确 surface/domain；
-- 只包含模型完成任务所需的显示信息和有限快照；
-- 在 Run 开始时冻结；
-- 被当作不可信数据引用，不能覆盖 system policy。
+### 引擎与模型配置
 
-禁止进入 Context、Conversation、模型请求或普通日志的内容包括：
+Codex App Server 是唯一推理引擎，通过子进程 stdio 双向 JSON-RPC 接入，不开放 Codex 网络监听。Kael 启动时验证 `CODEX_BINARY` 可执行，版本不低于 `codex-cli 0.153.2`；这是最低版本要求。
 
-- 密码、私钥、数据库凭据；
-- Cookie、Bearer、ConnectToken；
-- 证书私密材料；
-- 无边界终端、文件或数据库内容；
-- Luna Store 的无关状态；
-- Koko/Chen executor 句柄。
+Core TerminalConfig 的 `CHAT_AI_*` 是模型配置与凭据来源。每次 Run 执行前读取配置，已开始的 turn 不热切模型。Chat AI 关闭或模型未配置不阻止 Kael 启动，但会拒绝执行 Run；Core 保存有效配置后可再次发起请求。
 
-### 8.2 Registration
+模型端点必须支持 Responses API。Harness 不提供 Chat Completions 路径，明确拒绝 DeepSeek Provider 配置；请求和流式自动重试均关闭。模型密钥只传入子进程环境，不写入命令行、配置文件或客户端。
 
-Registration 至少包含：
+`bootstrap` 返回 `agent_engine=codex`、`agent_protocol_version=1`。`model.requested` / `model.completed` 的 `scope=agent_turn` 表示完整 turn，耗时包含工具和审批等待。ModelCall 与 ModelRequestCount 记录 turn，不能解释为 Codex 内部模型请求数；usage 使用 Codex 累积计数减去本 turn 起点。
 
-- server-generated ID 和 PanelSession ID；
-- Luna 本地稳定 client key；
-- name、description、input/output schema；
-- definition version 与 digest；
-- risk、requires confirmation；
-- read-only、destructive、open-world、idempotent 等注解；
-- registry revision；
-- lease、expires time 和状态。
+### 进程隔离与工具
 
-Kael 将通过现有 Core 登录认证的 Luna 视为可信工具客户端。用户、组织和 AI 权限仍由认证入口校验；不增加 Luna 应用密钥、组件签名或 Koko—Kael 相互认证。
+每个缓存会话使用私有 HOME、CODEX_HOME 和空工作目录，不继承用户登录、插件、MCP 配置和应用 Secret。线程使用 `ephemeral=true`、`environments=[]`，禁用 shell、unified exec、Code Mode、浏览器、computer use、联网搜索、hooks、apps 和 subagents 等能力。
 
-- 工具名称不受内置 capability catalog 限制；定义、schema、注解和执行路由由 Luna 注册和维护。
-- Kael 接受 read-only、destructive、open-world、idempotent 和 final-result 声明，不按工具名或 Profile 覆盖这些注解。最终结果标记仍仅在工具成功后生效。
-- 风险由注解统一推导：read-only 为 read；默认 write；destructive 或非只读 open-world 为 dangerous。缺省注解不视为只读。
-- 显式 risk 可以提高上述风险，不能抵消相冲突的注解；非法 risk 拒绝注册。合并完成后检查 Profile 风险上限。
-- auto 模式默认在写入、高风险、open-world 或注册声明 requires_confirmation 时要求审批；声明命令策略的终端工具可以按完整调用参数识别只读命令（见下文）。always 总是审批，never 跳过 Panel 工具审批。workspace 与其他 Panel 使用同一规则，不按工具名称强制审批。service binding 的业务审批策略保持独立。
-- 未知工具使用同一套注册规则，不额外升级风险或强制审批。现有 Profile、namespace 和风险上限保留，新增助手类型不属于本次扩展。
-- 信任 Luna 不取消 schema、数量、大小、用户/组织、版本、lease、调用及审批绑定校验，也不替代执行组件的资产权限、ACL 和会话检查。注册和结果采用已认证客户端信任模型，不额外提供组件来源或结果的密码学证明。
+业务工具以 `kael_` 安全别名暴露为 dynamic tools。Kael 校验 thread、turn、Registration 与输入输出 schema，再进入业务审批和执行通道。相同 callId 的相同重投复用回执，修改参数则失败；同一 turn 内相同写操作不自动重复执行。Service 调用使用执行端解析的实际 Operation 风险，允许重复只读查询；Core 写入的去重摘要不包含 `progress`、`action` 等展示文案。成功的 final-result 工具之后拒绝后续业务工具并要求模型总结。
 
-终端命令的参数级审批：
-
-- Koko 对 SSH、Telnet 和 Kubernetes 的 shell 工具声明 `_meta["com.jumpserver/commandPolicy"] = "shell-readonly-v1"`，Luna 原样转发。通用 shell 的注册注解仍是非只读、open-world；SQL、Redis、MongoDB 和未知协议不声明 shell 策略。Kael 只对 `luna.terminal` 的 panel binding 启用该策略，与具体工具名称无关。
-- 声明规范化为 `annotations.command_policy`，随 Registration digest、Run snapshot 和 Journal 保存。显式 `requires_confirmation`、write/dangerous risk、destructive 或 final-result 声明优先，关闭参数级降级。旧注册、未知策略或不完整参数沿用原审批规则。
-- Kael 使用 shell 语法树检查完整命令。`df`、`du`、`ls`、`free`、`ps`、`cat`、`head`、`tail`、`grep` 等常见查询，以及受限的 `sort`/`uniq` 管道过滤和 `hostname` 查询，可得到调用级 `risk=read`。例如 `du -sh /var/log/* 2>/dev/null | sort -hr | head -n 20` 在 auto 模式直接执行。所有管道及 `;`、`&&`、`||` 的每一段都必须通过检查；只允许丢弃到 `/dev/null` 或 stdout/stderr 间复制的重定向。
-- 写文件重定向、执行/删除型参数、未知程序、非系统路径程序、环境赋值、变量/命令/进程替换、shell 包装、sudo 和未支持语法继续审批。此检查识别标准系统工具的命令语义，不执行任何解析结果，也不取代远端执行隔离或资产 ACL。
-- ToolCall、审批预览、派发事件和审计使用本次调用的风险；写防重使用相同分类，允许新的 callId 重新读取 `df` 等状态，相同 callId 仍仅复用原回执。Koko 执行前的权限、ACL review、租约和取消校验保持生效。
-- 上线需要同时更新 Kael 与 Koko，并重新连接终端以注册新 manifest；只有一端更新或旧 Panel 未重新注册时，继续使用保守审批规则。
+未集成的问询表单返回空答案，提示模型在普通对话中提问；未知 host request 拒绝执行。子进程 stderr 不直接进入业务错误或日志。
 
-Luna 的 manifest 更新采用原子 Registry 替换：
+### 上下文与会话复用
 
-1. 提交 base registry revision；
-2. Kael 校验全部 schema、命名空间和风险注解；
-3. 全部成功后生成新 revision、Registration ID、digest 和 lease；
-4. 任一项失败则保留上一完整 revision。
+同一用户、组织、Conversation、Panel，模型配置、Profile 指令、工具注册未变且历史仍为追加关系时，复用进程内 Codex thread，只提交新增历史和本轮 Context。历史变化、能力变更、模型配置变化或上次执行失败会使缓存失效；新线程从 Kael 的业务历史构建输入。
 
-### 8.3 精确路由
+Context 是不可信数据，不构成权限或指令。`response_language` 只接受 `zh`、`zh_hant`、`en`、`ja`、`pt_br`、`es`、`ru`、`ko`、`vi`，映射为固定语言名称后附于本轮输入。用户明确指定语言时优先遵循；字段缺失或无效时跟随最新问题，无法判断时使用英语。语言偏好覆盖工具调用前说明、进度、工具参数中的展示文案、提问及最终回答，API 描述与工具输出不改变该偏好。语言变化不改变 thread 复用签名，当前 Run 仍使用已冻结快照。
 
-Luna 本地路由必须形成：
+输入上限为 4 MiB，超限明确报错，不按固定历史条数静默裁剪；上下文压缩由 Codex 负责。同一 turn 最多处理 128 个动态工具请求。最多缓存 16 个 Panel 进程，空闲超过 5 分钟回收；容量满时优先回收空闲进程。
 
-```text
-registration_id
-  -> panel_session_id
-  -> local client key
-  -> resource session / pane / revision
-  -> executor adapter
-```
+取消或失败会关闭对应进程，不自动续跑或重放工具。Codex thread 是执行缓存，Kael 业务历史仍是权威数据；进程回收后不保留其内部推理和压缩状态。
 
-禁止使用 user ID、organization ID、tool name、页面焦点或最近活跃 Tab 代替这条绑定。
+## 4. Profile、Registration 与审批
 
-ToolCall 发出前，Kael 必须实时复验：
+### 当前 Profile
 
-1. Run 的 capability mode 允许工具；
-2. Registration 属于 Run 的 PanelSession；
-3. Registration active 且 lease 未过期；
-4. definition digest 与 Run 快照一致；
-5. Profile 允许该 namespace 和风险；
-6. Principal 与组织范围一致；
-7. Approval 状态满足策略。
-
-### 8.4 Adapter 边界
-
-对于 Koko/Chen，Luna 负责 MCP manifest、`tools/call`、cancel 和 result 与通用 Registration/ToolResult 的转换。Kael 不解析 MCP `content`、`structuredContent`、`isError` 或 `_meta`。
-
-Platform Tool 必须面向用户意图，例如资产查询、审计汇总或 UI 导航。禁止向模型暴露“任意 Method + 任意 URL”的开放工具。
-
-### 8.5 长任务
-
-浏览器不是后台 Worker。Panel 可以通过语义工具启动 Core 等权威后台 Job，并返回 job ID；Job 被服务端接管后可以在 Panel 关闭后继续。
-
-依赖 Panel 本地 executor 的长 ToolCall 仍受 PanelSession lease 约束。需要浏览器关闭后继续执行的 Platform Agent Loop，必须使用可信 Headless Provider 并先补齐分布式执行语义，不能假装 Luna 仍在线，也不能回退到已删除的 Core ChatAI Runtime。
-
-## 9. API 与事件协议
-
-### 9.1 路径与部署规则
-
-唯一权威业务根路径：
-
-```text
-/kael/api/v1
-```
-
-规则：
-
-- 不提供其它业务根路径、入口别名或按对话类型拆分的 API；
-- Kael 原生处理完整 `/kael` 前缀，开发代理和生产网关都不 rewrite；
-- canonical 路径不带尾斜杠；
-- 迁移期可以直接兼容尾斜杠，但 POST、上传和 SSE 不能依赖 Redirect；
-- 浏览器始终通过对应前端的 site-prefix helper 构造地址；
-- `/luna/...` 页面请求 `/kael/api/v1/...`；
-- `/tenant-a/luna/...` 页面请求 `/tenant-a/kael/api/v1/...`；
-- Lina 页面同样只请求 site-prefix + `/kael/api/v1/...`，禁止旧 `/api/v1/chat-ai/...`、iframe/embed 或任意外部 AI URL；
-- 禁止拼成 `/luna/kael/...` 或 `/lina/kael/...`；
-- Luna Web/Electron 对 Kael 使用唯一逻辑服务名 `kael`；
-- `JMS_KAEL_DESKTOP_URL`、`JMS_KAEL_DEV_URL` 只允许配置不含凭据和业务 path 的 origin，客户端始终追加完整 `/kael/api/v1/...`；
-- 生产环境没有专用 Kael origin 时使用当前 JumpServer `session.origin`；
-- Electron 不得回退到旧 Agent 或 Platform AI 服务端口；
-- 旧业务路径不由 Kael 复制接管，其退出规则属于迁移方案。
-
-运维端点不属于业务 API version：
-
-- `/kael/health/live`；
-- `/kael/health/ready`；
-- `/kael/health/startup`；
-- `/kael/internal/metrics`；
-- `/kael/openapi.json`。
-
-### 9.2 资源分组
-
-| 资源组 | Canonical 路径 |
-|---|---|
-| 协议发现 | `/kael/api/v1/bootstrap` |
-| Assistant/Profile | `/kael/api/v1/assistants`、`/kael/api/v1/runtime-profiles` |
-| Conversation/Message/Recovery | `/kael/api/v1/conversations`、`/kael/api/v1/conversations/{id}/messages`、`/kael/api/v1/conversations/{id}/runs`、`/kael/api/v1/conversations/{id}/approvals`、`/kael/api/v1/messages/{id}/regenerations` |
-| Artifact | `/kael/api/v1/artifacts`、`/kael/api/v1/artifacts/{id}` |
-| 服务端 STT（禁用占位） | `/kael/api/v1/transcriptions`；bootstrap `transcription=false`，固定返回 unavailable，Lina 不调用 |
-| Panel/Context/Registry | `/kael/api/v1/panel-sessions`、`/kael/api/v1/panel-sessions/{id}/context`、`/kael/api/v1/panel-sessions/{id}/registrations` |
-| Run | `/kael/api/v1/runs`、`/kael/api/v1/runs/{id}` |
-| Event | `/kael/api/v1/panel-sessions/{id}/events` |
-| ToolResult | `/kael/api/v1/tool-calls/{id}/results` |
-| Approval | `/kael/api/v1/approvals/{id}`、`/kael/api/v1/approvals/{id}/decisions` |
-| Platform 管理 | `/kael/api/v1/admin/platform-registry/refresh`、`/kael/api/v1/admin/stats?days={1..365}`、`/kael/api/v1/admin/audit/conversations`；stats 仅为服务端管理/观测接口，Lina 无 stats 面板 |
-
-完整方法和资源映射见迁移方案的“目标 API”章节。
-
-### 9.3 HTTP 与 SSE
-
-Panel 到 Kael 的命令使用 HTTP：
-
-- 创建或修改 Conversation、Message、Artifact；
-- 创建、取消或恢复 Run；
-- 创建、续租、恢复或关闭 PanelSession；
-- 更新 Context 和 Registration；
-- 回传 ToolResult；
-- 提交 Approval 决定。
-
-Kael 到 Panel 的事件使用 SSE：
-
-- Conversation、Message 和 Run 状态；
-- 文本 delta；
-- Registration 和 lease 状态；
-- ToolCall、Tool progress 和 Tool terminal result；
-- Approval required/resolved；
-- stream reset 和安全错误。
-
-SSE `data` 是原生 PanelDelivery。Lina 直接按 `delivery.type` 的 dot 事件名消费该对象，不把它重写为 `message_delta`、`message_done`、`approval_required` 等旧事件，也不维护旧字段别名 DTO。
-
-不需要为了双向通信强制 WebSocket。SSE 连接关闭只取消订阅，不等于取消 Run。
-
-### 9.4 Event 与恢复语义
-
-领域事实与 SSE 投递是两个对象：
-
-- DomainEvent 有全局唯一 event ID、aggregate、type、timestamp、schema version 和有界 payload，并与领域状态在同一 Store 事务中提交；
-- PanelDelivery 有 PanelSession ID、该 stream 内的 sequence、event ID、audience 和投影 payload；
-- Event Projector 按 PanelSession 原子分配 sequence，并在向 SSE 发布前把 PanelDelivery 提交到 Store；
-- 同一个 DomainEvent 可以产生多个 PanelDelivery，各 Panel 的 sequence 相互独立；
-- PanelDelivery 是具体 PanelSession 的进程内重放真值；Core 历史投影不保存它，PanelSession 重启后失效，新的 Panel 不能沿用旧 cursor。Terminal AI 的本地 JSONL 可保留完整运行态。
-
-PanelSession 与 Conversation 的绑定规则：
-
-- 一个 PanelSession 只绑定一个 Conversation；
-- 打开 Conversation 时创建新的 PanelSession，或用仍有效且属于同一 Principal/org 的 resume token 恢复原 PanelSession；
-- 切换 Conversation 时关闭原 PanelSession，再为目标 Conversation 创建或恢复 PanelSession；
-- 同一 Conversation 可以被同一 Principal/org 的多个 PanelSession 显式打开；
-- 组织切换必须关闭或失效原组织的 PanelSession，不能原地修改其 Principal；
-- 新 Panel 不继承旧 Panel 的 Registration、cursor 或未完成本地 invocation。
-
-事件受众：
-
-| 事件 | PanelDelivery audience |
-|---|---|
-| panel、registration、lease | 对象所属 Panel |
-| run.queued/started/waiting、message.delta、model progress | 发起 Run 的 Panel |
-| ToolCall、tool progress、完整 ToolResult/terminal detail | 原 execution Panel，禁止向其它 Panel 泄漏终端、文件或数据库结果 |
-| panel-scoped approval.required/resolved | 原 execution Panel，禁止转移 |
-| message.completed、脱敏 Run terminal、Conversation metadata | 当前仍获授权且显式打开该 Conversation 的 Panel |
-| service-scoped Approval | 已按 ADR 0001 启用；可由同一 Principal/org 决定，但只能继续原 service ToolCall 和参数 digest |
-
-交付规则：
-
-- SSE `id` 是 stream sequence 的十进制字符串，sequence 必须保持 JavaScript safe integer；
-- 传输语义为 at-least-once，客户端按 `PanelSession ID + sequence` 去重；
-- 客户端成功投影后才推进 cursor；
-- 重连支持 `Last-Event-ID` 和受控 cursor；
-- 建连时 cursor 超出保留期返回 `410` 和机器码 `cursor_expired`；
-- 已连接 stream 需要重同步时发送 `stream.reset` 后关闭连接；
-- heartbeat 使用无 ID SSE comment，不进入 DomainEvent 或 PanelDelivery sequence；
-- 未知事件类型和未知可选字段必须可忽略；
-- 代理关闭响应缓冲和缓存，并允许长连接。
-
-新 Panel 打开已有 Conversation 时，只读取 Conversation/Message 历史并建立新的 stream。旧 Run、Approval、Panel cursor 和本地 ToolCall 不跨 Kael 进程恢复，新 Panel 不能尝试接管旧 Panel 的本地 ToolCall。
-
-### 9.5 版本策略
-
-版本分为四层：
-
-1. HTTP API major version：`/kael/api/v1`；
-2. Event schema version；
-3. Runtime Profile version；
-4. Registration/Capability definition version。
-
-新增可选字段、新事件类型、新 Profile 或新 Capability 属于兼容扩展。删除字段、改变既有语义、修改状态机或游标行为属于破坏性变更。
-
-## 10. 身份、安全、Approval 与审计
-
-### 10.1 Principal
-
-Kael 只消费经过验证的 Principal，至少包括 subject、organization、authentication source 和 session/token fingerprint。
-
-- Browser 使用同源 Cookie、组织选择 Header 和 CSRF；
-- Electron 由 main process 移除 renderer 提供的敏感 Header，再注入当前 Bearer、组织、时区和 Referer；
-- Electron renderer 只能提交逻辑服务 `kael` 和 `/kael/api/v1/...` 相对路径，不能指定任意绝对 URL；
-- Electron IPC stream handle、chunk 和 subscription abort 必须绑定 `webContentsId`，不同窗口不能互相读取或关闭订阅；
-- `POST /kael/api/v1/runs/{id}/cancel` 是独立服务端命令，由 Kael 按 Principal/org/Conversation/Run 和 ExecutionBinding 授权；panel capability Run 的取消仍必须路由到原 execution Panel；
-- 组织 Header 只能选择已经获准的组织，不能自证权限；
-- 组织切换不修改既有 Principal 或 Run，必须关闭原 PanelSession，并在新组织下重新创建；
-- 每次普通请求和 SSE 重连都重新验证 Principal 对 Conversation 和 PanelSession 的所有权；
-- Kael 的 Core identity adapter 在每次请求和 SSE 重连时，使用调用方现有 Cookie 或 Bearer 查询 Core profile/permissions；不接受客户端自报 Principal，也不维护第二套身份断言协议。
-
-Panel resume token 必须绑定 Principal、organization、PanelSession 和客户端实例，短期有效、只保存 hash、不放入 URL query，并在成功恢复后轮换。
-
-身份验证方案是 Kael 业务 HTTP/SSE 开始实现前的阻塞 Gate，不是上线后再补的增强项。
-
-### 10.2 权限
-
-AI 永远不获得当前用户之外的权限：
-
-- Platform Capability 使用当前用户的 Core 权限；
-- Luna Session Capability 使用当前资源会话权限；
-- Profile 决定最大允许能力范围；
-- Registration 表示当前可发现能力；
-- Kael 在派发前复验绑定与策略；
-- Core/Koko/Chen/本地执行器在执行时做最终复验。
-
-权限撤销、Session revoke、资产授权变化或组织切换必须在执行时生效。
-
-### 10.3 Approval
-
-风险至少分为 read、write、dangerous。Approval 必须绑定：
-
-- Principal 和组织；
-- Conversation、Run 和 ToolCall；
-- 原 ExecutionBinding；panel 为 PanelSession 和 Registration，service 为可信 Provider binding；
-- tool definition revision；
-- arguments digest；
-- risk、preview、policy version 和 expires time。
-
-panel-scoped Approval：
-
-- 只在原 execution Panel 展示和决定；
-- 原 Panel 永久失效后必须过期或取消，不能转移本地 ToolCall；
-- approve、reject、expire 和 consume 均需幂等；
-- 确认不能修改参数；参数变化必须产生新的 ToolCall 和 Approval。
-
-service-scoped Approval 已按 ADR 0001 启用。它可以由同一 Principal/org、同一 Conversation 的授权 Panel 恢复展示，但决定只能继续原 service invocation，不能接管或重放旧 Panel 的本地调用。
-
-Kael Approval 只批准编排层继续调用，不能替代执行端的 ACL/RBAC、命令复核或业务审批。
-
-### 10.4 数据与凭据
-
-Kael 不得把以下内容写入领域数据、Event、日志、审计或客户端输出：
-
-- SSH、数据库、SFTP 和 ConnectToken 凭据；
-- 用户 Cookie、Bearer 或 Access Key；
-- 模型 API Key；
-- 未裁剪的敏感终端、文件、数据库内容；
-- system prompt、内部堆栈或模型思维链。
-
-Kael 使用组件签名身份从 Core TerminalConfig 读取模型凭据，只能在 Provider Adapter 的受控内存中使用，不得写入 Kael 配置、Store 或下发给 Luna。日志、Event、审计和错误响应必须按字段分类、裁剪和脱敏。
-
-### 10.5 审计
-
-每次 AI 操作必须能够关联：
-
-```text
-Principal
-  -> Conversation
-  -> Run
-  -> ModelCall
-  -> ToolCall
-  -> Approval
-  -> Registration
-  -> Executor audit reference
-  -> ToolResult
-```
-
-Kael 保存编排审计和执行摘要；Koko、Chen、Core 保存其既有执行审计。两者通过稳定 correlation ID 关联，不能重复保存完整敏感结果。
-
-## 11. Store、实例与恢复
-
-### 11.1 状态分类
-
-| 类型 | 内容 | 当前要求 |
+| Profile | Conversation kind | 能力范围 |
 |---|---|---|
-| Durable history | Conversation、用户问题、终态回答、结果卡片、关联 Artifact 元数据 | 默认以增量 Journal 写入 Core；不做周期性 snapshot |
-| Runtime state | Run、PanelSession、Context、Registration、Model/ToolCall、ToolResult、Approval、DomainEvent、PanelDelivery、审计索引 | 非 Terminal profile 仅在当前 Kael 进程内；Terminal AI 使用独立本地 JSONL |
-| Artifact state | 图片、文件和派生内容 | 被持久 Message 引用的元数据和有界提取文本进入 Core 历史投影；原始文件内容仍在 Kael 私有目录 |
-| Component identity | Core 签发的 AccessKey | 私有文件、`0600`、不进入 Store/Event/日志 |
-| Process-local state | 活动 lease/connection ownership、锁、事件唤醒、SSE connection、Provider 请求、Panel executor channel | Kael 退出后清空；持久实体在启动时收敛为安全终态 |
+| `general` | `general` | 产品问答及授权 Core Operation，使用 service binding |
+| `platform.management` | `general` | 管理员可用的 Core 管理操作，写操作审批 |
+| `platform.asset` | `general` | 资产、节点、平台等只读操作 |
+| `platform.session_audit` | `general` | 会话、命令、登录、访问、操作及工单审计只读操作 |
+| `platform.ops` | `general` | 作业、任务、组件与终端健康只读操作 |
+| `workspace` | `capability` | Luna 工作区、授权资产连接及委派终端任务 |
+| `terminal` | `capability` | 已连接资源的终端能力 |
+| `file` | `capability` | 已连接文件会话能力 |
+| `sql` | `capability` | SQL 编辑器上下文和草稿 proposal |
+| `script` | `capability` | 脚本编辑器上下文和草稿 proposal |
 
-Kael 当前不连接数据库，也不包含 ORM 或 schema migration。默认 adapter 使用组件 AccessKey 调用 Core `/api/v1/chat-ai/runtime-store/`：读取请求携带一次性 nonce 并验证覆盖 head 与全部有序结果的整页 HMAC receipt；写入使用 commit ID 幂等、请求 integrity、签名 receipt 和 `expected_revision` CAS 追加用户可见历史投影。网络/5xx 只以同一 commit ID 有限重试，最终结果不确定或 revision conflict 会 poison 本地 adapter，要求重启重放全部历史 delta。旧版完整运行态在升级首次加载后会用一次精简历史 snapshot 替换，迁移后不再周期性生成 snapshot。Terminal AI 固定写入 `data/terminal/store/runtime.jsonl`；`RUNTIME_STORE=jsonl` 显式回退仍保存完整运行态。
+Profile 发现会校验管理员标志及所需权限。`management`、`asset`、`session_audit`、`ops` 可解析为对应的 `platform.*` Profile。Profile 提供指令与能力范围，真实可执行工具仍以本次 Registration 为准。
 
-Core history record 在发送前硬限制为 8 MiB；单条问题、终态回答或最小结果异常超限时，该 Store 事务失败但 adapter 不进入 poisoned 状态，也不会把超大 record 发送给 Core/MariaDB。
+### Panel 工具
 
-### 11.2 事务与 Outbox
+Kael 接受经 Core 登录认证的客户端提交工具定义。工具名称不依赖内置目录；namespace 由 Profile 派生，风险由注解与显式声明合并，缺省注解按写操作处理。`read_only` 得到 read，`destructive` 或非只读 `open_world` 得到 dangerous；显式风险只能提高注册风险，最终校验 Profile 风险上限。
 
-- 每次领域状态转换与对应 DomainEvent/PanelDelivery 在同一个 Store 事务中提交；
-- 事务失败必须回滚该次内存快照与本次事件归档追加；通知失败不改变已经持久提交的业务事实；
-- Event Projector 按 event identity 幂等，并保存每个受众 Panel 的 Delivery；
-- PanelDelivery sequence 必须在同一 PanelSession stream 内原子分配；
-- Artifact 上传先进入隔离状态，校验成功后才能被 Message 引用；
-- Artifact 元数据可通过 `GET /kael/api/v1/artifacts/{id}` 按主体/组织所有权读取；正文读取继续使用 `/content`；
-- 删除 Conversation 时必须定义 Artifact 引用、审计和保留策略。
+注册替换携带 `base_registry_revision`。全部定义通过名称、数量、schema、注解和风险校验后，事务内替换 Registry，分配新 ID、digest、revision 和 lease；任一失败保留上一完整版本。
 
-### 11.3 幂等
+每次执行校验 Run、原 Panel、Registration ID、Registry revision、定义 digest、状态和 lease。工具只能回到原执行 Panel，不能按用户、工具名、当前焦点或最近活跃 Tab 猜测执行器。客户端注册与回执不提供额外的组件签名证明；Core/Koko/Chen 的资源权限、ACL 和会话校验仍是执行边界。
 
-幂等键至少覆盖：
+Panel 审批模式为 `auto`、`always`、`never`：auto 依据调用策略，always 每次审批，never 跳过 Panel 工具审批。声明 `shell-readonly-v1` 的终端工具可通过 shell 语法树做参数级只读判定；不支持的语法、写入或无法确认的命令仍按原策略处理，细节见[命令执行生命周期](./command-execution-lifecycle.md)。
 
-- Message 创建；
-- Run 创建与 cancel；
-- ToolResult sequence；
-- Approval decision；
-- Registry 原子替换；
-- 外部非幂等 invocation ID。
+审批绑定原用户、组织、Run、ToolCall、Registration 版本及参数 digest，决定和实际派发分别复验，派发时消费批准状态。支持为声明 shell 命令策略的注册记住批准，复用范围限定为同一 Panel、Registration、定义版本和参数摘要。审批决定、模式变化和执行结果进入审计；拒绝审批作为工具反馈交给 Harness，不代表已执行或必然终止整个 Run。
 
-相同键和相同 payload 返回同一结果；相同键但 payload 冲突必须拒绝。幂等记录的 scope、TTL 和保留期需在 API 契约中明确。
+### Platform Gateway
 
-### 11.4 故障恢复
+Gateway 通过组件身份加载 Core OpenAPI，按内容 hash 版本化，缓存 TTL 默认 1 小时并最多保留四个版本。Run 固定自己的注册版本；模型通过搜索取得候选 Operation，再提交 operation ID 及 path/query/body 参数。
 
-| 故障 | 收敛行为 |
+Method 和 URL 由可信 Registry 构建。默认允许 `GET/POST/PUT/PATCH`，`DELETE` 需配置显式启用。`general` 使用源码内固定 Operation 范围，asset/audit/ops 进一步收窄，management 为管理员提供较宽范围；Kael 不读取 Core 自定义 Operation allowlist 配置。
+
+搜索和调用使用相同权限筛选：读取 `x-jms-required-permissions`、`x-jms-permission-dynamic`，缺失、非法或 dynamic 元数据均拒绝，Principal 必须具备全部静态权限。Run 保留创建时权限快照用于一致选择，Core 对用户凭据认证的业务请求仍执行实时 RBAC。
+
+Gateway 解析引用、移除请求 schema 的 `readOnly` 字段并规范化 required/nullable，验证参数及 query 序列化，拒绝敏感路径与字段。参数错误可作为结构化结果返回模型修正。
+
+业务请求沿用发起 Run 的用户 Cookie（或已有 Authorization），Cookie 写请求同时携带 CSRF token；组织头来自已验证的 Principal。凭据只按 Run 保存在当前进程内存中，不进入 Journal、工具参数、模型输入或审计；创建、重新生成及显式恢复 Run 时从已认证请求绑定，运行结束、取消或服务关闭后清理。Gateway 不再需要平台委托共享密钥，Core 使用现有用户认证、CSRF 和 RBAC 校验。
+
+Service 写操作必须经过独立 Approval，不受 Panel 的 never 模式豁免；执行前重新校验请求和原审批绑定。HTTP 默认超时 15 秒、响应上限 1 MiB，结果限长、脱敏后写入 ToolResult、结果卡片及审计。凭据缺失、CSRF 失败、连接失败与超时返回独立错误码，并记录脱敏诊断。Gateway 不继承进程代理、不跟随重定向，支持私有 CA 与客户端证书。
+
+## 5. HTTP 与事件协议
+
+唯一业务根路径为 `/kael/api/v1`。Kael 原生处理 `/kael` 前缀，canonical 路径不带尾斜杠，不启用路径纠正或尾斜杠重定向。浏览器通过同源代理访问，代理保留该前缀。
+
+下表路径均相对于 `/kael/api/v1`；完整路由和请求校验见 [server.go](../internal/api/server.go)。
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/bootstrap`、`/assistants`、`/runtime-profiles` | 协议、功能、限制和可用 Profile |
+| GET / POST | `/conversations` | 列表、创建 |
+| GET / PATCH / DELETE | `/conversations/{id}` | 详情、修改、软删除 |
+| GET / POST | `/conversations/{id}/messages` | 历史、创建用户消息 |
+| GET | `/conversations/{id}/runs`、`/conversations/{id}/approvals` | 运行与审批记录 |
+| POST | `/conversations/{id}/branches`、`/messages/{id}/regenerations` | 分支、重新生成 |
+| POST | `/artifacts` | 上传 |
+| GET / DELETE | `/artifacts/{id}` | 元数据、删除 |
+| GET | `/artifacts/{id}/content` | 鉴权读取原始内容 |
+| POST | `/panel-sessions` | 创建 Panel |
+| POST | `/panel-sessions/{id}/heartbeat`、`/panel-sessions/{id}/resume` | 续租、恢复原 Panel |
+| PATCH | `/panel-sessions/{id}/approval-mode` | 更新审批模式 |
+| DELETE | `/panel-sessions/{id}` | 关闭 Panel |
+| PUT | `/panel-sessions/{id}/context`、`/panel-sessions/{id}/registrations` | 版本化上下文、原子替换工具 |
+| GET | `/panel-sessions/{id}/events` | SSE 或 `once=true` 单次读取 |
+| DELETE | `/registrations/{id}` | 撤销能力 |
+| POST | `/runs` | 创建 Run |
+| GET | `/runs/{id}` | 运行详情 |
+| POST | `/runs/{id}/cancel`、`/runs/{id}/resume` | 取消、受限恢复 |
+| POST | `/tool-calls/{id}/results` | 提交工具回执 |
+| GET | `/approvals/{id}` | 审批详情 |
+| POST | `/approvals/{id}/decisions` | 批准或拒绝 |
+| POST | `/admin/platform-registry/refresh` | 刷新 Registry |
+| GET | `/admin/stats`、`/admin/audit/conversations`、`/admin/audit/conversations/{id}` | 管理统计和脱敏会话审计 |
+| POST | `/transcriptions` | 服务端语音转写的禁用占位，返回 unavailable |
+
+HTTP 命令与事件订阅分离，创建 Message/Run 不直接建立响应流。JSON 请求拒绝未知字段、多个 JSON 值和超限内容。错误返回安全 code/detail 与 retryable，不把内部堆栈交给客户端。
+
+DomainEvent 与状态在同一 Store 事务中提交；Event Projector 为指定 Panel 分配独立递增 sequence，生成 PanelDelivery，事务成功后 Bus 才通知订阅者。工具、完整结果、文本增量和审批投递给发起 Panel；可共享的终态消息和脱敏 Run 状态投影给显式打开同一 Conversation 的有效 Panel。
+
+SSE 的 `data` 是完整 PanelDelivery，`event` 为 `delivery.type` 的 dot 名称，`id` 为该 Panel 的十进制 sequence。主要事件包括 `message.delta`、`message.completed`、`run.*`、`model.*`、`tool.call`、`tool.progress`、`tool.completed`、`tool.failed`、`tool.cancel`、`approval.required`、`approval.resolved`。
+
+重连通过 `after` 或 `Last-Event-ID` 续传；同时传入时必须一致。客户端按 Panel ID 和 sequence 去重，不能将 Conversation 的 DomainEvent seq 当作 SSE cursor。建连时 cursor 过期返回 `410 cursor_expired`；已连接流遇到读取失败或 cursor 失效会关闭，由客户端重新查询状态。heartbeat 每 15 秒发送无 ID 的 SSE comment。
+
+SSE 断开只结束订阅，取消 Run 必须显式调用 cancel；Panel 关闭、租约和工具可用性另行决定执行状态。Delivery 默认保留 24 小时，新 Panel 从自己的序列开始。代理需关闭响应缓冲和缓存，并允许长连接。
+
+## 6. 持久化与恢复
+
+### 固定存储路由
+
+Service 依赖 `ports.Store` / `ports.Tx`，生产装配使用带 split persistence 的 Memory Store。存储由 Conversation 的 Profile 决定，不提供部署模式切换：
+
+| 数据 | 存储位置与恢复范围 |
 |---|---|
-| SSE 断开 | Run 保持自身语义；客户端按 cursor 重连 |
-| Panel 暂时断开 | 纯模型 Run 可继续；Panel capability Run 进入等待 |
-| Panel lease 过期 | Registration 不可用；不得转移到其它 Tab |
-| Model 请求中断 | 按 Provider 能力恢复，否则 Run 标记 interrupted/failed |
-| ToolResult 丢失且调用幂等 | 使用原 invocation ID 查询或安全恢复 |
-| ToolResult 丢失且调用非幂等 | 标记 unknown，禁止自动重放 |
-| Kael 实例退出 | Conversation/Message 历史保留；非 Terminal 活动 Run 随进程丢弃，Panel/Registration/Approval 失效，工具不自动重放 |
-| Event 投影或发布失败 | 已提交 Delivery 可在原 PanelSession 有效期内重发，客户端去重 |
-| Store 不可用 | 不产生未提交到 Store 的成功 Event |
+| 非 `terminal` Profile 的用户可见历史 | Core Runtime Journal；保存已有用户消息的 Conversation、用户 Message、终态 Assistant Message、结果卡片和关联 Artifact 元数据 |
+| 非 `terminal` 的 Run、Panel、Context、Registration、Model/Tool、Approval、Event/Delivery、运行审计 | 当前进程内；不随 Core 历史恢复 |
+| `terminal` Profile 的完整状态 | `data/terminal/store/runtime.jsonl`，含消息、运行、事件、审批和审计 |
+| Terminal 可读领域事件 | `data/terminal/events/<conversation-id>.jsonl`，按 Conversation seq 归档 |
+| Artifact 原始字节 | `data/artifacts` 私有目录；不上传 Core Journal |
+| 组件 AccessKey | `data/keys/.access_key` |
+| Codex 执行缓存 | `data/harness/instance-*`，正常关闭时删除本实例目录 |
 
-### 11.5 实例约束
+空 Conversation、未关联消息的 Artifact 和流式 Assistant 内容不进入 Core 历史投影。终态 Assistant 的正文、失败摘要、结果卡片一次提交；纯运行态变更只提交进程内状态。更换节点后恢复附件原文仍需复用 Artifact 卷。
 
-- 单进程内 Worker 通过 claim/lease 保证同一 Run 只有一个推进者；
-- PanelSession connection 有唯一 owner，ToolCall 只路由到该 owner；
-- 多个 Kael 实例可以读取同一 Core Journal，但当前内存状态不会在实例间实时同步；CAS 只拒绝覆盖，不负责冲突重载或 Run 调度；
-- Core 不生成周期性 snapshot，历史 delta 数量和新实例启动重放时间会持续增长；单个 delta 超限仍会失败；
-- 当前生产入口必须设置 `replicas=1`，使用 `Recreate` 或严格的先停旧实例、fencing 后再启动新实例流程；实例粘性不能代替单 writer，开发、预发和生产不得让不同 Kael 同时写同一 Core `default` store；
-- 滚动或故障切换会丢弃非 Terminal 活动执行，新实例只从 Core Journal 恢复 Conversation/Message 历史；Artifact 原始字节仍需重新挂载或迁移原 `data/artifacts` 持久卷；
-- 具备分布式 claim、事件唤醒和准确 Panel 路由前，禁止宣称无状态横向扩容、跨实例 Panel 恢复或后台执行。
+### Core Journal
 
-## 12. Platform AI
+组件 AccessKey 签名访问 `/api/v1/chat-ai/runtime-store/`。Core 保存 opaque journalRecord，含版本、时间、base64 payload 和 SHA-256 checksum；Kael 解析其中的 Go gob snapshot/delta。
 
-### 12.1 目标范围
+加载使用 `after`、`limit` 和一次性 nonce 分页，验证整页 HMAC receipt、记录顺序与 revision 后重放。提交绑定 `commit_id`、`expected_revision`、snapshot 标志、record 和 HMAC integrity；Core 按 commit ID 幂等，以 revision CAS 追加，Kael 校验返回的 revision、commit ID 和 receipt。
 
-Platform AI 纳入 Kael，而不是只迁移 Luna 的文本聊天子集。当前 Lina/Kael 产品基线包括：
+网络错误和 5xx 最多尝试三次，每次使用同一提交请求。结果仍不确定、回执校验失败或 revision 冲突时，adapter 标记不可用，readiness 与后续写失败，需要重启并从 Journal 重放，不能猜测提交结果。单条历史 record 上限 8 MiB，超过上限直接拒绝，不使 adapter 进入不可用状态。
 
-- Conversation、Message、Artifact 和历史；
-- 前台 stream、cancel 和恢复；
-- branch、regenerate；
-- Approval、result card/activity；
-- quota、cleanup、服务端 stats API 和脱敏 audit；
-- general、management、asset、session_audit、ops Assistant/Profile。
+正常运行持续追加历史 delta，不周期性生成 snapshot 或清除早期记录，启动重放开销随历史增长。载入包含完整运行态的旧版 Kael Journal 时，现有加载代码会分离 Terminal 数据并写入精简历史 snapshot；该路径不导入旧 Platform ORM 或 Koko 历史。
 
-Lina 未指定 Profile 时使用 `general`，其语义是旧统一 JumpServer Assistant：产品问答加与旧源码默认 allowlist 等价的编译期固定范围内的授权 Core 搜索/调用。Kael 不读取旧 Chat AI operation IDs、paths/tags 或 method policies 的部署自定义配置，生产切流必须先比较并显式处置差异。`management` 仍是管理员专用的更宽静态权限范围；asset、session_audit、ops 保持各自更窄范围。Platform Gateway 默认且必须启用，业务请求直接沿用用户凭据，无需配置共享密钥；关闭 Gateway 或 Registry 初始化失败时 Kael 启动失败。
+所有 Kael component account 使用同一个 `default` store，当前只支持一个活动写入者。CAS 提供冲突检测，不提供多实例状态同步或分布式 Run ownership。Core 故障时普通历史不会自动改写本地。
 
-旧 Lina 曾包含 iframe/embed、background、Web Search、服务端 STT 和 stats 面板；这些兼容面已从当前 UI、状态和请求层删除，不是本期必须恢复的产品能力。Kael bootstrap 继续把 background、Web Search、服务端 STT 和通知标记为不可用，`/transcriptions` 仅为固定 unavailable 的占位端点。浏览器原生 `SpeechRecognition` 保留在 Lina，它既不上传音频也不经过 Kael。旧文档中的 Scheduled Report 没有对应实现，同样不属于迁移基线。
+Core Journal 无按 user/org 的物理 purge、级联删除或 retention。Conversation DELETE 是软删除，相关 Message/Artifact 历史并未因此物理清除。
 
-### 12.2 Platform Tool
+### Terminal JSONL 与重启
 
-Platform Capability 应被设计成少量语义工具，而不是把全部 REST endpoint 机械转换为模型工具。每项能力必须明确：
+Terminal Journal 为带版本、checksum 的事务记录，启动时仅截断末尾不完整记录，按阈值原子压缩快照。状态持久化成功后才对进程内读者和订阅者可见。
 
-- 用户意图和适用 Profile；
-- input/output schema；
-- read/write/dangerous 风险；
-- 是否需要 Approval；
-- 分页、失败和 result card 语义；
-- 当前用户权限和 Core 二次 RBAC；
-- 审计摘要与敏感字段策略。
+重启恢复 Terminal 历史后，未完成 Run 收敛为 `interrupted/process_restarted`，相关未完成消息和工具取消，未决 Approval 过期，Panel/Registration 过期。客户端必须建立新的执行绑定；持久化记录不等于恢复浏览器连接。
 
-现有 `management` 的动态 OpenAPI 是必须明确处置的迁移能力。当前只由隔离的 Headless Platform Gateway 承接；Gateway 仍必须以 operation ID、可信 Method/URL 构造、allowlist、schema、敏感路径和二次 RBAC 限制模型，不能退化为任意 HTTP 工具。已删除的 Core ChatAI Runtime 不是回退 Provider。
+`Run resume` 仅允许受限的 interrupted Run。已经开始模型执行或产生 ToolCall 的运行返回 `execution_rebind_required`，Panel 能力还需原绑定有效；不会自动重新执行结果未知的操作。
 
-### 12.3 完整迁移的硬约束
+Terminal 本地历史默认保留 7 天、容量上限 1 GiB、磁盘最低余量 1 GiB。启动及每小时清理过期历史；容量达到 90% 或余量不足时，每分钟最多淘汰 100 个最旧非活跃会话，目标降至 80%，跳过活动 Run 和有效 Panel。
 
-以下三项不能同时无条件成立：
+配额统计 `data/terminal/store/` 与 `events/`，包括临时快照文件，不含 Artifact 原文和日志。写入前检查追加、快照空间和磁盘余量，新请求额外预留配额的 10%（最多 64 MiB）给在途执行；容量预检失败返回可重试的 `storage_capacity_exceeded`，实际 I/O 失败则关闭后续写入。清理先提交保留状态的快照，再删除对应事件归档。
 
-1. Kael Runtime core 不连接 Core 业务 API；
-2. 原始迁移阶段只修改 Luna 和 Kael；
-3. 当前 Platform AI 的前台、后台、持久 Approval、动态 OpenAPI、旧数据和通知一次性全部等价迁移。
+## 7. 身份、配置与运行限制
 
-仅 Luna 在线 Adapter 无法在浏览器关闭后继续 Core Tool、处理持久 Approval 或执行后台 Agent Loop。
+### 身份和部署入口
 
-长期推荐边界是：Runtime core 保持业务无关，Platform Capability 由 Lina 或独立可信 Gateway 提供。本期已经在 Kael 仓库增加隔离的 Headless Platform Gateway；该过渡实现必须：
+业务请求要求 `X-JMS-ORG`。Kael 使用请求 Cookie/Bearer 向 Core 的 profile 与 permissions 接口验证用户，每次请求重新取得权限；除 superuser 外要求 `chat_ai.use_chatai`。带 Authorization 时仅使用该头认证，不回退到 Cookie；鉴权请求不跟随重定向。会话及关联资源按用户、组织校验所有权，管理接口另行校验管理员权限。
 
-- 使用独立进程或清晰的 Adapter composition root；
-- 不被 Runtime domain/application 包导入；
-- 只通过通用 Capability Broker 与 Runtime 交互；
-- 使用短期、请求绑定、防重放的委托和 mTLS；
-- 长期可承担后台 Tool、持久 Approval、动态 Registry 和执行审计；当前按 ADR 0004/0006 只启用前台执行，用户可见历史写入 Core-backed Journal，运行态和活动能力仍为进程绑定；
-- 在未来 Lina/Core Gateway 就绪后可独立移除。
+Origin 校验默认关闭；只有 `ALLOWED_ORIGINS` 包含非空值时启用，允许精确列表或当前同源 Origin，不发送 CORS 响应头。Cookie 写请求另行校验 CSRF。网关终止 HTTPS 时可配置外部 Origin；`TRUST_FORWARDED_HEADERS` 默认关闭，仅在可信网关覆盖 forwarded headers 且 Kael 端口不直接暴露时使用。
 
-ADR 0001 已将领域模型扩展为可承载 Headless Gateway 的通用 CapabilityProvider/ExecutionBinding：
+Kael 不直接连接业务数据库。首次通过 BootstrapToken 注册 `kael` 组件，后续使用私有 AccessKey 文件。Platform Gateway 是必需依赖：`PLATFORM_GATEWAY_ENABLED` 必须为 true，组件签名必须可访问 Core OpenAPI；不再配置 `PLATFORM_DELEGATION_KEY` 等委托参数。Registry 初始化失败会阻止监听端口。
 
-- binding kind 至少区分 panel 与 service；
-- Registration 绑定具体 execution binding，而不是把 service 伪装成 PanelSession；
-- Run 固定 binding、definition 和 policy 快照；
-- service capability 使用独立 broker/worker transport，不通过 Panel SSE 派发；
-- service Registration 有自己的身份、权限范围、lease、connection ownership 和审计；
-- `capability_mode=service` 与 service-scoped Approval 同时启用，不能只增加一个枚举绕过安全模型。
+### 配置与启动
 
-本期已通过 [ADR 0001](./adr/0001-headless-platform-gateway.md) 选择过渡 Gateway，并引入通用 CapabilityProvider/ExecutionBinding。Core 的旧 ChatAI Runtime/API/models/worker 已删除，只保留 Runtime Store 及组件身份、配置和委托校验边界；具体状态以 [迁移实施状态](./MIGRATION_STATUS.md) 为准。
+配置使用平铺大写 YAML 键及环境变量；从当前目录依次选择 `config.yml`、`config.yaml`、`.config.yml`、`.config.yaml`，也可通过 `-f` 或 `KAEL_CONFIG_FILE` 指定。模型凭据由 Core 管理。配置清单和默认值见 [config_example.yml](../config_example.yml)，有效校验见 [config.go](../internal/config/config.go)。
 
-### 12.4 旧开发数据
+默认监听 `0.0.0.0:8083`；`cluster_id` 为 `kael`，`instance_id` 使用组件 NAME。数据路径从进程工作目录的 `data` 派生。日志同时写 stdout 与 `data/logs/kael.log`，按 50 MB 轮转，保留 7 份、7 天。
 
-Chat AI 尚未上线，不保留旧开发分支的 Conversation、Message、附件、Run、Approval 和 Audit 数据。当前 Core 应用已删除读取或推进这些对象的旧 Runtime、models、API、worker 和对应 migration，也没有迁移、只读或兼容入口。用过旧开发分支的环境必须在部署前删除旧 AI 表或重建开发数据库；Runtime 的唯一历史权威是新的 Core-backed Journal。
+### 已实现限制与观测
 
-## 13. Koko agentd 迁移边界
-
-迁入 Kael 的是通用 Runtime 能力：
-
-- Agent Loop、Run queue、预算和超时；
-- Codex Harness、Responses 配置和结构化工具；
-- schema、argument repair 和工具名归一化；
-- ToolResult、Approval、cancel 和幂等；
-- Event cursor、历史、恢复和限制；
-- token、时延、错误和审计事件。
-
-不迁入 Kael 的是：
-
-- Koko/Chen 的 MCP executor；
-- Terminal、File 以及 DB context/schema/validate 的具体会话协议；
-- SQL proposal 和 Script proposal 的 Luna 编辑器 apply 逻辑；
-- SSH、数据库、SFTP 连接和凭据；
-- Koko/Chen 的 ACL、命令复核和执行审计。
-
-切流后，新 Luna 的 Agent Runtime 请求只能进入 `/kael/api/v1`，同一 Message/Run 不得同时由旧 agentd 与 Kael 执行。旧 agentd 的物理删除和启动开关调整属于允许修改 Koko 后的独立阶段。
-
-## 14. Kael 内部模块
-
-推荐的逻辑模块：
-
-| 模块 | 职责 |
+| 项目 | 当前值 |
 |---|---|
-| bootstrap | 配置、依赖装配、生命周期和优雅退出 |
-| api | `/kael/api/v1`、SSE、DTO、错误和协议投影 |
-| identity | Principal、组织和入口认证适配 |
-| conversation | Conversation、Message、Artifact 引用 |
-| run | Run Supervisor、状态机、claim、cancel 和恢复 |
-| runtime | Context Builder、Agent Loop 和预算 |
-| model | Provider interface、能力协商、路由和错误分类 |
-| capability | Registration、lease、ToolCall 和 ToolResult |
-| policy | Profile、Prompt、risk 和 Approval policy |
-| store | 通用 Store/Tx port、事务、idempotency 和可替换 adapter |
-| event | 持久 DomainEvent log、SSE projection 和 PanelSession replay |
-| audit | 审计关联、摘要和脱敏 |
-| observability | structured log、metric 和 tracing |
+| Worker / 排队 Run 上限 | 4 / 64 |
+| 完整 Run 超时 | 30 分钟 |
+| Panel 工具回执超时 | 默认 45 秒，`TOOL_RESULT_TIMEOUT` 可配置为 1 秒至 10 分钟 |
+| Context / Harness 输入 | 4 MiB |
+| 单条消息 / 单个工具 schema | 各 64 KiB |
+| Registration / 单 turn 工具请求 | 64 / 128 |
+| 工具参数 / 结果 / Event payload | 128 KiB / 128 KiB / 256 KiB |
+| 单 Artifact / 提取文本 / 图片像素 | 20 MiB / 40 KiB / 4000 万像素 |
+| Panel / Registration lease | 默认 2 分钟 |
+| Approval / Delivery 保留 | 默认 10 分钟 / 24 小时 |
 
-依赖方向：
+`bootstrap.features` 启用 Conversation、Panel/service capability、Platform Gateway、Artifact、branch、regenerate 与 SSE replay；background、transcription、web_search、notifications 为 false。
 
-```text
-transport / provider / storage adapters
-                    |
-                    v
-             application services
-                    |
-                    v
-               domain core
+运维端点为 `/kael/health/live`、`/kael/health/startup`、`/kael/health/ready`、`/kael/internal/metrics` 和 `/kael/openapi.json`。ready 在 2 秒内检查 Store、签名 Core head 与本地 Terminal Journal，不探测模型端点或 worker 工作情况。
 
-domain core -> ports only
-adapters implement ports
-```
-
-domain 和 application 不得导入 Gin、具体模型 SDK、数据库驱动、MCP 或 JumpServer 产品包。Web framework、模型 SDK、数据库产品和日志库属于 Adapter/部署选择，不是领域架构。
-
-Kael 当前将 API、Worker 和 Core-backed Store adapter 部署在同一二进制中。Core 只保存 Journal，不提供分布式调度；需要独立扩缩容前，仍必须实现跨实例 ownership、事件唤醒和路由。
-
-## 15. 部署视图
-
-```text
-Same-origin Gateway
-        |
-        +-- /kael/api/v1 --------> Kael component instance
-        |                               |
-        |                               +--> Run workers
-        |                               +--> Core TerminalConfig --> Model providers
-        |                               +--> Core Runtime Store API
-        |                               +--> Local Artifact storage
-        |                               +--> Process-local lease / event wake-up
-        |
-        +-- /kael/health/* ------> Kael probes
-        +-- /kael/internal/* ----> Restricted operations network
-
-Optional transitional deployment:
-
-Kael Capability Broker <----> Headless Platform Gateway <----> Core
-
-Kael component -------- registration / AccessKey / TerminalConfig / heartbeat / Runtime Journal --------> Core
-```
-
-部署要求：
-
-- Gateway 保留完整 `/kael` 前缀；
-- SSE 关闭 buffering/cache，并设置足够的 read timeout；
-- readiness 检查已初始化、未关闭且未 poisoned 的进程内 Runtime Store 及其持久化 adapter；Core 模式在 2 秒超时内执行带签名的轻量 Runtime Store 探测并校验 receipt 与 revision，JSONL 模式检查 journal 可用性；它不检查 Worker 或模型端点；
-- liveness 不依赖模型、Core 或其它外部系统，避免重启风暴；
-- 首次 `SIGINT`/`SIGTERM` 必须取消 HTTP request context 和 SSE、停止 heartbeat/worker 后再执行有界 Shutdown；信号订阅随即释放，第二次信号保留系统默认的强制退出语义；
-- `/kael/internal/metrics` 没有业务用户认证，必须由反向代理或网络 ACL 只开放给监控网络；部署方根据自身容量和 SLO 定义指标阈值及回滚条件；
-- Core-backed Store 使用 `replicas=1` 与 `Recreate`/先停后启 fencing；禁止自动切换到没有同一历史的 JSONL，也禁止不同环境共同写全局 `default` store；
-- `data/keys` 与 `data/artifacts` 使用服务账号私有持久卷；节点替换时必须重新挂载或迁移 Artifact 卷；
-- API、Worker 和可选 Gateway 使用独立最小权限 Secret；
-- 外部连接使用 TLS；过渡 Gateway 到 Core 使用明确的 mTLS/委托策略。
-
-## 16. 可观测性与运行限制
-
-每条请求和后台执行至少携带：
-
-- trace ID；
-- Principal/organization 的不可逆审计标识；
-- Conversation、PanelSession、Run、ToolCall、Approval ID；
-- Profile、model、provider 和版本；
-- registry/context revision；
-- latency、token、retry/fallback 和 terminal status。
-
-核心指标至少包括：
-
-- Run queue、状态、成功率和端到端延迟；
-- 首 token 延迟、模型延迟、token 和 Provider 错误；
-- ToolCall 等待、失败、取消、unknown 和 Approval 转化；
-- Panel lease、重连、cursor replay 和过期；
-- Outbox backlog、Worker claim、僵尸 Run 和恢复；
-- 用户/组织配额和限流。
-
-日志和 trace 不记录凭据、完整 Context、完整 ToolResult、模型思维链或未脱敏业务响应。
-
-## 17. 兼容与演进
-
-- 新 Provider 通过 Model Adapter 接入，不改变 Run。
-- 新产品能力通过 Profile、Context Adapter 和 Registration 接入，不增加新的业务 API 根路径。
-- Lina 未来接管 Platform Capability 时，只替换 Provider，不迁移 Runtime 状态机。
-- 普通对话未来显式连接能力时，只影响新 Run 快照，不能给既有 Run 隐式扩权。
-- Profile、Event 和 Registration definition 分别版本化。
-- 客户端忽略未知可选字段和未知事件，不根据中文文案判断状态。
-- 破坏资源语义、状态机或 cursor 行为时才升级 HTTP major version。
-- Core 的旧 `/api/v1/chat-ai/*` Runtime 路径已经下线，唯一例外是仅供 Kael 组件使用的 `/api/v1/chat-ai/runtime-store/`。
-- Koko agentd 删除、Lina/Kael 原生链路验证、Core Gateway 和遗留数据清理分别设置发布 Gate。
-- 回滚前先停止创建新 Kael Run，排空或取消在途 Run/Approval，再成对恢复相互匹配的 Lina/Luna/Kael 构建；不能恢复到已删除的 Core ChatAI Runtime，Core Journal 与 Artifact 持久卷必须保留，切换到 JSONL 不等于数据回滚。
-
-未来可以抽取 Luna/Lina 共用的 AI Client SDK，统一 PanelSession、Conversation、SSE、Context、Registration、ToolCall、Approval 和 Event projection；各产品仍保留自己的 Context Adapter、Capability Adapter 和 Renderer。
-
-## 18. 非目标
-
-本文不要求：
-
-- 在 Kael 复制 Koko agentd 的产品耦合代码；
-- 在 Kael 执行 Terminal、File、SQL、Script 或 UI 操作；
-- 把 MCP 作为 Kael Runtime 协议；
-- 将任意 REST Method/Path 暴露给模型；
-- 本期修改或删除 Koko、Chen、Magnus 或 Lion，或让 Lina/Core 承担 Runtime 状态机；Core 的 AI 运行时边界只保留 Runtime Store 与既有组件配置/身份/委托支持；
-- 首期合并 Luna 现有两套 Panel Controller 和全部 UI 数据结构；
-- 为每个 DTO、路由、事件或 Provider 复制大量测试；
-- 把目标架构描述成当前已经完成的实现。
-
-## 19. 决策状态
-
-以下边界已由 [ADR 0001](./adr/0001-headless-platform-gateway.md)、[ADR 0002](./adr/0002-core-component-and-store-port.md)、[ADR 0003](./adr/0003-flat-config-and-ablation.md)、[ADR 0004](./adr/0004-jsonl-store-and-event-protocol.md)、[ADR 0006](./adr/0006-core-backed-runtime-journal.md) 和 [迁移实施状态](./MIGRATION_STATUS.md) 冻结；其中标为发布 Gate 的部署选择必须在切流前完成：
-
-1. Platform AI 当前使用过渡 Headless Platform Gateway 承接前台能力；长期仍回到业务无关 Runtime 与正式 Platform Provider 边界；
-2. 动态 Core OpenAPI 的前台承接方；后台 Core Tool 和跨重启 Approval 当前禁用；
-3. 旧 Platform models/API/worker 已删除且不提供兼容；用过旧开发分支的环境须在发布前清理旧 AI 表/数据或重建开发库；
-4. Browser Cookie 和 Electron Bearer 统一由 Kael 的 Core identity adapter 实时校验并转换为 Principal；
-5. Model 配置和 API Key 来自 Core TerminalConfig，组件 AccessKey 来自 Terminal registration；
-6. 当前默认使用 Core-backed Journal 保存用户问题、终态回答和最小结果，不读取 Koko 历史 event，也不自动导入或投影旧 Platform ORM 数据；Terminal AI 使用独立本地 JSONL，Artifact 原始字节继续使用私有目录；
-7. 当前使用单 writer 与 session stickiness；历史可由新实例从 Core Journal 重放，但不支持活动执行、Panel 能力或 Artifact 原始字节的自动跨实例恢复；
-8. Event/cursor、Artifact、审计、幂等键和历史的保留期限；
-9. worker、lease、retention、Run timeout 和 payload 限制使用 Runtime 安全默认值，不扩大部署配置面；
-10. 生产网关、CSRF、Origin、SSE、探针和 metrics 的安全边界；具体网络 ACL 由部署方落实；
-11. 灰度维度、观测阈值和构建级回滚条件必须由部署方在切流前定义，仓库不提供臆造的统一阈值；已删除的 Core ChatAI Runtime 不属于回滚组件。
-
-已冻结、不再作为开放项的路径决策是：所有 Kael AI 业务接口统一使用 `/kael/api/v1`。
-
-## 20. 架构守卫
-
-实现和评审必须持续检查：
-
-- Runtime core 没有产品或 MCP 依赖；
-- Kael 中不存在具体 Session Tool executor；
-- 所有业务 Handler 都位于 `/kael/api/v1`；
-- Conversation 和 Run 只有一个权威状态模型；DomainEvent 与 PanelDelivery 只有一条统一投影链；
-- Run 快照不可被后续 Panel 状态静默修改；
-- ToolCall 只能到原 Registration/ExecutionBinding；panel-scoped 调用只能到原 Panel；
-- Context、客户端 risk、user/org 和工具集合都不被当作可信授权；
-- 状态与 Outbox 原子提交；
-- 非幂等 unknown 不自动重放；
-- Browser/Electron 身份和跨窗口流严格隔离；
-- Luna/Lina 对旧 Runtime 的业务流量为零；Lina 不存在旧 DTO/SSE adapter、iframe/embed、background、Web Search 或服务端 STT 请求；
-- AI 相关架构或协议变化同步更新 `docs`。
-
-测试只覆盖会破坏以上不变量的高风险路径。具体八类跨层测试主题见迁移方案，不按文件或字段机械扩充测试代码。
+metrics 包含 `kael_runtime_store_snapshot_disabled`、`kael_runtime_store_revision`、`kael_runtime_store_records_since_snapshot`。运维端点不经过业务用户认证，部署通过代理或网络访问控制限制暴露。统计与运行审计受上述持久化范围约束，不能作为跨重启完整运行轨迹。

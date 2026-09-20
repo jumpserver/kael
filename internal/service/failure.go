@@ -11,6 +11,9 @@ import (
 )
 
 func publicFailure(err error) (code, detail, stage, next string) {
+	if errors.Is(err, ports.ErrCapacity) {
+		return "storage_capacity_exceeded", "Local AI history storage is full or disk space is low. Free space before retrying.", "preparing", "contact_admin"
+	}
 	code, detail, next = "run_failed", "The request stopped before completion. Review the completed steps before continuing.", "contact_admin"
 	var providerErr *model.ProviderError
 	if errors.As(err, &providerErr) {

@@ -22,15 +22,20 @@ const (
 	coreStoreMaxRecordBytes = 8 * 1024 * 1024
 )
 
+type coreRuntimeStoreClient interface {
+	AppendRuntimeStore(string, uint64, bool, string) (uint64, error)
+	LoadRuntimeStoreContext(context.Context, uint64, int) (component.RuntimeStorePage, error)
+}
+
 type corePersistence struct {
 	mu                   sync.Mutex
-	client               *component.Client
+	client               coreRuntimeStoreClient
 	revision             uint64
 	recordsSinceSnapshot int
 	poisoned             error
 }
 
-func NewCore(client *component.Client, runtimeRoot string) (*Memory, error) {
+func NewCore(client *component.Client, runtimeRoot string, options ...RetentionOptions) (*Memory, error) {
 	if client == nil {
 		return nil, fmt.Errorf("Core runtime store client is required")
 	}
@@ -38,7 +43,7 @@ func NewCore(client *component.Client, runtimeRoot string) (*Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	terminal, loadedTerminal, err := openJSONLRoot(filepath.Join(runtimeRoot, "terminal"))
+	terminal, loadedTerminal, err := openJSONLRoot(filepath.Join(runtimeRoot, "terminal"), options...)
 	if err != nil {
 		return nil, fmt.Errorf("open Terminal AI runtime store: %w", err)
 	}
@@ -219,15 +224,25 @@ func (p *corePersistence) appendLocked(snapshot bool, line []byte) error {
 		if errors.Is(err, component.ErrRuntimeStoreRevisionConflict) {
 			return p.poisonLocked(fmt.Errorf("runtime store revision conflict: %v", err))
 		}
-		if !errors.Is(err, component.ErrRuntimeStoreCommitUncertain) {
+		uncertain := errors.Is(err, component.ErrRuntimeStoreCommitUncertain)
+		unavailable := errors.Is(err, component.ErrRuntimeStoreUnavailable)
+		if !uncertain && !unavailable {
 			if uncertainSeen {
 				return p.poisonLocked(fmt.Errorf("%w: retry after uncertain outcome failed: %v", component.ErrRuntimeStoreCommitUncertain, err))
 			}
 			return err
 		}
-		uncertainSeen = true
+		uncertainSeen = uncertainSeen || uncertain
 		if attempt+1 == coreStoreCommitAttempts {
-			return p.poisonLocked(err)
+			if uncertainSeen {
+				if !uncertain {
+					err = fmt.Errorf("%w: last retry failed before sending: %v", component.ErrRuntimeStoreCommitUncertain, err)
+				}
+				return p.poisonLocked(err)
+			}
+			// No attempt could have committed. Leave the store usable for
+			// the next call after Core recovers.
+			return fmt.Errorf("%w: %w", ports.ErrUnavailable, err)
 		}
 		time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
 	}

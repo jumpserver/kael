@@ -1,6 +1,7 @@
 package component
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -10,11 +11,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +35,8 @@ const (
 	runtimeStorePath   = "/api/v1/chat-ai/runtime-store/"
 	openAPIPath        = "/api/swagger.json"
 	maxOpenAPIBytes    = int64(32 * 1024 * 1024)
+	connectAttempts    = 10
+	connectRetryDelay  = 5 * time.Second
 )
 
 var errInvalidAccessKey = errors.New("component access key file is invalid")
@@ -39,6 +44,7 @@ var errInvalidAccessKey = errors.New("component access key file is invalid")
 var (
 	ErrRuntimeStoreRevisionConflict = errors.New("runtime store revision conflict")
 	ErrRuntimeStoreCommitUncertain  = errors.New("runtime store commit outcome is uncertain")
+	ErrRuntimeStoreUnavailable      = errors.New("runtime store request was not sent")
 )
 
 type Options struct {
@@ -48,6 +54,7 @@ type Options struct {
 	Name           string
 	BootstrapToken string
 	AccessKeyFile  string
+	Logger         *zap.Logger
 }
 
 type Client struct {
@@ -111,8 +118,15 @@ type runtimeStoreAppendResponse struct {
 }
 
 func Connect(options Options) (*Client, error) {
+	return connect(options, time.Sleep)
+}
+
+func connect(options Options, wait func(time.Duration)) (*Client, error) {
 	if strings.TrimSpace(options.Name) == "" || strings.TrimSpace(options.AccessKeyFile) == "" {
 		return nil, fmt.Errorf("component identity is incomplete")
+	}
+	if options.Logger == nil {
+		options.Logger = zap.NewNop()
 	}
 	if options.Timeout < 30*time.Second {
 		options.Timeout = 30 * time.Second
@@ -129,16 +143,28 @@ func Connect(options Options) (*Client, error) {
 		if clientErr != nil {
 			return nil, clientErr
 		}
-		if valid, validationErr := validateAccessKey(client); validationErr == nil && valid {
-			return connectedClient(options, client, key), nil
-		} else if validationErr != nil {
+		var valid bool
+		validationErr := retryConnect(options.Logger, wait, func() error {
+			var err error
+			valid, err = validateAccessKey(client)
+			return err
+		})
+		if validationErr != nil {
 			return nil, validationErr
 		}
+		if valid {
+			return connectedClient(options, client, key), nil
+		}
+		options.Logger.Warn("Kael component access key unauthorized; registering a new access key")
 	}
 	if strings.TrimSpace(options.BootstrapToken) == "" {
 		return nil, fmt.Errorf("component access key is missing or unauthorized; set BOOTSTRAP_TOKEN to register Kael")
 	}
-	key, err = register(options)
+	err = retryConnect(options.Logger, wait, func() error {
+		var registerErr error
+		key, registerErr = register(options)
+		return registerErr
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +176,20 @@ func Connect(options Options) (*Client, error) {
 		return nil, err
 	}
 	return connectedClient(options, client, key), nil
+}
+
+func retryConnect(logger *zap.Logger, wait func(time.Duration), request func() error) error {
+	var err error
+	for attempt := 1; attempt <= connectAttempts; attempt++ {
+		if err = request(); err == nil {
+			return nil
+		}
+		logger.Warn("Core component request failed", zap.Int("attempt", attempt), zap.Int("max_attempts", connectAttempts), zap.Error(err))
+		if attempt < connectAttempts {
+			wait(connectRetryDelay)
+		}
+	}
+	return fmt.Errorf("connect to Core failed after %d attempts: %w", connectAttempts, err)
 }
 
 func connectedClient(options Options, client *httplib.Client, key accessKey) *Client {
@@ -345,14 +385,48 @@ func (c *Client) AppendRuntimeStore(commitID string, expectedRevision uint64, sn
 	if _, err := uuid.Parse(commitID); err != nil {
 		return 0, fmt.Errorf("append Kael runtime store: commit ID is invalid")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	integrity := runtimeStoreIntegrity(c.accessKeySecret, commitID, expectedRevision, snapshot, record)
-	request := runtimeStoreAppendRequest{ExpectedRevision: expectedRevision, Snapshot: snapshot, Record: record, CommitID: commitID, Integrity: integrity}
+	payload := runtimeStoreAppendRequest{ExpectedRevision: expectedRevision, Snapshot: snapshot, Record: record, CommitID: commitID, Integrity: integrity}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return 0, fmt.Errorf("append Kael runtime store: encode request: %w", err)
+	}
+	// The standard transport only retries this non-replayable POST when the
+	// previous attempt could not commit (for example, an idle connection wrote
+	// zero bytes). Track the final attempt; redirects must stay disabled below.
+	var gotConn atomic.Bool
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{
+		GetConn: func(string) { gotConn.Store(false) },
+		GotConn: func(httptrace.GotConnInfo) { gotConn.Store(true) },
+	})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.coreURL+runtimeStorePath, bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("append Kael runtime store: create request: %w", err)
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-JMS-ORG", "ROOT")
+	if err = (&httplib.SigAuth{KeyID: c.accessKeyID, SecretID: c.accessKeySecret}).Sign(request); err != nil {
+		return 0, fmt.Errorf("append Kael runtime store: sign request: %w", err)
+	}
+	client := *c.openAPIClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := client.Do(request)
+	if err != nil {
+		if !gotConn.Load() {
+			return 0, fmt.Errorf("%w: %w", ErrRuntimeStoreUnavailable, err)
+		}
+		return 0, fmt.Errorf("%w: %w", ErrRuntimeStoreCommitUncertain, err)
+	}
+	defer response.Body.Close()
 	var value runtimeStoreAppendResponse
-	response, err := c.client.Post(runtimeStorePath, request, &value)
-	if response == nil {
-		return 0, fmt.Errorf("%w: %v", ErrRuntimeStoreCommitUncertain, err)
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 64*1024))
+	err = decoder.Decode(&value)
+	if err == nil {
+		var extra any
+		if decoder.Decode(&extra) != io.EOF {
+			err = fmt.Errorf("response must contain one JSON value")
+		}
 	}
 	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
 		if err != nil {

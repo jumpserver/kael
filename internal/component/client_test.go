@@ -3,6 +3,7 @@ package component
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestComponentRegistrationModelConfigAndHeartbeat(t *testing.T) {
@@ -68,25 +71,73 @@ func TestComponentRegistrationModelConfigAndHeartbeat(t *testing.T) {
 	}
 }
 
-func TestComponentReusesValidAccessKey(t *testing.T) {
+func TestComponentConnectRetryLimit(t *testing.T) {
+	for _, path := range []string{registerPath, profilePath} {
+		t.Run(path, func(t *testing.T) {
+			attempts := 0
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != path {
+					t.Errorf("unexpected request path: %s", request.URL.Path)
+				}
+				attempts++
+				response.WriteHeader(http.StatusServiceUnavailable)
+			}))
+			defer server.Close()
+
+			keyPath := filepath.Join(t.TempDir(), ".access_key")
+			if path == profilePath {
+				if err := os.WriteFile(keyPath, []byte("access-id:access-secret"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			options := Options{CoreURL: server.URL, Name: "kael-test", BootstrapToken: "bootstrap-secret", AccessKeyFile: keyPath}
+			_, err := connect(options, func(time.Duration) {})
+			if err == nil || attempts != 10 {
+				t.Fatalf("expected failure after 10 attempts: attempts=%d err=%v", attempts, err)
+			}
+		})
+	}
+}
+
+func TestComponentReregistersUnauthorizedAccessKey(t *testing.T) {
+	registrations := 0
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
-		if request.URL.Path != profilePath {
-			t.Errorf("unexpected request path: %s", request.URL.Path)
+		switch request.URL.Path {
+		case profilePath:
+			assertSigned(t, request)
+			if !strings.Contains(request.Header.Get("Authorization"), `keyId="access-id"`) {
+				response.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = response.Write([]byte(`{"id":"service-account-id"}`))
+		case registerPath:
+			registrations++
+			if registrations == 1 {
+				response.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = response.Write([]byte(`{"service_account":{"access_key":{"id":"access-id","secret":"access-secret"}}}`))
+		default:
 			http.NotFound(response, request)
-			return
 		}
-		assertSigned(t, request)
-		_, _ = response.Write([]byte(`{"id":"service-account-id"}`))
 	}))
 	defer server.Close()
 
 	keyPath := filepath.Join(t.TempDir(), ".access_key")
-	if err := os.WriteFile(keyPath, []byte("access-id:access-secret"), 0o600); err != nil {
+	if err := os.WriteFile(keyPath, []byte("expired-id:expired-secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Connect(Options{CoreURL: server.URL, TLSVerify: true, Name: "kael-test", AccessKeyFile: keyPath}); err != nil {
+	options := Options{CoreURL: server.URL, Name: "kael-test", BootstrapToken: "bootstrap-secret", AccessKeyFile: keyPath}
+	if _, err := connect(options, func(time.Duration) {}); err != nil {
 		t.Fatal(err)
+	}
+	options.BootstrapToken = ""
+	if _, err := Connect(options); err != nil {
+		t.Fatalf("restart did not reuse the new access key: %v", err)
+	}
+	if registrations != 2 {
+		t.Fatalf("expected registration to succeed on retry: registrations=%d", registrations)
 	}
 }
 
@@ -94,5 +145,33 @@ func assertSigned(t *testing.T, request *http.Request) {
 	t.Helper()
 	if !strings.HasPrefix(request.Header.Get("Authorization"), "Signature ") || request.Header.Get("X-JMS-ORG") != "ROOT" {
 		t.Errorf("request was not signed as a component: authorization=%q org=%q", request.Header.Get("Authorization"), request.Header.Get("X-JMS-ORG"))
+	}
+}
+
+func TestRuntimeStoreAppendTransportFailure(t *testing.T) {
+	for _, refused := range []bool{true, false} {
+		name, want := "response_lost", ErrRuntimeStoreCommitUncertain
+		if refused {
+			name, want = "connection_refused", ErrRuntimeStoreUnavailable
+		}
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				_ = conn.Close()
+			}))
+			defer server.Close()
+			if refused {
+				server.Close()
+			}
+			client := connectedClient(Options{CoreURL: server.URL, Timeout: time.Second}, nil, accessKey{ID: "id", Secret: "secret"})
+			defer client.openAPIClient.CloseIdleConnections()
+			if _, err := client.AppendRuntimeStore(uuid.NewString(), 0, false, "record"); !errors.Is(err, want) {
+				t.Fatalf("expected %v, got %v", want, err)
+			}
+		})
 	}
 }
