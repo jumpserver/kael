@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/rand"
 	"fmt"
 	"net/url"
 	"os"
@@ -148,10 +149,11 @@ func defaultName() string {
 		hostname = "localhost"
 	}
 	value := []rune("[Kael]-" + hostname)
-	if len(value) > 128 {
-		value = value[:128]
+	suffix := "-" + rand.Text()[:7]
+	if len(value) > 128-len(suffix) {
+		value = value[:128-len(suffix)]
 	}
-	return string(value)
+	return string(value) + suffix
 }
 
 func (c Config) Validate() error {
