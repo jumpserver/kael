@@ -50,12 +50,26 @@ type parameter struct {
 	Schema   map[string]any `json:"schema,omitempty"`
 }
 
+type reuseField struct {
+	BodyField      string
+	QueryParameter string
+	Unwrap         string
+	Default        any
+	HasDefault     bool
+}
+
+type createReusePolicy struct {
+	LookupOperationID string
+	Fields            []reuseField
+}
+
 type operation struct {
 	ID                  string
 	Method              string
 	Path                string
 	Summary             string
 	Description         string
+	Guidance            string
 	Tags                []string
 	PathParams          []parameter
 	QueryParams         []parameter
@@ -63,6 +77,7 @@ type operation struct {
 	BodyRequired        bool
 	RequiredPermissions []string
 	PermissionDynamic   bool
+	CreateReuse         *createReusePolicy
 }
 
 type registry struct {
@@ -145,8 +160,8 @@ func registrationsFor(registry *registry, profile string) []domain.Registration 
 	readAnnotations, _ := json.Marshal(domain.ToolAnnotations{ReadOnly: true, Idempotent: true})
 	writeAnnotations, _ := json.Marshal(domain.ToolAnnotations{OpenWorld: true})
 	definitions := []domain.Registration{
-		{ID: "platform-gateway:search:" + registry.Hash, BindingKind: "service", ExecutionBindingID: "platform-gateway:" + registry.Hash, ClientKey: searchTool, Name: searchTool, Description: "Immediately search server-authorized JumpServer Core operations by user intent. Use read operations to resolve related IDs and defaults before a write; do not ask the user for data that Core can supply.", InputSchema: searchSchema, DefinitionVersion: registry.Hash, Namespace: profile, Risk: "read", AnnotationsJSON: readAnnotations, State: "active"},
-		{ID: "platform-gateway:call:" + registry.Hash, BindingKind: "service", ExecutionBindingID: "platform-gateway:" + registry.Hash, ClientKey: callTool, Name: callTool, Description: "Call one server-authorized Core operation selected from search results. A write call automatically opens the trusted approval UI; do not ask the user to type a separate confirmation first.", InputSchema: callSchema, DefinitionVersion: registry.Hash, Namespace: profile, Risk: "dangerous", RequiresConfirmation: true, AnnotationsJSON: writeAnnotations, State: "active"},
+		{ID: "platform-gateway:search:" + registry.Hash, BindingKind: "service", ExecutionBindingID: "platform-gateway:" + registry.Hash, ClientKey: searchTool, Name: searchTool, Description: "Immediately search server-authorized JumpServer Core operations by user intent. Results include operation-specific guidance and server-enforced create-reuse policies. Use read operations to resolve related IDs and defaults before a write; do not ask the user for data that Core can supply.", InputSchema: searchSchema, DefinitionVersion: registry.Hash, Namespace: profile, Risk: "read", AnnotationsJSON: readAnnotations, State: "active"},
+		{ID: "platform-gateway:call:" + registry.Hash, BindingKind: "service", ExecutionBindingID: "platform-gateway:" + registry.Hash, ClientKey: callTool, Name: callTool, Description: "Call one server-authorized Core operation selected from search results. Server-declared create-reuse policies are enforced automatically and may return an existing equivalent resource without a mutation. A remaining write call automatically opens the trusted approval UI; do not ask the user to type a separate confirmation first.", InputSchema: callSchema, DefinitionVersion: registry.Hash, Namespace: profile, Risk: "dangerous", RequiresConfirmation: true, AnnotationsJSON: writeAnnotations, State: "active"},
 	}
 	for index := range definitions {
 		definitions[index].DefinitionDigest, _ = domain.HashValue(map[string]any{"name": definitions[index].Name, "description": definitions[index].Description, "schema": definitions[index].InputSchema, "version": registry.Hash})
@@ -165,12 +180,24 @@ func (g *Gateway) Prepare(ctx context.Context, request ports.CapabilityRequest) 
 	if operation == nil {
 		return ports.CapabilityPolicy{}, fmt.Errorf("operation is unavailable")
 	}
-	if _, _, _, err = buildRequest(*operation, arguments); err != nil {
+	path, _, body, err := buildRequest(*operation, arguments)
+	if err != nil {
 		return ports.CapabilityPolicy{}, &ports.InvalidCapabilityArgumentsError{Detail: boundedString(err.Error(), 512)}
 	}
 	risk := methodRisk(operation.Method)
-	preview, _ := json.Marshal(map[string]any{"operation_id": operation.ID, "method": operation.Method, "path": operation.Path, "summary": operation.Summary, "arguments": sanitize(arguments, 0)})
-	_ = registry
+	previewValue := map[string]any{"operation_id": operation.ID, "method": operation.Method, "path": path, "summary": operation.Summary, "arguments": sanitize(arguments, 0)}
+	resource, reused, reuseErr := g.findReusable(ctx, registry, *operation, request, body)
+	if reuseErr != nil {
+		return ports.CapabilityPolicy{}, reuseErr
+	}
+	if operation.CreateReuse != nil {
+		previewValue["create_reuse"] = map[string]any{"lookup_operation_id": operation.CreateReuse.LookupOperationID, "matched": reused}
+	}
+	if reused {
+		risk = "read"
+		previewValue["create_reuse"].(map[string]any)["resource"] = resource
+	}
+	preview, _ := json.Marshal(previewValue)
 	return ports.CapabilityPolicy{Risk: risk, RequiresConfirmation: risk != "read", Preview: preview}, nil
 }
 
@@ -185,15 +212,22 @@ func (g *Gateway) Execute(ctx context.Context, request ports.CapabilityRequest) 
 		encoded, _ := json.Marshal(map[string]any{"operations": candidates, "registry_version": registry.Hash})
 		return ports.CapabilityResult{Status: "success", Result: encoded, ExecutorAuditReference: "platform-search:" + uuid.NewString()}, nil
 	}
-	// Registry search above and Refresh do not issue a Core business request.
-	// Management operations use this same execution path and are never exempt.
-	if requiresApproval(operation.Method) && strings.TrimSpace(request.ApprovalID) == "" {
-		return ports.CapabilityResult{}, fmt.Errorf("Core write operation requires a non-empty approval ID")
-	}
 	path, query, body, err := buildRequest(*operation, arguments)
 	if err != nil {
 		encoded, _ := json.Marshal(map[string]any{"code": "invalid_operation_arguments", "message": "The operation arguments did not match the Core request schema.", "detail": boundedString(err.Error(), 512)})
 		return ports.CapabilityResult{Status: "error", Error: encoded}, nil
+	}
+	resource, reused, reuseErr := g.findReusable(ctx, registry, *operation, request, body)
+	if reuseErr != nil {
+		return ports.CapabilityResult{}, reuseErr
+	}
+	if reused {
+		return reusedResult(*operation, operation.CreateReuse, resource), nil
+	}
+	// Registry search and reuse lookups do not issue a Core mutation.
+	// Management operations use this same execution path and are never exempt.
+	if requiresApproval(operation.Method) && strings.TrimSpace(request.ApprovalID) == "" {
+		return ports.CapabilityResult{}, fmt.Errorf("Core write operation requires a non-empty approval ID")
 	}
 	var bodyReader io.Reader
 	var bodyBytes []byte
@@ -254,6 +288,171 @@ func (g *Gateway) Execute(ctx context.Context, request ports.CapabilityRequest) 
 		capabilityResult.Error, _ = json.Marshal(map[string]any{"code": "core_api_error", "message": "Core rejected the authorized operation.", "status_code": response.StatusCode, "operation_id": operation.ID, "data": clean})
 	}
 	return capabilityResult, nil
+}
+
+func (g *Gateway) findReusable(ctx context.Context, registry *registry, requested operation, request ports.CapabilityRequest, body any) (any, bool, error) {
+	policy := requested.CreateReuse
+	if policy == nil {
+		return nil, false, nil
+	}
+	lookup, ok := registry.Operations[policy.LookupOperationID]
+	if !ok || !operationAllowed(request.Profile, request.Principal, lookup, g.config.AllowedMethods) {
+		return nil, false, fmt.Errorf("Core reuse lookup operation is not allowed")
+	}
+	queryParameters, err := reuseQueryParameters(policy, body)
+	if err != nil {
+		return nil, false, &ports.InvalidCapabilityArgumentsError{Detail: boundedString(err.Error(), 512)}
+	}
+	path, query, _, err := buildRequest(lookup, map[string]any{"query_params": queryParameters})
+	if err != nil {
+		return nil, false, fmt.Errorf("build Core reuse lookup: %w", err)
+	}
+	statusCode, value, err := g.executeCoreRead(ctx, request, lookup, path, query)
+	if err != nil {
+		return nil, false, err
+	}
+	if statusCode < 200 || statusCode >= 300 {
+		return nil, false, fmt.Errorf("Core reuse lookup returned HTTP %d", statusCode)
+	}
+	var rows []any
+	switch item := value.(type) {
+	case map[string]any:
+		rawRows, exists := item["results"]
+		if !exists {
+			return nil, false, fmt.Errorf("Core reuse lookup response is not a paginated list")
+		}
+		rows, ok = rawRows.([]any)
+		if !ok {
+			return nil, false, fmt.Errorf("Core reuse lookup results are invalid")
+		}
+	case []any:
+		rows = item
+	default:
+		return nil, false, fmt.Errorf("Core reuse lookup response is invalid")
+	}
+	if len(rows) == 0 {
+		return nil, false, nil
+	}
+	for _, row := range rows {
+		if reusableRowMatches(policy, row, queryParameters) {
+			return sanitize(row, 0), true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func reusableRowMatches(policy *createReusePolicy, row any, expected map[string]any) bool {
+	object, ok := row.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, field := range policy.Fields {
+		actual, exists := object[field.BodyField]
+		if !exists {
+			return false
+		}
+		if field.Unwrap != "" {
+			if wrapped, nested := actual.(map[string]any); nested {
+				actual, exists = wrapped[field.Unwrap]
+				if !exists {
+					return false
+				}
+			}
+		}
+		actualText, actualErr := queryScalar(actual)
+		expectedText, expectedErr := queryScalar(expected[field.QueryParameter])
+		if actualErr != nil || expectedErr != nil || actualText != expectedText {
+			return false
+		}
+	}
+	return true
+}
+
+func reuseQueryParameters(policy *createReusePolicy, body any) (map[string]any, error) {
+	object, ok := body.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("create-reuse policy requires an object request body")
+	}
+	query := make(map[string]any, len(policy.Fields))
+	for _, field := range policy.Fields {
+		value, exists := object[field.BodyField]
+		if !exists {
+			if !field.HasDefault {
+				return nil, fmt.Errorf("create-reuse body field %q is missing", field.BodyField)
+			}
+			value = field.Default
+		}
+		if field.Unwrap != "" {
+			if wrapped, nested := value.(map[string]any); nested {
+				value, exists = wrapped[field.Unwrap]
+				if !exists {
+					return nil, fmt.Errorf("create-reuse body field %q has no %q value", field.BodyField, field.Unwrap)
+				}
+			}
+		}
+		if _, err := queryScalar(value); err != nil {
+			return nil, fmt.Errorf("create-reuse body field %q is not scalar", field.BodyField)
+		}
+		query[field.QueryParameter] = value
+	}
+	return query, nil
+}
+
+func (g *Gateway) executeCoreRead(ctx context.Context, request ports.CapabilityRequest, operation operation, path, query string) (int, any, error) {
+	endpoint := strings.TrimRight(g.config.CoreURL, "/") + path
+	if query != "" {
+		endpoint += "?" + query
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, operation.Method, endpoint, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	httpRequest.Header.Set("Accept", "application/json")
+	httpRequest.Header.Set("X-JMS-ORG", request.Principal.OrganizationID)
+	httpRequest.Header.Set("X-JMS-AI-Operation", operation.ID)
+	if err = identity.CoreCredentialsFromContext(ctx).Apply(httpRequest); err != nil {
+		return 0, nil, err
+	}
+	response, err := g.client.Do(httpRequest)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer response.Body.Close()
+	content, err := io.ReadAll(io.LimitReader(response.Body, g.config.MaxResponse+1))
+	if err != nil {
+		return 0, nil, err
+	}
+	if int64(len(content)) > g.config.MaxResponse {
+		return 0, nil, fmt.Errorf("Core reuse lookup response exceeds the configured limit")
+	}
+	var value any
+	if len(content) > 0 {
+		decoder := json.NewDecoder(bytes.NewReader(content))
+		decoder.UseNumber()
+		if err = decoder.Decode(&value); err != nil {
+			return 0, nil, fmt.Errorf("Core reuse lookup returned invalid JSON")
+		}
+	}
+	return response.StatusCode, value, nil
+}
+
+func reusedResult(operation operation, policy *createReusePolicy, data any) ports.CapabilityResult {
+	result := map[string]any{"ok": true, "status_code": http.StatusOK, "operation_id": operation.ID, "lookup_operation_id": policy.LookupOperationID, "reused": true, "data": data}
+	encoded, _ := json.Marshal(result)
+	if len(encoded) > domain.MaxToolResultBytes {
+		result["data"] = map[string]any{"truncated": true, "preview": boundedString(string(encoded), 32*1024)}
+		encoded, _ = json.Marshal(result)
+	}
+	card := buildResultCard(operation, http.StatusOK, data)
+	if source, ok := card["source"].(map[string]any); ok {
+		source["reused"] = true
+		source["lookup_operation_id"] = policy.LookupOperationID
+	}
+	cards, _ := json.Marshal([]any{card})
+	if len(cards) > 64*1024 {
+		cards, _ = json.Marshal([]any{map[string]any{"type": "detail", "title": operation.Summary, "source": map[string]any{"type": "core_api", "operation_id": operation.ID, "lookup_operation_id": policy.LookupOperationID, "reused": true}, "content": map[string]any{"truncated": true, "preview": boundedString(string(cards), 32*1024)}}})
+	}
+	return ports.CapabilityResult{Status: "success", Result: encoded, ResultCards: cards, ExecutorAuditReference: "core-api-reuse:" + uuid.NewString()}
 }
 
 func buildResultCard(operation operation, status int, data any) map[string]any {
@@ -524,10 +723,16 @@ func parseOperations(schema map[string]any) (map[string]operation, error) {
 			}
 			requiredPermissions, staticPermissions := permissionMetadata(item["x-jms-required-permissions"])
 			permissionDynamic, dynamicMetadata := item["x-jms-permission-dynamic"].(bool)
+			createReuse, reuseErr := parseCreateReusePolicy(item["x-jms-create-reuse"])
+			if reuseErr != nil {
+				return nil, fmt.Errorf("Core OpenAPI operation %s has invalid create-reuse metadata: %w", id, reuseErr)
+			}
 			entry := operation{
 				ID: id, Method: upper, Path: path, Summary: stringValue(item["summary"]), Description: stringValue(item["description"]), Tags: stringSlice(item["tags"]),
 				RequiredPermissions: requiredPermissions,
 				PermissionDynamic:   !staticPermissions || !dynamicMetadata || permissionDynamic,
+				Guidance:            stringValue(item["x-jms-ai-guidance"]),
+				CreateReuse:         createReuse,
 			}
 			parameters := append(anySlice(pathItem["parameters"]), anySlice(item["parameters"])...)
 			for _, rawParameter := range parameters {
@@ -561,7 +766,83 @@ func parseOperations(schema map[string]any) (map[string]operation, error) {
 	if len(result) == 0 {
 		return nil, fmt.Errorf("Core OpenAPI contains no supported operations")
 	}
+	if err := validateCreateReusePolicies(result); err != nil {
+		return nil, err
+	}
 	return result, nil
+}
+
+func parseCreateReusePolicy(value any) (*createReusePolicy, error) {
+	if value == nil {
+		return nil, nil
+	}
+	metadata, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("metadata must be an object")
+	}
+	lookupOperationID := strings.TrimSpace(stringValue(metadata["lookup_operation_id"]))
+	rawFields, fieldsOK := metadata["fields"].([]any)
+	if lookupOperationID == "" || !fieldsOK || len(rawFields) == 0 || len(rawFields) > 16 {
+		return nil, fmt.Errorf("lookup_operation_id and 1-16 fields are required")
+	}
+	policy := &createReusePolicy{LookupOperationID: lookupOperationID, Fields: make([]reuseField, 0, len(rawFields))}
+	seenBody, seenQuery := map[string]bool{}, map[string]bool{}
+	for _, rawField := range rawFields {
+		metadataField, ok := rawField.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("field mapping must be an object")
+		}
+		field := reuseField{
+			BodyField:      strings.TrimSpace(stringValue(metadataField["body_field"])),
+			QueryParameter: strings.TrimSpace(stringValue(metadataField["query_parameter"])),
+			Unwrap:         strings.TrimSpace(stringValue(metadataField["unwrap"])),
+		}
+		field.Default, field.HasDefault = metadataField["default"]
+		if field.BodyField == "" || field.QueryParameter == "" || seenBody[field.BodyField] || seenQuery[field.QueryParameter] {
+			return nil, fmt.Errorf("field mappings must use unique non-empty body and query names")
+		}
+		if field.Unwrap != "" && field.Unwrap != "value" {
+			return nil, fmt.Errorf("unsupported field unwrap %q", field.Unwrap)
+		}
+		if field.HasDefault {
+			if _, err := queryScalar(field.Default); err != nil {
+				return nil, fmt.Errorf("default for %q must be scalar", field.BodyField)
+			}
+		}
+		seenBody[field.BodyField], seenQuery[field.QueryParameter] = true, true
+		policy.Fields = append(policy.Fields, field)
+	}
+	return policy, nil
+}
+
+func validateCreateReusePolicies(operations map[string]operation) error {
+	for _, operation := range operations {
+		policy := operation.CreateReuse
+		if policy == nil {
+			continue
+		}
+		if operation.Method != http.MethodPost {
+			return fmt.Errorf("Core OpenAPI create-reuse operation %s must use POST", operation.ID)
+		}
+		lookup, ok := operations[policy.LookupOperationID]
+		if !ok || lookup.Method != http.MethodGet {
+			return fmt.Errorf("Core OpenAPI create-reuse lookup %s must be a GET operation", policy.LookupOperationID)
+		}
+		bodyProperties, _ := operation.Body["properties"].(map[string]any)
+		lookupParameters := make(map[string]bool, len(lookup.QueryParams))
+		for _, parameter := range lookup.QueryParams {
+			lookupParameters[parameter.Name] = true
+		}
+		for _, field := range policy.Fields {
+			if _, ok := bodyProperties[field.BodyField]; !ok {
+				return fmt.Errorf("Core OpenAPI create-reuse body field %s.%s does not exist", operation.ID, field.BodyField)
+			}
+			if !lookupParameters[field.QueryParameter] {
+				return fmt.Errorf("Core OpenAPI create-reuse query parameter %s.%s does not exist", policy.LookupOperationID, field.QueryParameter)
+			}
+		}
+	}
+	return nil
 }
 
 func permissionMetadata(value any) ([]string, bool) {
@@ -929,6 +1210,9 @@ var generalScope = set(
 	"audits_my_login_logs_list", "audits_my_login_logs_retrieve", "audits_operate_logs_list", "audits_operate_logs_retrieve",
 	"audits_service_access_logs_list", "audits_service_access_logs_retrieve", "audits_tickets_list", "audits_tickets_retrieve",
 	"ops_jobs_list", "ops_jobs_retrieve", "ops_tasks_list", "ops_tasks_retrieve",
+	"users_users_list", "users_users_retrieve",
+	"acls_command_groups_list", "acls_command_groups_retrieve", "acls_command_groups_create",
+	"acls_command_filter_acls_list", "acls_command_filter_acls_retrieve", "acls_command_filter_acls_create",
 )
 
 func set(values ...string) map[string]bool {
@@ -990,7 +1274,7 @@ func searchOperations(registry *registry, profile string, principal domain.Princ
 		if !operationAllowed(profile, principal, operation, methods) {
 			continue
 		}
-		haystack := strings.ToLower(strings.Join([]string{operation.ID, operation.Summary, operation.Description, operation.Path, operation.Method, strings.Join(operation.Tags, " ")}, " "))
+		haystack := strings.ToLower(strings.Join([]string{operation.ID, operation.Summary, operation.Description, operation.Guidance, operation.Path, operation.Method, strings.Join(operation.Tags, " ")}, " "))
 		score := 0
 		for _, token := range tokens {
 			if strings.Contains(haystack, token) {
@@ -1013,9 +1297,31 @@ func searchOperations(registry *registry, profile string, principal domain.Princ
 	result := make([]map[string]any, 0, len(ranked))
 	for _, item := range ranked {
 		operation := item.operation
-		result = append(result, map[string]any{"operation_id": operation.ID, "method": operation.Method, "path": operation.Path, "summary": operation.Summary, "description": boundedString(operation.Description, 500), "tags": operation.Tags, "risk_level": methodRisk(operation.Method), "requires_approval": requiresApproval(operation.Method), "path_parameters": compactParameters(operation.PathParams), "query_parameters": compactParameters(operation.QueryParams), "request_body_schema": compactSchema(operation.Body, 0)})
+		candidate := map[string]any{"operation_id": operation.ID, "method": operation.Method, "path": operation.Path, "summary": operation.Summary, "description": boundedString(operation.Description, 500), "tags": operation.Tags, "risk_level": methodRisk(operation.Method), "requires_approval": requiresApproval(operation.Method), "path_parameters": compactParameters(operation.PathParams), "query_parameters": compactParameters(operation.QueryParams), "request_body_schema": compactSchema(operation.Body, 0)}
+		if operation.Guidance != "" {
+			candidate["guidance"] = boundedString(operation.Guidance, 1000)
+		}
+		if operation.CreateReuse != nil {
+			candidate["create_reuse"] = compactCreateReusePolicy(operation.CreateReuse)
+		}
+		result = append(result, candidate)
 	}
 	return result
+}
+
+func compactCreateReusePolicy(policy *createReusePolicy) map[string]any {
+	fields := make([]map[string]any, 0, len(policy.Fields))
+	for _, field := range policy.Fields {
+		item := map[string]any{"body_field": field.BodyField, "query_parameter": field.QueryParameter}
+		if field.Unwrap != "" {
+			item["unwrap"] = field.Unwrap
+		}
+		if field.HasDefault {
+			item["default"] = field.Default
+		}
+		fields = append(fields, item)
+	}
+	return map[string]any{"mode": "reuse_if_equivalent", "lookup_operation_id": policy.LookupOperationID, "fields": fields, "enforced_by_gateway": true}
 }
 
 func compactParameters(parameters []parameter) []map[string]any {
