@@ -193,9 +193,13 @@ func retryConnect(logger *zap.Logger, wait func(time.Duration), request func() e
 }
 
 func connectedClient(options Options, client *httplib.Client, key accessKey) *Client {
+	schemaTimeout := options.Timeout
+	if schemaTimeout < 90*time.Second {
+		schemaTimeout = 90 * time.Second
+	}
 	return &Client{
 		client:          client,
-		openAPIClient:   &http.Client{Timeout: options.Timeout, Transport: httplib.NewTransport(!options.TLSVerify)},
+		openAPIClient:   &http.Client{Timeout: schemaTimeout, Transport: httplib.NewTransport(!options.TLSVerify)},
 		coreURL:         strings.TrimRight(options.CoreURL, "/"),
 		accessKeyID:     key.ID,
 		accessKeySecret: key.Secret,

@@ -126,7 +126,7 @@ Panel 审批模式为 `auto`、`always`、`never`：auto 依据调用策略，al
 
 ### Platform Gateway
 
-Gateway 通过组件身份加载 Core OpenAPI，按内容 hash 版本化，缓存 TTL 默认 1 小时并最多保留四个版本。Run 固定自己的注册版本；模型通过搜索取得候选 Operation，再提交 operation ID 及 path/query/body 参数。
+Gateway 在 Kael 启动后后台加载 Core OpenAPI，失败时每 5 秒重试，首次成功后停止自动请求。Registry 未首次加载完成时，依赖 Core API 的 Run 立即返回能力未就绪，不会触发同步抓取。管理员仍可显式刷新；Registry 按内容 hash 版本化并最多保留四个版本。Run 固定自己的注册版本；模型通过搜索取得候选 Operation，再提交 operation ID 及 path/query/body 参数。
 
 Method 和 URL 由可信 Registry 构建。默认允许 `GET/POST/PUT/PATCH`，`DELETE` 需配置显式启用。`general` 使用源码内固定 Operation 范围，asset/audit/ops 进一步收窄，management 为管理员提供较宽范围；Kael 不读取 Core 自定义 Operation allowlist 配置。
 
@@ -234,7 +234,7 @@ Terminal 本地历史默认保留 7 天、容量上限 1 GiB、磁盘最低余�
 
 Origin 校验默认关闭；只有 `ALLOWED_ORIGINS` 包含非空值时启用，允许精确列表或当前同源 Origin，不发送 CORS 响应头。Cookie 写请求另行校验 CSRF。网关终止 HTTPS 时可配置外部 Origin；`TRUST_FORWARDED_HEADERS` 默认关闭，仅在可信网关覆盖 forwarded headers 且 Kael 端口不直接暴露时使用。
 
-Kael 不直接连接业务数据库。首次通过 BootstrapToken 注册 `kael` 组件，后续使用私有 AccessKey 文件。Platform Gateway 是必需依赖：`PLATFORM_GATEWAY_ENABLED` 必须为 true，组件签名必须可访问 Core OpenAPI；不再配置 `PLATFORM_DELEGATION_KEY` 等委托参数。Registry 初始化失败会阻止监听端口。
+Kael 不直接连接业务数据库。首次通过 BootstrapToken 注册 `kael` 组件，后续使用私有 AccessKey 文件。Platform Gateway 是必需依赖：`PLATFORM_GATEWAY_ENABLED` 必须为 true，组件签名必须可访问 Core OpenAPI；不再配置 `PLATFORM_DELEGATION_KEY` 等委托参数。Registry 初始化失败会在后台重试，不阻止 Kael 监听端口和基础健康检查；依赖 Core API 的能力在加载成功前不可用。
 
 ### 配置与启动
 

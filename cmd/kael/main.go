@@ -79,7 +79,7 @@ func run(settings config.Config, logger *zap.Logger) error {
 	bus := event.NewBus()
 	var capability ports.CapabilityProvider
 	if settings.PlatformGatewayEnabled {
-		capability, err = platformgateway.New(platformgateway.Config{CoreURL: settings.CoreHost, CoreTLSVerify: tlsVerify, CACert: settings.PlatformCACert, ClientCert: settings.PlatformClientCert, ClientKey: settings.PlatformClientKey, AllowedMethods: settings.PlatformAllowedMethods, RegistryTTL: settings.PlatformRegistryTTL, Timeout: settings.PlatformTimeout, MaxResponse: settings.PlatformMaxResponse, OpenAPILoader: componentClient.OpenAPISchema})
+		capability, err = platformgateway.New(platformgateway.Config{CoreURL: settings.CoreHost, CoreTLSVerify: tlsVerify, CACert: settings.PlatformCACert, ClientCert: settings.PlatformClientCert, ClientKey: settings.PlatformClientKey, AllowedMethods: settings.PlatformAllowedMethods, Timeout: settings.PlatformTimeout, MaxResponse: settings.PlatformMaxResponse, OpenAPILoader: componentClient.OpenAPISchema})
 		if err != nil {
 			return err
 		}

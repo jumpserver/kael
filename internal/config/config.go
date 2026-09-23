@@ -37,7 +37,6 @@ type Config struct {
 	PlatformClientCert     string
 	PlatformClientKey      string
 	PlatformAllowedMethods map[string]bool
-	PlatformRegistryTTL    time.Duration
 	PlatformTimeout        time.Duration
 	PlatformMaxResponse    int64
 }
@@ -85,7 +84,6 @@ func Load(path string) (Config, error) {
 		PlatformClientCert:     v.GetString("PLATFORM_CLIENT_CERT"),
 		PlatformClientKey:      v.GetString("PLATFORM_CLIENT_KEY"),
 		PlatformAllowedMethods: make(map[string]bool),
-		PlatformRegistryTTL:    v.GetDuration("PLATFORM_REGISTRY_TTL"),
 		PlatformTimeout:        v.GetDuration("PLATFORM_TIMEOUT"),
 		PlatformMaxResponse:    v.GetInt64("PLATFORM_MAX_RESPONSE_BYTES"),
 	}
@@ -138,7 +136,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("TERMINAL_AI_MIN_FREE_BYTES", int64(1<<30))
 	v.SetDefault("PLATFORM_GATEWAY_ENABLED", true)
 	v.SetDefault("PLATFORM_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "PATCH", "DELETE"})
-	v.SetDefault("PLATFORM_REGISTRY_TTL", "1h")
 	v.SetDefault("PLATFORM_TIMEOUT", "15s")
 	v.SetDefault("PLATFORM_MAX_RESPONSE_BYTES", 1024*1024)
 }
@@ -180,7 +177,7 @@ func (c Config) Validate() error {
 	if !c.PlatformGatewayEnabled {
 		return fmt.Errorf("PLATFORM_GATEWAY_ENABLED must be true because the default general assistant requires the Platform Gateway")
 	}
-	if c.PlatformRegistryTTL <= 0 || c.PlatformTimeout <= 0 || c.PlatformMaxResponse < 1 {
+	if c.PlatformTimeout <= 0 || c.PlatformMaxResponse < 1 {
 		return fmt.Errorf("Platform Gateway configuration is incomplete")
 	}
 	if (c.PlatformClientCert == "") != (c.PlatformClientKey == "") {

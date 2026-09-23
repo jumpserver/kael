@@ -53,11 +53,11 @@ BOOTSTRAP_TOKEN: <PleaseChangeMe>
 # 启用前必须确认 Core 已应用 Runtime Store migration，且组件签名可访问
 # /api/swagger.json，并提供 x-jms-required-permissions、
 # x-jms-permission-dynamic 与 x-jms-rbac-protected。
+# Swagger Registry 在启动后后台加载；加载前 Core API 能力会返回未就绪。
 PLATFORM_GATEWAY_ENABLED: true
 # PLATFORM_CA_CERT: ""
 # PLATFORM_CLIENT_CERT: ""
 # PLATFORM_CLIENT_KEY: ""
 # PLATFORM_ALLOWED_METHODS: [GET, POST, PUT, PATCH, DELETE]
-# PLATFORM_REGISTRY_TTL: 1h
 # PLATFORM_TIMEOUT: 15s
 # PLATFORM_MAX_RESPONSE_BYTES: 1048576

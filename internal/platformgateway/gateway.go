@@ -36,7 +36,6 @@ type Config struct {
 	ClientCert     string
 	ClientKey      string
 	AllowedMethods map[string]bool
-	RegistryTTL    time.Duration
 	Timeout        time.Duration
 	MaxResponse    int64
 	OpenAPILoader  func(context.Context) (map[string]any, error)
@@ -109,9 +108,6 @@ func New(config Config) (*Gateway, error) {
 	if config.OpenAPILoader == nil {
 		return nil, fmt.Errorf("platform gateway OpenAPI loader is required")
 	}
-	if config.RegistryTTL <= 0 {
-		config.RegistryTTL = time.Hour
-	}
 	if config.Timeout <= 0 {
 		config.Timeout = 15 * time.Second
 	}
@@ -150,13 +146,15 @@ func New(config Config) (*Gateway, error) {
 	return &Gateway{config: config, client: client, versions: make(map[string]*registry)}, nil
 }
 
-func (g *Gateway) Registrations(ctx context.Context, principal domain.Principal, profile string) ([]domain.Registration, error) {
+func (g *Gateway) Registrations(_ context.Context, principal domain.Principal, profile string) ([]domain.Registration, error) {
 	if !profileEnabled(profile, principal) {
 		return nil, fmt.Errorf("platform profile is not available")
 	}
-	registry, err := g.load(ctx, false)
-	if err != nil {
-		return nil, err
+	g.mu.RLock()
+	registry := g.current
+	g.mu.RUnlock()
+	if registry == nil {
+		return nil, fmt.Errorf("Core capability registry is still initializing")
 	}
 	return registrationsFor(registry, profile), nil
 }
@@ -654,7 +652,7 @@ func firstValue(values ...any) any {
 }
 
 func (g *Gateway) Refresh(ctx context.Context) (map[string]any, error) {
-	registry, err := g.load(ctx, true)
+	registry, err := g.load(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -709,30 +707,17 @@ func (g *Gateway) resolveRequest(ctx context.Context, request ports.CapabilityRe
 	return registry, &operation, arguments, nil
 }
 
-func (g *Gateway) version(ctx context.Context, hash string) (*registry, error) {
+func (g *Gateway) version(_ context.Context, hash string) (*registry, error) {
 	g.mu.RLock()
 	value := g.versions[hash]
 	g.mu.RUnlock()
-	if value != nil {
-		return value, nil
-	}
-	loaded, err := g.load(ctx, false)
-	if err != nil {
-		return nil, err
-	}
-	if loaded.Hash != hash {
+	if value == nil {
 		return nil, fmt.Errorf("platform registry version is unavailable")
 	}
-	return loaded, nil
+	return value, nil
 }
 
-func (g *Gateway) load(ctx context.Context, force bool) (*registry, error) {
-	g.mu.RLock()
-	current := g.current
-	g.mu.RUnlock()
-	if current != nil && !force && time.Since(current.LoadedAt) < g.config.RegistryTTL {
-		return current, nil
-	}
+func (g *Gateway) load(ctx context.Context) (*registry, error) {
 	schema, err := g.config.OpenAPILoader(ctx)
 	if err != nil {
 		return nil, err
