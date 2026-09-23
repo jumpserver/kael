@@ -89,34 +89,37 @@ type Options struct {
 }
 
 type Service struct {
-	store             ports.Store
-	engine            agentruntime.Engine
-	bus               *event.Bus
-	logger            *zap.Logger
-	instanceID        string
-	workers           int
-	runTimeout        time.Duration
-	toolResultTimeout time.Duration
-	panelLease        time.Duration
-	registrationLease time.Duration
-	eventRetention    time.Duration
-	artifactDir       string
-	maxArtifactBytes  int64
-	capability        ports.CapabilityProvider
-	storageKind       string
-	storageDurable    bool
-	wake              chan struct{}
-	stop              chan struct{}
-	done              chan struct{}
-	startOnce         sync.Once
-	stopOnce          sync.Once
-	lifecycleMu       sync.Mutex
-	started           bool
-	startErr          error
-	activeMu          sync.Mutex
-	active            map[string]context.CancelFunc
-	credentialsMu     sync.Mutex
-	runCredentials    map[string]identity.CoreCredentials
+	store              ports.Store
+	engine             agentruntime.Engine
+	bus                *event.Bus
+	logger             *zap.Logger
+	instanceID         string
+	workers            int
+	runTimeout         time.Duration
+	toolResultTimeout  time.Duration
+	panelLease         time.Duration
+	registrationLease  time.Duration
+	eventRetention     time.Duration
+	artifactDir        string
+	maxArtifactBytes   int64
+	capability         ports.CapabilityProvider
+	storageKind        string
+	storageDurable     bool
+	wake               chan struct{}
+	stop               chan struct{}
+	done               chan struct{}
+	startOnce          sync.Once
+	stopOnce           sync.Once
+	lifecycleMu        sync.Mutex
+	started            bool
+	startErr           error
+	activeMu           sync.Mutex
+	active             map[string]context.CancelFunc
+	credentialsMu      sync.Mutex
+	runCredentials     map[string]identity.CoreCredentials
+	accountPasswordsMu sync.Mutex
+	accountPasswords   map[string]string
+	approvalSecrets    map[string]map[string]string
 }
 
 func New(options Options) (*Service, error) {

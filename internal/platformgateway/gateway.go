@@ -77,7 +77,14 @@ type operation struct {
 	BodyRequired        bool
 	RequiredPermissions []string
 	PermissionDynamic   bool
+	RBACProtected       bool
+	SafeSensitivePath   bool
 	CreateReuse         *createReusePolicy
+}
+
+type secretInputField struct {
+	Name     string `json:"name"`
+	Required bool   `json:"required"`
 }
 
 type registry struct {
@@ -160,8 +167,8 @@ func registrationsFor(registry *registry, profile string) []domain.Registration 
 	readAnnotations, _ := json.Marshal(domain.ToolAnnotations{ReadOnly: true, Idempotent: true})
 	writeAnnotations, _ := json.Marshal(domain.ToolAnnotations{OpenWorld: true})
 	definitions := []domain.Registration{
-		{ID: "platform-gateway:search:" + registry.Hash, BindingKind: "service", ExecutionBindingID: "platform-gateway:" + registry.Hash, ClientKey: searchTool, Name: searchTool, Description: "Immediately search server-authorized JumpServer Core operations by user intent. Results include operation-specific guidance and server-enforced create-reuse policies. Use read operations to resolve related IDs and defaults before a write; do not ask the user for data that Core can supply.", InputSchema: searchSchema, DefinitionVersion: registry.Hash, Namespace: profile, Risk: "read", AnnotationsJSON: readAnnotations, State: "active"},
-		{ID: "platform-gateway:call:" + registry.Hash, BindingKind: "service", ExecutionBindingID: "platform-gateway:" + registry.Hash, ClientKey: callTool, Name: callTool, Description: "Call one server-authorized Core operation selected from search results. Server-declared create-reuse policies are enforced automatically and may return an existing equivalent resource without a mutation. A remaining write call automatically opens the trusted approval UI; do not ask the user to type a separate confirmation first.", InputSchema: callSchema, DefinitionVersion: registry.Hash, Namespace: profile, Risk: "dangerous", RequiresConfirmation: true, AnnotationsJSON: writeAnnotations, State: "active"},
+		{ID: "platform-gateway:search:" + registry.Hash, BindingKind: "service", ExecutionBindingID: "platform-gateway:" + registry.Hash, ClientKey: searchTool, Name: searchTool, Description: "Immediately search JumpServer Core operations protected by RBAC. Static permissions are checked before discovery; Core checks dynamic permissions against the actual request. Results include operation-specific guidance and server-enforced create-reuse policies. Use read operations to resolve related IDs and defaults before a write; do not ask the user for data that Core can supply.", InputSchema: searchSchema, DefinitionVersion: registry.Hash, Namespace: profile, Risk: "read", AnnotationsJSON: readAnnotations, State: "active"},
+		{ID: "platform-gateway:call:" + registry.Hash, BindingKind: "service", ExecutionBindingID: "platform-gateway:" + registry.Hash, ClientKey: callTool, Name: callTool, Description: "Call one RBAC-protected Core operation selected from search results. Server-declared create-reuse policies are enforced automatically and may return an existing equivalent resource without a mutation. Never put passwords or other secrets in tool arguments; supported write-only fields are collected in the trusted approval UI. A remaining write call automatically opens that UI, so do not ask for chat confirmation.", InputSchema: callSchema, DefinitionVersion: registry.Hash, Namespace: profile, Risk: "dangerous", RequiresConfirmation: true, AnnotationsJSON: writeAnnotations, State: "active"},
 	}
 	for index := range definitions {
 		definitions[index].DefinitionDigest, _ = domain.HashValue(map[string]any{"name": definitions[index].Name, "description": definitions[index].Description, "schema": definitions[index].InputSchema, "version": registry.Hash})
@@ -180,12 +187,23 @@ func (g *Gateway) Prepare(ctx context.Context, request ports.CapabilityRequest) 
 	if operation == nil {
 		return ports.CapabilityPolicy{}, fmt.Errorf("operation is unavailable")
 	}
-	path, _, body, err := buildRequest(*operation, arguments)
+	secretFields := secretInputFields(*operation)
+	path, _, body, err := buildRequest(withoutSecretInputFields(*operation, secretFields), arguments)
 	if err != nil {
 		return ports.CapabilityPolicy{}, &ports.InvalidCapabilityArgumentsError{Detail: boundedString(err.Error(), 512)}
 	}
+	passwordRequired, err := accountPasswordRequired(operation.ID, body)
+	if err != nil {
+		return ports.CapabilityPolicy{}, &ports.InvalidCapabilityArgumentsError{Detail: err.Error()}
+	}
 	risk := methodRisk(operation.Method)
 	previewValue := map[string]any{"operation_id": operation.ID, "method": operation.Method, "path": path, "summary": operation.Summary, "arguments": sanitize(arguments, 0)}
+	if passwordRequired {
+		previewValue["account_password_required"] = true
+	}
+	if len(secretFields) > 0 {
+		previewValue["secret_input_fields"] = secretFields
+	}
 	resource, reused, reuseErr := g.findReusable(ctx, registry, *operation, request, body)
 	if reuseErr != nil {
 		return ports.CapabilityPolicy{}, reuseErr
@@ -212,17 +230,55 @@ func (g *Gateway) Execute(ctx context.Context, request ports.CapabilityRequest) 
 		encoded, _ := json.Marshal(map[string]any{"operations": candidates, "registry_version": registry.Hash})
 		return ports.CapabilityResult{Status: "success", Result: encoded, ExecutorAuditReference: "platform-search:" + uuid.NewString()}, nil
 	}
+	secretFields := secretInputFields(*operation)
+	if operation.CreateReuse != nil {
+		_, _, lookupBody, lookupErr := buildRequest(withoutSecretInputFields(*operation, secretFields), arguments)
+		if lookupErr != nil {
+			return ports.CapabilityResult{}, &ports.InvalidCapabilityArgumentsError{Detail: boundedString(lookupErr.Error(), 512)}
+		}
+		if _, lookupErr = accountPasswordRequired(operation.ID, lookupBody); lookupErr != nil {
+			return ports.CapabilityResult{}, lookupErr
+		}
+		resource, reused, reuseErr := g.findReusable(ctx, registry, *operation, request, lookupBody)
+		if reuseErr != nil {
+			return ports.CapabilityResult{}, reuseErr
+		}
+		if reused {
+			return reusedResult(*operation, operation.CreateReuse, redactKnownSecrets(resource, request)), nil
+		}
+	}
+	if err := applySecretInputs(arguments, secretFields, request.SecretInputs); err != nil {
+		return ports.CapabilityResult{}, err
+	}
 	path, query, body, err := buildRequest(*operation, arguments)
 	if err != nil {
-		encoded, _ := json.Marshal(map[string]any{"code": "invalid_operation_arguments", "message": "The operation arguments did not match the Core request schema.", "detail": boundedString(err.Error(), 512)})
+		detail := boundedString(err.Error(), 512)
+		if len(request.SecretInputs) > 0 {
+			detail = "The approved secret or request fields did not satisfy the Core request schema."
+		}
+		encoded, _ := json.Marshal(map[string]any{"code": "invalid_operation_arguments", "message": "The operation arguments did not match the Core request schema.", "detail": detail})
 		return ports.CapabilityResult{Status: "error", Error: encoded}, nil
+	}
+	passwordRequired, err := accountPasswordRequired(operation.ID, body)
+	if err != nil {
+		return ports.CapabilityResult{}, err
+	}
+	if passwordRequired {
+		if request.AccountPassword == "" {
+			return ports.CapabilityResult{}, fmt.Errorf("account password was not supplied by the approval UI")
+		}
+	} else if request.AccountPassword != "" {
+		return ports.CapabilityResult{}, fmt.Errorf("account password is not accepted for this operation")
 	}
 	resource, reused, reuseErr := g.findReusable(ctx, registry, *operation, request, body)
 	if reuseErr != nil {
 		return ports.CapabilityResult{}, reuseErr
 	}
 	if reused {
-		return reusedResult(*operation, operation.CreateReuse, resource), nil
+		return reusedResult(*operation, operation.CreateReuse, redactKnownSecrets(resource, request)), nil
+	}
+	if passwordRequired {
+		applyAccountPassword(body, request.AccountPassword)
 	}
 	// Registry search and reuse lookups do not issue a Core mutation.
 	// Management operations use this same execution path and are never exempt.
@@ -271,7 +327,7 @@ func (g *Gateway) Execute(ctx context.Context, request ports.CapabilityRequest) 
 	if len(content) > 0 && json.Unmarshal(content, &value) != nil {
 		value = boundedString(string(content), 8192)
 	}
-	clean := sanitize(value, 0)
+	clean := redactKnownSecrets(sanitize(value, 0), request)
 	ok := response.StatusCode >= 200 && response.StatusCode < 300
 	result := map[string]any{"ok": ok, "status_code": response.StatusCode, "operation_id": operation.ID, "data": clean}
 	encoded, _ := json.Marshal(result)
@@ -612,8 +668,13 @@ func (g *Gateway) resolveRequest(ctx context.Context, request ports.CapabilityRe
 	var arguments map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(request.Arguments))
 	decoder.UseNumber()
-	if decoder.Decode(&arguments) != nil || arguments == nil || containsSensitive(arguments) {
+	if decoder.Decode(&arguments) != nil || arguments == nil {
 		return nil, nil, nil, fmt.Errorf("capability arguments are invalid")
+	}
+	if containsSensitive(arguments) {
+		return nil, nil, nil, &ports.InvalidCapabilityArgumentsError{
+			Detail: "Credential fields cannot be sent through the AI assistant. Create the host without embedded credentials, then use a separately authorized account creation operation and enter the password in its approval form.",
+		}
 	}
 	version := strings.TrimPrefix(request.Registration.ExecutionBindingID, "platform-gateway:")
 	registry, err := g.version(ctx, version)
@@ -723,6 +784,8 @@ func parseOperations(schema map[string]any) (map[string]operation, error) {
 			}
 			requiredPermissions, staticPermissions := permissionMetadata(item["x-jms-required-permissions"])
 			permissionDynamic, dynamicMetadata := item["x-jms-permission-dynamic"].(bool)
+			rbacProtected, _ := item["x-jms-rbac-protected"].(bool)
+			safeSensitivePath, _ := item["x-jms-safe-sensitive-path"].(bool)
 			createReuse, reuseErr := parseCreateReusePolicy(item["x-jms-create-reuse"])
 			if reuseErr != nil {
 				return nil, fmt.Errorf("Core OpenAPI operation %s has invalid create-reuse metadata: %w", id, reuseErr)
@@ -731,6 +794,8 @@ func parseOperations(schema map[string]any) (map[string]operation, error) {
 				ID: id, Method: upper, Path: path, Summary: stringValue(item["summary"]), Description: stringValue(item["description"]), Tags: stringSlice(item["tags"]),
 				RequiredPermissions: requiredPermissions,
 				PermissionDynamic:   !staticPermissions || !dynamicMetadata || permissionDynamic,
+				RBACProtected:       rbacProtected,
+				SafeSensitivePath:   safeSensitivePath,
 				Guidance:            stringValue(item["x-jms-ai-guidance"]),
 				CreateReuse:         createReuse,
 			}
@@ -833,7 +898,14 @@ func validateCreateReusePolicies(operations map[string]operation) error {
 		for _, parameter := range lookup.QueryParams {
 			lookupParameters[parameter.Name] = true
 		}
+		secretFields := make(map[string]bool)
+		for _, field := range secretInputFields(operation) {
+			secretFields[field.Name] = true
+		}
 		for _, field := range policy.Fields {
+			if secretFields[field.BodyField] {
+				return fmt.Errorf("Core create-reuse policy cannot query a secret field")
+			}
 			if _, ok := bodyProperties[field.BodyField]; !ok {
 				return fmt.Errorf("Core OpenAPI create-reuse body field %s.%s does not exist", operation.ID, field.BodyField)
 			}
@@ -1157,6 +1229,157 @@ func emptyObject(value any) bool {
 	return ok && len(object) == 0
 }
 
+var approvalSecretFields = set(
+	"password", "old_password", "new_password", "confirm_password",
+	"secret", "old_secret", "new_secret", "passphrase", "private_key",
+	"ssh_key", "token", "api_key", "access_key", "zip_encrypt_password",
+)
+
+func secretInputFields(operation operation) []secretInputField {
+	if !requiresApproval(operation.Method) || operation.ID == "accounts_accounts_create" {
+		return nil
+	}
+	properties, _ := operation.Body["properties"].(map[string]any)
+	required := make(map[string]bool)
+	for _, value := range anySlice(operation.Body["required"]) {
+		if name, ok := value.(string); ok {
+			required[name] = true
+		}
+	}
+	fields := make([]secretInputField, 0)
+	for name, raw := range properties {
+		property, _ := raw.(map[string]any)
+		if property == nil || !approvalSecretFields[normalizeKey(name)] &&
+			!(sensitiveKey(name) && boolValue(property["writeOnly"])) && property["format"] != "password" {
+			continue
+		}
+		if !schemaAcceptsString(property["type"]) {
+			continue
+		}
+		fields = append(fields, secretInputField{Name: name, Required: required[name]})
+	}
+	sort.Slice(fields, func(i, j int) bool { return fields[i].Name < fields[j].Name })
+	return fields
+}
+
+func schemaAcceptsString(value any) bool {
+	if value == "string" {
+		return true
+	}
+	for _, choice := range anySlice(value) {
+		if choice == "string" {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutSecretInputFields(operation operation, fields []secretInputField) operation {
+	if len(fields) == 0 {
+		return operation
+	}
+	copyOfBody := make(map[string]any, len(operation.Body))
+	for name, value := range operation.Body {
+		copyOfBody[name] = value
+	}
+	properties, _ := operation.Body["properties"].(map[string]any)
+	copyOfProperties := make(map[string]any, len(properties))
+	for name, value := range properties {
+		copyOfProperties[name] = value
+	}
+	excluded := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		delete(copyOfProperties, field.Name)
+		excluded[field.Name] = true
+	}
+	copyOfBody["properties"] = copyOfProperties
+	required := make([]any, 0)
+	for _, raw := range anySlice(operation.Body["required"]) {
+		name, _ := raw.(string)
+		if !excluded[name] {
+			required = append(required, raw)
+		}
+	}
+	copyOfBody["required"] = required
+	operation.Body = copyOfBody
+	operation.BodyRequired = false
+	return operation
+}
+
+func applySecretInputs(arguments map[string]any, fields []secretInputField, values map[string]string) error {
+	if len(fields) == 0 {
+		if len(values) > 0 {
+			return fmt.Errorf("this operation does not accept approval secret inputs")
+		}
+		return nil
+	}
+	allowed := make(map[string]secretInputField, len(fields))
+	for _, field := range fields {
+		allowed[field.Name] = field
+	}
+	for name, value := range values {
+		if _, ok := allowed[name]; !ok || len(value) > 40960 {
+			return fmt.Errorf("approval secret input is invalid")
+		}
+	}
+	body, _ := arguments["body"].(map[string]any)
+	if body == nil {
+		body = make(map[string]any)
+		arguments["body"] = body
+	}
+	for _, field := range fields {
+		value := values[field.Name]
+		if field.Required && value == "" {
+			return fmt.Errorf("a required secret must be entered in the approval form")
+		}
+		if value != "" {
+			body[field.Name] = value
+		}
+	}
+	return nil
+}
+
+// The AI supplies account metadata. The password is entered separately in the
+// approval UI and added only to the outbound account-creation request.
+func accountPasswordRequired(operationID string, body any) (bool, error) {
+	if operationID == "assets_hosts_create" {
+		if host, ok := body.(map[string]any); ok {
+			if _, present := host["accounts"]; present {
+				return false, fmt.Errorf("create the host without embedded accounts, then create its accounts separately")
+			}
+		}
+	}
+	if operationID != "accounts_accounts_create" {
+		return false, nil
+	}
+	account, ok := body.(map[string]any)
+	if !ok {
+		return false, fmt.Errorf("account details must be an object")
+	}
+	secretType := account["secret_type"]
+	if choice, wrapped := secretType.(map[string]any); wrapped {
+		secretType = choice["value"]
+	}
+	if secretType != nil && secretType != "password" {
+		return false, fmt.Errorf("the AI assistant can create password accounts only")
+	}
+	allowedFields := map[string]bool{
+		"asset": true, "username": true, "name": true,
+		"secret_type": true, "privileged": true, "is_active": true,
+		"comment": true,
+	}
+	for field := range account {
+		if !allowedFields[field] {
+			return false, fmt.Errorf("this account field is not supported by the AI assistant")
+		}
+	}
+	return true, nil
+}
+
+func applyAccountPassword(body any, password string) {
+	body.(map[string]any)["secret"] = password
+}
+
 func validateValue(schema map[string]any, value any) error {
 	if len(schema) == 0 {
 		return nil
@@ -1197,24 +1420,6 @@ var scopes = map[string]map[string]bool{
 	"platform.ops":           set("audits_job_logs_list", "audits_job_logs_retrieve", "audits_jobs_list", "audits_jobs_retrieve", "ops_jobs_list", "ops_jobs_retrieve", "ops_tasks_list", "ops_tasks_retrieve", "terminal_components_metrics_retrieve", "terminal_terminals_list", "terminal_terminals_retrieve"),
 }
 
-var generalScope = set(
-	"assets_platforms_list", "assets_platforms_retrieve",
-	"assets_nodes_list", "assets_nodes_retrieve", "assets_nodes_assets_list",
-	"assets_assets_list", "assets_assets_retrieve", "assets_categories_list", "assets_protocols_list",
-	"assets_hosts_list", "assets_hosts_retrieve", "assets_hosts_create",
-	"terminal_sessions_list", "terminal_sessions_retrieve", "terminal_commands_list", "terminal_commands_retrieve",
-	"terminal_tasks_list", "terminal_tasks_retrieve", "terminal_components_metrics_retrieve",
-	"terminal_terminals_list", "terminal_terminals_retrieve",
-	"audits_activities_list", "audits_job_logs_list", "audits_job_logs_retrieve",
-	"audits_jobs_list", "audits_jobs_retrieve", "audits_login_logs_list", "audits_login_logs_retrieve",
-	"audits_my_login_logs_list", "audits_my_login_logs_retrieve", "audits_operate_logs_list", "audits_operate_logs_retrieve",
-	"audits_service_access_logs_list", "audits_service_access_logs_retrieve", "audits_tickets_list", "audits_tickets_retrieve",
-	"ops_jobs_list", "ops_jobs_retrieve", "ops_tasks_list", "ops_tasks_retrieve",
-	"users_users_list", "users_users_retrieve",
-	"acls_command_groups_list", "acls_command_groups_retrieve", "acls_command_groups_create",
-	"acls_command_filter_acls_list", "acls_command_filter_acls_retrieve", "acls_command_filter_acls_create",
-)
-
 func set(values ...string) map[string]bool {
 	result := make(map[string]bool, len(values))
 	for _, value := range values {
@@ -1226,11 +1431,19 @@ func profileEnabled(profile string, principal domain.Principal) bool {
 	return profile == "general" || profile == "platform.management" && (principal.IsSuperuser || principal.IsOrgAdmin) || scopes[profile] != nil
 }
 func operationAllowed(profile string, principal domain.Principal, operation operation, methods map[string]bool) bool {
-	if !methods[operation.Method] || sensitivePath(operation.Path) || operation.PermissionDynamic || !hasAllPermissions(principal, operation.RequiredPermissions) {
+	if !methods[operation.Method] || sensitivePath(operation.Path) && !operation.SafeSensitivePath {
 		return false
 	}
 	if profile == "general" {
-		return generalScope[operation.ID]
+		if !operation.RBACProtected {
+			return false
+		}
+		// Core determines dynamic permissions from the actual target and body,
+		// and checks them again using the logged-in user's credentials.
+		return operation.PermissionDynamic || hasAllPermissions(principal, operation.RequiredPermissions)
+	}
+	if operation.PermissionDynamic || !hasAllPermissions(principal, operation.RequiredPermissions) {
+		return false
 	}
 	if profile == "platform.management" {
 		return true
@@ -1298,6 +1511,9 @@ func searchOperations(registry *registry, profile string, principal domain.Princ
 	for _, item := range ranked {
 		operation := item.operation
 		candidate := map[string]any{"operation_id": operation.ID, "method": operation.Method, "path": operation.Path, "summary": operation.Summary, "description": boundedString(operation.Description, 500), "tags": operation.Tags, "risk_level": methodRisk(operation.Method), "requires_approval": requiresApproval(operation.Method), "path_parameters": compactParameters(operation.PathParams), "query_parameters": compactParameters(operation.QueryParams), "request_body_schema": compactSchema(operation.Body, 0)}
+		if operation.PermissionDynamic {
+			candidate["permission_check"] = "core_at_execution"
+		}
 		if operation.Guidance != "" {
 			candidate["guidance"] = boundedString(operation.Guidance, 1000)
 		}
@@ -1408,8 +1624,9 @@ var wordPattern = regexp.MustCompile(`[\p{L}\p{N}_/-]+`)
 func tokenize(value string) []string {
 	normalized := strings.ToLower(value)
 	aliases := []struct{ source, target string }{
-		{"创建", "create"}, {"新建", "create"}, {"主机", "host"}, {"服务器", "host"}, {"机器", "host"},
+		{"创建", "create"}, {"新建", "create"}, {"添加", "create"}, {"新增", "create"}, {"主机", "host"}, {"服务器", "host"}, {"机器", "host"},
 		{"资产", "asset"}, {"平台", "platform"}, {"节点", "node"}, {"查询", "list"}, {"查看", "list"},
+		{"账号", "account"}, {"账户", "account"}, {"帐户", "account"}, {"帳號", "account"},
 		{"删除", "delete"}, {"修改", "update"}, {"会话", "session"}, {"命令", "command"}, {"任务", "task"},
 		{"作业", "job"}, {"用户", "user"}, {"登录", "login"}, {"审计", "audit"},
 	}
@@ -1517,6 +1734,47 @@ func sanitizeText(value string) string {
 	}
 	return result
 }
+
+func redactKnownSecrets(value any, request ports.CapabilityRequest) any {
+	secrets := make([]string, 0, len(request.SecretInputs)+1)
+	if request.AccountPassword != "" {
+		secrets = append(secrets, request.AccountPassword)
+	}
+	for _, secret := range request.SecretInputs {
+		if secret != "" {
+			secrets = append(secrets, secret)
+		}
+	}
+	var redact func(any) any
+	redactText := func(value string) string {
+		for _, secret := range secrets {
+			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+		}
+		return value
+	}
+	redact = func(item any) any {
+		switch current := item.(type) {
+		case string:
+			return redactText(current)
+		case []any:
+			result := make([]any, len(current))
+			for index, child := range current {
+				result[index] = redact(child)
+			}
+			return result
+		case map[string]any:
+			result := make(map[string]any, len(current))
+			for name, child := range current {
+				result[redactText(name)] = redact(child)
+			}
+			return result
+		default:
+			return item
+		}
+	}
+	return redact(value)
+}
+
 func stringValue(value any) string { result, _ := value.(string); return result }
 func boolValue(value any) bool     { result, _ := value.(bool); return result }
 func boolDefault(value any, fallback bool) bool {

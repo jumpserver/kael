@@ -290,6 +290,7 @@ func (c *Client) OpenAPISchema(ctx context.Context) (map[string]any, error) {
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-JMS-ORG", "ROOT")
+	request.Header.Set("X-JMS-AI-Schema", "1")
 	if err = (&httplib.SigAuth{KeyID: c.accessKeyID, SecretID: c.accessKeySecret}).Sign(request); err != nil {
 		return nil, fmt.Errorf("load Core OpenAPI schema: sign request: %w", err)
 	}

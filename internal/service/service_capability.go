@@ -93,6 +93,8 @@ func (s *Service) callServiceCapability(ctx context.Context, run *domain.Run, re
 			}
 			return agentruntime.ToolObservation{}, err
 		}
+		request.AccountPassword = s.takeAccountPassword(approval.ID)
+		request.SecretInputs = s.takeSecretInputs(approval.ID)
 	}
 	if err = s.startServiceCapability(ctx, run, call, approval); err != nil {
 		return agentruntime.ToolObservation{}, err
