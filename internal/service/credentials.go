@@ -3,11 +3,65 @@ package service
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jumpserver/kael/internal/domain"
 	"github.com/jumpserver/kael/internal/identity"
 	"github.com/jumpserver/kael/internal/ports"
 )
+
+// Approval passwords live only in this process until the waiting call takes
+// them, and are never written to the journal or audit store.
+func (s *Service) keepAccountPassword(approvalID, password string) {
+	s.accountPasswordsMu.Lock()
+	if s.accountPasswords == nil {
+		s.accountPasswords = make(map[string]string)
+	}
+	s.accountPasswords[approvalID] = password
+	s.accountPasswordsMu.Unlock()
+	time.AfterFunc(10*time.Minute, func() {
+		s.accountPasswordsMu.Lock()
+		delete(s.accountPasswords, approvalID)
+		s.accountPasswordsMu.Unlock()
+	})
+}
+
+func (s *Service) takeAccountPassword(approvalID string) string {
+	s.accountPasswordsMu.Lock()
+	defer s.accountPasswordsMu.Unlock()
+	password := s.accountPasswords[approvalID]
+	delete(s.accountPasswords, approvalID)
+	return password
+}
+
+func (s *Service) keepSecretInputs(approvalID string, inputs map[string]string) {
+	if len(inputs) == 0 {
+		return
+	}
+	copyOfInputs := make(map[string]string, len(inputs))
+	for name, value := range inputs {
+		copyOfInputs[name] = value
+	}
+	s.accountPasswordsMu.Lock()
+	if s.approvalSecrets == nil {
+		s.approvalSecrets = make(map[string]map[string]string)
+	}
+	s.approvalSecrets[approvalID] = copyOfInputs
+	s.accountPasswordsMu.Unlock()
+	time.AfterFunc(10*time.Minute, func() {
+		s.accountPasswordsMu.Lock()
+		delete(s.approvalSecrets, approvalID)
+		s.accountPasswordsMu.Unlock()
+	})
+}
+
+func (s *Service) takeSecretInputs(approvalID string) map[string]string {
+	s.accountPasswordsMu.Lock()
+	defer s.accountPasswordsMu.Unlock()
+	inputs := s.approvalSecrets[approvalID]
+	delete(s.approvalSecrets, approvalID)
+	return inputs
+}
 
 // The caller holds credentialsMu across queueing and binding so a worker
 // cannot execute a committed run before its request credentials are available.

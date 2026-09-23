@@ -137,7 +137,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("TERMINAL_AI_MAX_BYTES", int64(1<<30))
 	v.SetDefault("TERMINAL_AI_MIN_FREE_BYTES", int64(1<<30))
 	v.SetDefault("PLATFORM_GATEWAY_ENABLED", true)
-	v.SetDefault("PLATFORM_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "PATCH"})
+	v.SetDefault("PLATFORM_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "PATCH", "DELETE"})
 	v.SetDefault("PLATFORM_REGISTRY_TTL", "1h")
 	v.SetDefault("PLATFORM_TIMEOUT", "15s")
 	v.SetDefault("PLATFORM_MAX_RESPONSE_BYTES", 1024*1024)

@@ -51,12 +51,13 @@ BOOTSTRAP_TOKEN: <PleaseChangeMe>
 # 业务请求沿用用户 Cookie（或已有 Authorization），写请求同时携带 CSRF token。
 # 用户凭据只按 Run 保存在进程内存中，不写入 Journal 或模型输入。
 # 启用前必须确认 Core 已应用 Runtime Store migration，且组件签名可访问
-# /api/swagger.json，并提供 x-jms-required-permissions 与 x-jms-permission-dynamic。
+# /api/swagger.json，并提供 x-jms-required-permissions、
+# x-jms-permission-dynamic 与 x-jms-rbac-protected。
 PLATFORM_GATEWAY_ENABLED: true
 # PLATFORM_CA_CERT: ""
 # PLATFORM_CLIENT_CERT: ""
 # PLATFORM_CLIENT_KEY: ""
-# PLATFORM_ALLOWED_METHODS: [GET, POST, PUT, PATCH]
+# PLATFORM_ALLOWED_METHODS: [GET, POST, PUT, PATCH, DELETE]
 # PLATFORM_REGISTRY_TTL: 1h
 # PLATFORM_TIMEOUT: 15s
 # PLATFORM_MAX_RESPONSE_BYTES: 1048576
