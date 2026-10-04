@@ -3,9 +3,55 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
+
+func TestDefaultName(t *testing.T) {
+	hostname, _ := os.Hostname()
+	for _, tc := range []struct {
+		name       string
+		serverHost string
+		wantPrefix string
+	}{
+		{name: "unset", wantPrefix: "[Kael]-" + hostname + "-"},
+		{name: "empty", wantPrefix: "[Kael]--" + hostname + "-"},
+		{name: "set", serverHost: "server", wantPrefix: "[Kael]-server-" + hostname + "-"},
+		{name: "long unicode", serverHost: strings.Repeat("界", 128), wantPrefix: "[Kael]-" + strings.Repeat("界", 57)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SERVER_HOSTNAME", tc.serverHost)
+			if tc.name == "unset" {
+				if err := os.Unsetenv("SERVER_HOSTNAME"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			name := defaultName()
+			wantLength := utf8.RuneCountInString(tc.wantPrefix) + 7
+			if wantLength > 128 {
+				wantLength = 128
+				tc.wantPrefix = string([]rune(tc.wantPrefix)[:64])
+			}
+			if tc.name == "long unicode" {
+				wantLength = 128
+				tail := []rune(tc.serverHost + "-" + hostname + "-")
+				if !strings.HasSuffix(name[:len(name)-7], string(tail[len(tail)-57:])) {
+					t.Fatalf("truncated name lost its tail: %q", name)
+				}
+			}
+			if !utf8.ValidString(name) || utf8.RuneCountInString(name) != wantLength || !strings.HasPrefix(name, tc.wantPrefix) {
+				t.Fatalf("unexpected default name: %q", name)
+			}
+			for _, char := range name[len(name)-7:] {
+				if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z') {
+					t.Fatalf("random suffix contains a non-letter: %q", name)
+				}
+			}
+		})
+	}
+}
 
 func TestLoadFlatKokoStyleEnvironment(t *testing.T) {
 	t.Setenv("CORE_HOST", "https://core.example.test")

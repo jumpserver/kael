@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/rand"
 	"fmt"
+	"math/big"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -141,16 +142,22 @@ func setDefaults(v *viper.Viper) {
 }
 
 func defaultName() string {
-	hostname, err := os.Hostname()
-	if err != nil || strings.TrimSpace(hostname) == "" {
-		hostname = "localhost"
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	suffix := make([]byte, 7)
+	for i := range suffix {
+		index, _ := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+		suffix[i] = letters[index.Int64()]
+	}
+	hostname, _ := os.Hostname()
+	hostname = fmt.Sprintf("%s-%s", hostname, suffix)
+	if serverHostname, ok := os.LookupEnv("SERVER_HOSTNAME"); ok {
+		hostname = fmt.Sprintf("%s-%s", serverHostname, hostname)
 	}
 	value := []rune("[Kael]-" + hostname)
-	suffix := "-" + rand.Text()[:7]
-	if len(value) > 128-len(suffix) {
-		value = value[:128-len(suffix)]
+	if len(value) > 128 {
+		value = append(value[:64], value[len(value)-64:]...)
 	}
-	return string(value) + suffix
+	return string(value)
 }
 
 func (c Config) Validate() error {
