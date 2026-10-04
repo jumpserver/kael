@@ -3,7 +3,8 @@
 CODEX_BINARY: codex
 # CHAT_AI_BASE_URL in Core must support Responses API. Chat Completions is not supported.
 # 与 Koko 一致，Kael 只使用平铺配置。
-# 默认名称为 [Kael]-主机名-7位随机串；手动指定时需保证名称唯一。
+# 默认名称为 [Kael]-主机名-7位随机大小写字母；设置 SERVER_HOSTNAME 环境变量时会拼在主机名前。
+# 超过 128 个字符时保留前 64 和后 64 个字符；手动指定 NAME 时需保证名称唯一。
 # NAME: "[Kael]-custom-name"
 
 CORE_HOST: http://127.0.0.1:8080
