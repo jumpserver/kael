@@ -23,7 +23,7 @@ func (s *Service) callServiceCapability(ctx context.Context, run *domain.Run, re
 	}
 	principal := domain.Principal{SubjectID: run.SubjectID, OrganizationID: run.OrganizationID, IsSuperuser: run.AuthorizationSuperuser, IsOrgAdmin: run.AuthorizationOrgAdmin, Permissions: append([]string(nil), run.AuthorizationPermissions...)}
 	request := ports.CapabilityRequest{Principal: principal, ConversationID: run.ConversationID, RunID: run.ID, Profile: run.Profile, Registration: registration, Arguments: arguments}
-	capabilityPolicy, err := s.capability.Prepare(ctx, request)
+	capabilityPolicy, err := s.capability.Prepare(s.capabilityContext(ctx, run.ID), request)
 	if err != nil {
 		var invalidArguments *ports.InvalidCapabilityArgumentsError
 		if errors.As(err, &invalidArguments) {
