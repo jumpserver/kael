@@ -1,4 +1,4 @@
-FROM jumpserver/kael-base:20260909_014534 AS stage-build
+FROM jumpserver/kael-base:20260920_104824 AS stage-build
 ARG TARGETARCH
 
 WORKDIR /opt/kael

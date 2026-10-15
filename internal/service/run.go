@@ -59,6 +59,8 @@ func (s *Service) CreateRun(ctx context.Context, principal domain.Principal, req
 	var run *domain.Run
 	duplicate := false
 	var notify []string
+	s.credentialsMu.Lock()
+	defer s.credentialsMu.Unlock()
 	err := s.store.Transaction(ctx, func(tx ports.Tx) error {
 		existing, existingErr := tx.RunByIdempotency(key, principal)
 		if existingErr == nil {
@@ -175,6 +177,7 @@ func (s *Service) CreateRun(ctx context.Context, principal domain.Principal, req
 		return nil, translateStore(err)
 	}
 	if !duplicate {
+		s.bindRunCredentials(ctx, run)
 		s.bus.Notify(notify...)
 		s.signalWorker()
 	}
@@ -291,6 +294,7 @@ func (s *Service) CancelRun(ctx context.Context, principal domain.Principal, id,
 	if cancel != nil {
 		cancel()
 	}
+	s.forgetRunCredentials(id)
 	s.bus.Notify(notify...)
 	return run, nil
 }
@@ -299,6 +303,8 @@ func (s *Service) ResumeRun(ctx context.Context, principal domain.Principal, id 
 	now := time.Now().UTC()
 	var run *domain.Run
 	var notify []string
+	s.credentialsMu.Lock()
+	defer s.credentialsMu.Unlock()
 	err := s.store.Transaction(ctx, func(tx ports.Tx) error {
 		var err error
 		run, err = tx.Run(id, principal, true)
@@ -345,6 +351,7 @@ func (s *Service) ResumeRun(ctx context.Context, principal domain.Principal, id 
 	if err != nil {
 		return nil, translateOrService(err)
 	}
+	s.bindRunCredentials(ctx, run)
 	s.bus.Notify(notify...)
 	s.signalWorker()
 	return run, nil
@@ -423,6 +430,7 @@ func (s *Service) claim() (*domain.Run, error) {
 }
 
 func (s *Service) execute(run *domain.Run) {
+	defer s.forgetRunCredentials(run.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), s.runTimeout)
 	s.activeMu.Lock()
 	s.active[run.ID] = cancel

@@ -915,10 +915,12 @@ func (s *Service) SubmitToolResult(ctx context.Context, principal domain.Princip
 }
 
 type ApprovalDecisionRequest struct {
-	Decision        string `json:"decision"`
-	RunID           string `json:"run_id"`
-	ArgumentsDigest string `json:"arguments_digest"`
-	Remember        bool   `json:"remember,omitempty"`
+	Decision        string            `json:"decision"`
+	RunID           string            `json:"run_id"`
+	ArgumentsDigest string            `json:"arguments_digest"`
+	Remember        bool              `json:"remember,omitempty"`
+	AccountPassword string            `json:"account_password,omitempty"`
+	SecretInputs    map[string]string `json:"secret_inputs,omitempty"`
 }
 
 func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal, id string, request ApprovalDecisionRequest) (*domain.Approval, bool, error) {
@@ -928,10 +930,18 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 	if request.Remember && request.Decision != "approve" {
 		return nil, false, serviceError(Invalid, "invalid_remembered_decision", "only an approved command can be remembered", nil)
 	}
-	digest, _ := domain.HashValue(request)
+	// The decision digest must not contain even a hash of the password.
+	digest, _ := domain.HashValue(struct {
+		Decision        string
+		RunID           string
+		ArgumentsDigest string
+		Remember        bool
+	}{request.Decision, request.RunID, request.ArgumentsDigest, request.Remember})
 	var approval *domain.Approval
 	duplicate := false
 	expired := false
+	passwordStored := false
+	secretsStored := false
 	var notify []string
 	err := s.store.Transaction(ctx, func(tx ports.Tx) error {
 		now := time.Now().UTC()
@@ -964,6 +974,40 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 		if request.RunID != "" && request.RunID != approval.RunID || request.ArgumentsDigest != "" && request.ArgumentsDigest != approval.ArgumentsDigest {
 			return serviceError(Forbidden, "approval_binding_mismatch", "approval binding is invalid", nil)
 		}
+		var preview struct {
+			AccountPasswordRequired bool `json:"account_password_required"`
+			SecretInputFields       []struct {
+				Name     string `json:"name"`
+				Required bool   `json:"required"`
+			} `json:"secret_input_fields"`
+		}
+		if len(approval.Preview) > 0 {
+			if err := json.Unmarshal(approval.Preview, &preview); err != nil {
+				return serviceError(Invalid, "invalid_approval_preview", "approval preview is invalid", nil)
+			}
+		}
+		if preview.AccountPasswordRequired {
+			if request.Decision == "approve" && (request.AccountPassword == "" || len(request.AccountPassword) > 40960) {
+				return serviceError(Invalid, "account_password_required", "enter an account password in the approval form", nil)
+			}
+		} else if request.AccountPassword != "" {
+			return serviceError(Invalid, "account_password_unexpected", "this operation does not accept an account password", nil)
+		}
+		allowedSecrets := make(map[string]bool, len(preview.SecretInputFields))
+		for _, field := range preview.SecretInputFields {
+			allowedSecrets[field.Name] = true
+			if request.Decision == "approve" && field.Required && request.SecretInputs[field.Name] == "" {
+				return serviceError(Invalid, "secret_input_required", "enter the required secret in the approval form", nil)
+			}
+		}
+		if len(request.SecretInputs) > 20 {
+			return serviceError(Invalid, "secret_input_invalid", "too many approval secret inputs", nil)
+		}
+		for name, value := range request.SecretInputs {
+			if request.Decision != "approve" || !allowedSecrets[name] || len(value) > 40960 {
+				return serviceError(Invalid, "secret_input_invalid", "approval secret input is invalid", nil)
+			}
+		}
 		panel, err := tx.Panel(approval.PanelSessionID, principal, true)
 		if err != nil {
 			return err
@@ -979,6 +1023,14 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 			if registration.PanelSessionID != panel.ID || registration.Annotations().CommandPolicy != policy.ShellReadOnlyPolicy {
 				return serviceError(Forbidden, "remembered_approval_forbidden", "this approval cannot be remembered", nil)
 			}
+		}
+		if preview.AccountPasswordRequired && request.Decision == "approve" {
+			s.keepAccountPassword(id, request.AccountPassword)
+			passwordStored = true
+		}
+		if len(request.SecretInputs) > 0 && request.Decision == "approve" {
+			s.keepSecretInputs(id, request.SecretInputs)
+			secretsStored = true
 		}
 		approval.State = "approved"
 		if request.Decision == "reject" {
@@ -1019,6 +1071,12 @@ func (s *Service) DecideApproval(ctx context.Context, principal domain.Principal
 		return s.audit(tx, principal, "approval.decided", approval.ConversationID, approval.PanelSessionID, approval.RunID, map[string]any{"approval_id": approval.ID, "decision": request.Decision, "remembered": approval.Remembered})
 	})
 	if err != nil {
+		if passwordStored {
+			s.takeAccountPassword(id)
+		}
+		if secretsStored {
+			s.takeSecretInputs(id)
+		}
 		return nil, false, translateOrService(err)
 	}
 	if expired {

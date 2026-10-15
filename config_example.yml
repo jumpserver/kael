@@ -3,8 +3,9 @@
 CODEX_BINARY: codex
 # CHAT_AI_BASE_URL in Core must support Responses API. Chat Completions is not supported.
 # 与 Koko 一致，Kael 只使用平铺配置。
-# 组件名称不能与其它 Terminal component 重复。
-# NAME: "[Kael]-hostname"
+# 默认名称为 [Kael]-主机名-7位随机大小写字母；设置 SERVER_HOSTNAME 环境变量时会拼在主机名前。
+# 超过 128 个字符时保留前 64 和后 64 个字符；手动指定 NAME 时需保证名称唯一。
+# NAME: "[Kael]-custom-name"
 
 CORE_HOST: http://127.0.0.1:8080
 
@@ -47,25 +48,17 @@ BOOTSTRAP_TOKEN: <PleaseChangeMe>
 
 # TRUST_FORWARDED_HEADERS: false
 
-# Platform Gateway 默认且必须启用，因为 Lina 默认 general 依赖它访问授权 Core API；
-# 显式关闭或密钥留空时 Kael 会在监听端口前失败，不会以“ready 但 general 不可用”运行。
-# PLATFORM_DELEGATION_KEY 至少 32 字符，并与 Core CHAT_AI_DELEGATION_SECRET 完全一致。
-# PLATFORM_DELEGATION_KEY_ID 对应 Core CHAT_AI_DELEGATION_KEY_ID；
-# PLATFORM_DELEGATION_ISSUER 对应 Core CHAT_AI_DELEGATION_ISSUER；
-# PLATFORM_DELEGATION_AUDIENCE 对应 Core CHAT_AI_DELEGATION_AUDIENCE。
-# 启用前还必须确认 Core 已应用 Runtime Store migration、Redis 可用于 delegation nonce
-# 防重放，且 /api/swagger.json 可访问并为候选操作提供 x-jms-required-permissions 与
-# x-jms-permission-dynamic 元数据。
+# Platform Gateway 默认且必须启用，因为 Lina 默认 general 依赖它访问授权 Core API。
+# 业务请求沿用用户 Cookie（或已有 Authorization），写请求同时携带 CSRF token。
+# 用户凭据只按 Run 保存在进程内存中，不写入 Journal 或模型输入。
+# 启用前必须确认 Core 已应用 Runtime Store migration，且组件签名可访问
+# /api/swagger.json，并提供 x-jms-required-permissions、
+# x-jms-permission-dynamic 与 x-jms-rbac-protected。
+# Swagger Registry 在启动后后台加载；加载前 Core API 能力会返回未就绪。
 PLATFORM_GATEWAY_ENABLED: true
-# 此处故意留空以强制部署者配置；不要在镜像或仓库中内置共享密钥。
-PLATFORM_DELEGATION_KEY: ""
-# PLATFORM_DELEGATION_KEY_ID: v1
-# PLATFORM_DELEGATION_ISSUER: jumpserver-ai
-# PLATFORM_DELEGATION_AUDIENCE: jumpserver-core
 # PLATFORM_CA_CERT: ""
 # PLATFORM_CLIENT_CERT: ""
 # PLATFORM_CLIENT_KEY: ""
-# PLATFORM_ALLOWED_METHODS: [GET, POST, PUT, PATCH]
-# PLATFORM_REGISTRY_TTL: 1h
+# PLATFORM_ALLOWED_METHODS: [GET, POST, PUT, PATCH, DELETE]
 # PLATFORM_TIMEOUT: 15s
 # PLATFORM_MAX_RESPONSE_BYTES: 1048576

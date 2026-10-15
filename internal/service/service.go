@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jumpserver/kael/internal/domain"
 	"github.com/jumpserver/kael/internal/event"
+	"github.com/jumpserver/kael/internal/identity"
 	"github.com/jumpserver/kael/internal/model"
 	"github.com/jumpserver/kael/internal/policy"
 	"github.com/jumpserver/kael/internal/ports"
@@ -88,32 +89,38 @@ type Options struct {
 }
 
 type Service struct {
-	store             ports.Store
-	engine            agentruntime.Engine
-	bus               *event.Bus
-	logger            *zap.Logger
-	instanceID        string
-	workers           int
-	runTimeout        time.Duration
-	toolResultTimeout time.Duration
-	panelLease        time.Duration
-	registrationLease time.Duration
-	eventRetention    time.Duration
-	artifactDir       string
-	maxArtifactBytes  int64
-	capability        ports.CapabilityProvider
-	storageKind       string
-	storageDurable    bool
-	wake              chan struct{}
-	stop              chan struct{}
-	done              chan struct{}
-	startOnce         sync.Once
-	stopOnce          sync.Once
-	lifecycleMu       sync.Mutex
-	started           bool
-	startErr          error
-	activeMu          sync.Mutex
-	active            map[string]context.CancelFunc
+	store              ports.Store
+	engine             agentruntime.Engine
+	bus                *event.Bus
+	logger             *zap.Logger
+	instanceID         string
+	workers            int
+	runTimeout         time.Duration
+	toolResultTimeout  time.Duration
+	panelLease         time.Duration
+	registrationLease  time.Duration
+	eventRetention     time.Duration
+	artifactDir        string
+	maxArtifactBytes   int64
+	capability         ports.CapabilityProvider
+	storageKind        string
+	storageDurable     bool
+	wake               chan struct{}
+	stop               chan struct{}
+	done               chan struct{}
+	startOnce          sync.Once
+	stopOnce           sync.Once
+	registryCancel     context.CancelFunc
+	lifecycleMu        sync.Mutex
+	started            bool
+	startErr           error
+	activeMu           sync.Mutex
+	active             map[string]context.CancelFunc
+	credentialsMu      sync.Mutex
+	runCredentials     map[string]identity.CoreCredentials
+	accountPasswordsMu sync.Mutex
+	accountPasswords   map[string]string
+	approvalSecrets    map[string]map[string]string
 }
 
 func New(options Options) (*Service, error) {
@@ -165,25 +172,28 @@ func (s *Service) Start(ctx context.Context) error {
 			s.startErr = fmt.Errorf("maintain runtime state: %w", err)
 			return
 		}
+		var registryCtx context.Context
+		var registryCancel context.CancelFunc
 		if s.capability != nil {
-			refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			_, err := s.capability.Refresh(refreshCtx)
-			cancel()
-			if err != nil {
-				s.startErr = fmt.Errorf("initialize capability registry: %w", err)
-				return
-			}
+			registryCtx, registryCancel = context.WithCancel(context.Background())
 		}
 		var workers sync.WaitGroup
 		workers.Add(s.workers + 1)
+		if registryCtx != nil {
+			workers.Add(1)
+		}
+		s.lifecycleMu.Lock()
+		s.registryCancel = registryCancel
+		s.started = true
+		s.lifecycleMu.Unlock()
 		for index := 0; index < s.workers; index++ {
 			go func() { defer workers.Done(); s.worker() }()
 		}
 		go func() { defer workers.Done(); s.maintenance() }()
+		if registryCtx != nil {
+			go func() { defer workers.Done(); s.loadCapabilityRegistry(registryCtx) }()
+		}
 		go func() { workers.Wait(); close(s.done) }()
-		s.lifecycleMu.Lock()
-		s.started = true
-		s.lifecycleMu.Unlock()
 		s.signalWorker()
 	})
 	return s.startErr
@@ -191,11 +201,20 @@ func (s *Service) Start(ctx context.Context) error {
 
 func (s *Service) Close() {
 	s.stopOnce.Do(func() {
+		defer func() {
+			s.credentialsMu.Lock()
+			clear(s.runCredentials)
+			s.credentialsMu.Unlock()
+		}()
 		s.lifecycleMu.Lock()
 		started := s.started
+		registryCancel := s.registryCancel
 		s.lifecycleMu.Unlock()
 		if !started {
 			return
+		}
+		if registryCancel != nil {
+			registryCancel()
 		}
 		close(s.stop)
 		s.activeMu.Lock()
@@ -207,6 +226,31 @@ func (s *Service) Close() {
 	})
 }
 func (s *Service) Ready(ctx context.Context) error { return s.store.Ready(ctx) }
+
+// The Core schema can be slow just after Core starts. Retry in the background
+// until it is loaded once, without blocking Kael's listener or health check.
+func (s *Service) loadCapabilityRegistry(ctx context.Context) {
+	for {
+		loadCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		info, err := s.capability.Refresh(loadCtx)
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			s.logger.Info("Core capability registry ready", zap.Any("registry", info))
+			return
+		}
+		s.logger.Warn("Core capability registry load failed; retrying", zap.Error(err))
+		timer := time.NewTimer(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
 func (s *Service) Metrics(ctx context.Context) (map[string]int64, error) {
 	var result map[string]int64
 	err := s.store.View(ctx, func(tx ports.Tx) error {
@@ -258,6 +302,9 @@ func (s *Service) maintenance() {
 			now := time.Now().UTC()
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			err := s.store.Transaction(ctx, func(tx ports.Tx) error { return tx.Maintain(now, now.Add(-s.eventRetention)) })
+			if err == nil {
+				err = s.pruneRunCredentials(ctx)
+			}
 			cancel()
 			if err != nil {
 				s.logger.Error("maintain runtime state", zap.Error(err))

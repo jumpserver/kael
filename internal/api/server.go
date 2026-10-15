@@ -50,6 +50,9 @@ func New(options Options) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	server := &Server{service: options.Service, authenticator: options.Authenticator, origin: options.Origin, logger: options.Logger}
 	engine := gin.New()
+	// Handlers that pass Gin's context must still propagate request values,
+	// cancellation and deadlines to the service layer.
+	engine.ContextWithFallback = true
 	engine.RedirectTrailingSlash = false
 	engine.RedirectFixedPath = false
 	engine.Use(server.requestID(), gin.Recovery())
@@ -153,6 +156,7 @@ func (s *Server) authorize() gin.HandlerFunc {
 			return
 		}
 		c.Set(principalKey, principal)
+		c.Request = c.Request.WithContext(identity.WithCoreCredentials(c.Request.Context(), identity.CredentialsFromRequest(c.Request)))
 		c.Next()
 	}
 }
@@ -311,7 +315,7 @@ func (s *Server) regenerate(c *gin.Context) {
 	if !s.bind(c, &request) {
 		return
 	}
-	value, err := s.service.Regenerate(c, principal(c), c.Param("id"), request.PanelSessionID)
+	value, err := s.service.Regenerate(c.Request.Context(), principal(c), c.Param("id"), request.PanelSessionID)
 	if err != nil {
 		s.writeError(c, err)
 		return
@@ -479,7 +483,7 @@ func (s *Server) createRun(c *gin.Context) {
 	if !s.bind(c, &request) {
 		return
 	}
-	value, err := s.service.CreateRun(c, principal(c), request)
+	value, err := s.service.CreateRun(c.Request.Context(), principal(c), request)
 	if err != nil {
 		s.writeError(c, err)
 		return
@@ -523,7 +527,7 @@ func (s *Server) cancelRun(c *gin.Context) {
 }
 
 func (s *Server) resumeRun(c *gin.Context) {
-	value, err := s.service.ResumeRun(c, principal(c), c.Param("id"))
+	value, err := s.service.ResumeRun(c.Request.Context(), principal(c), c.Param("id"))
 	if err != nil {
 		s.writeError(c, err)
 		return

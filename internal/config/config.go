@@ -1,7 +1,9 @@
 package config
 
 import (
+	"crypto/rand"
 	"fmt"
+	"math/big"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -32,15 +34,10 @@ type Config struct {
 	TerminalAIMaxBytes     int64
 	TerminalAIMinFreeBytes int64
 	PlatformGatewayEnabled bool
-	PlatformDelegationKey  string
-	PlatformDelegationID   string
-	PlatformIssuer         string
-	PlatformAudience       string
 	PlatformCACert         string
 	PlatformClientCert     string
 	PlatformClientKey      string
 	PlatformAllowedMethods map[string]bool
-	PlatformRegistryTTL    time.Duration
 	PlatformTimeout        time.Duration
 	PlatformMaxResponse    int64
 }
@@ -84,15 +81,10 @@ func Load(path string) (Config, error) {
 		TerminalAIMaxBytes:     v.GetInt64("TERMINAL_AI_MAX_BYTES"),
 		TerminalAIMinFreeBytes: v.GetInt64("TERMINAL_AI_MIN_FREE_BYTES"),
 		PlatformGatewayEnabled: v.GetBool("PLATFORM_GATEWAY_ENABLED"),
-		PlatformDelegationKey:  strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_KEY")),
-		PlatformDelegationID:   strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_KEY_ID")),
-		PlatformIssuer:         strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_ISSUER")),
-		PlatformAudience:       strings.TrimSpace(v.GetString("PLATFORM_DELEGATION_AUDIENCE")),
 		PlatformCACert:         v.GetString("PLATFORM_CA_CERT"),
 		PlatformClientCert:     v.GetString("PLATFORM_CLIENT_CERT"),
 		PlatformClientKey:      v.GetString("PLATFORM_CLIENT_KEY"),
 		PlatformAllowedMethods: make(map[string]bool),
-		PlatformRegistryTTL:    v.GetDuration("PLATFORM_REGISTRY_TTL"),
 		PlatformTimeout:        v.GetDuration("PLATFORM_TIMEOUT"),
 		PlatformMaxResponse:    v.GetInt64("PLATFORM_MAX_RESPONSE_BYTES"),
 	}
@@ -144,23 +136,26 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("TERMINAL_AI_MAX_BYTES", int64(1<<30))
 	v.SetDefault("TERMINAL_AI_MIN_FREE_BYTES", int64(1<<30))
 	v.SetDefault("PLATFORM_GATEWAY_ENABLED", true)
-	v.SetDefault("PLATFORM_DELEGATION_KEY_ID", "v1")
-	v.SetDefault("PLATFORM_DELEGATION_ISSUER", "jumpserver-ai")
-	v.SetDefault("PLATFORM_DELEGATION_AUDIENCE", "jumpserver-core")
-	v.SetDefault("PLATFORM_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "PATCH"})
-	v.SetDefault("PLATFORM_REGISTRY_TTL", "1h")
+	v.SetDefault("PLATFORM_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "PATCH", "DELETE"})
 	v.SetDefault("PLATFORM_TIMEOUT", "15s")
 	v.SetDefault("PLATFORM_MAX_RESPONSE_BYTES", 1024*1024)
 }
 
 func defaultName() string {
-	hostname, err := os.Hostname()
-	if err != nil || strings.TrimSpace(hostname) == "" {
-		hostname = "localhost"
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	suffix := make([]byte, 7)
+	for i := range suffix {
+		index, _ := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+		suffix[i] = letters[index.Int64()]
+	}
+	hostname, _ := os.Hostname()
+	hostname = fmt.Sprintf("%s-%s", hostname, suffix)
+	if serverHostname, ok := os.LookupEnv("SERVER_HOSTNAME"); ok {
+		hostname = fmt.Sprintf("%s-%s", serverHostname, hostname)
 	}
 	value := []rune("[Kael]-" + hostname)
 	if len(value) > 128 {
-		value = value[:128]
+		value = append(value[:64], value[len(value)-64:]...)
 	}
 	return string(value)
 }
@@ -189,10 +184,7 @@ func (c Config) Validate() error {
 	if !c.PlatformGatewayEnabled {
 		return fmt.Errorf("PLATFORM_GATEWAY_ENABLED must be true because the default general assistant requires the Platform Gateway")
 	}
-	if len(c.PlatformDelegationKey) < 32 {
-		return fmt.Errorf("PLATFORM_DELEGATION_KEY must contain at least 32 characters after trimming surrounding whitespace and match Core")
-	}
-	if c.PlatformDelegationID == "" || c.PlatformIssuer == "" || c.PlatformAudience == "" || c.PlatformRegistryTTL <= 0 || c.PlatformTimeout <= 0 || c.PlatformMaxResponse < 1 {
+	if c.PlatformTimeout <= 0 || c.PlatformMaxResponse < 1 {
 		return fmt.Errorf("Platform Gateway configuration is incomplete")
 	}
 	if (c.PlatformClientCert == "") != (c.PlatformClientKey == "") {

@@ -16,6 +16,12 @@ type CapabilityRequest struct {
 	Profile        string
 	Registration   domain.Registration
 	Arguments      json.RawMessage
+	// AccountPassword is supplied by the approval UI only. It must never be
+	// included in Arguments, previews, tool results, or the runtime store.
+	AccountPassword string
+	// SecretInputs are supplied by the approval UI for write-only Core fields.
+	// They are never part of model arguments, previews, or persisted tool calls.
+	SecretInputs map[string]string
 }
 
 type CapabilityPolicy struct {
