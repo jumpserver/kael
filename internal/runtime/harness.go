@@ -526,7 +526,7 @@ func userInput(input Input) ([]map[string]any, error) {
 	language := map[string]string{
 		"zh": "Simplified Chinese", "zh_hant": "Traditional Chinese", "en": "English",
 		"ja": "Japanese", "pt_br": "Brazilian Portuguese", "es": "Spanish",
-		"ru": "Russian", "ko": "Korean", "vi": "Vietnamese",
+		"ru": "Russian", "ko": "Korean", "vi": "Vietnamese", "fr": "French",
 	}[preferences.ResponseLanguage]
 	if language == "" {
 		language = "the user's latest request language (English if unclear)"
