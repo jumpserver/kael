@@ -169,7 +169,7 @@ Service 写操作必须经过独立 Approval，不受 Panel 的 never 模式豁�
 | GET | `/approvals/{id}` | 审批详情 |
 | POST | `/approvals/{id}/decisions` | 批准或拒绝 |
 | POST | `/admin/platform-registry/refresh` | 刷新 Registry |
-| GET | `/admin/stats`、`/admin/audit/conversations`、`/admin/audit/conversations/{id}` | 管理统计和脱敏会话审计 |
+| GET | `/admin/stats` | 管理统计 |
 | POST | `/transcriptions` | 服务端语音转写的禁用占位，返回 unavailable |
 
 HTTP 命令与事件订阅分离，创建 Message/Run 不直接建立响应流。JSON 请求拒绝未知字段、多个 JSON 值和超限内容。错误返回安全 code/detail 与 retryable，不把内部堆栈交给客户端。
@@ -262,3 +262,11 @@ Kael 不直接连接业务数据库。首次通过 BootstrapToken 注册 `kael` 
 运维端点为 `/kael/health/live`、`/kael/health/startup`、`/kael/health/ready`、`/kael/internal/metrics` 和 `/kael/openapi.json`。ready 在 2 秒内检查 Store、签名 Core head 与本地 Terminal Journal，不探测模型端点或 worker 工作情况。
 
 metrics 包含 `kael_runtime_store_snapshot_disabled`、`kael_runtime_store_revision`、`kael_runtime_store_records_since_snapshot`。运维端点不经过业务用户认证，部署通过代理或网络访问控制限制暴露。统计与运行审计受上述持久化范围约束，不能作为跨重启完整运行轨迹。
+
+### Core 会话审计
+
+会话审计由 Core 的 `/api/v1/chat-ai/audit/conversations/` 提供列表、搜索和详情。
+Kael 在 Runtime Store 的签名 journal envelope 中附带 version=1 的 audit JSON 数据，
+Core 将它与 journal 在同一事务提交。普通会话和终端 AI 的问题及最终回复均被审计；
+运行时清理不删除 Core 审计历史。启动时按稳定 ID 分批补录仍保留的历史。
+部署先升级 Core 并执行审计表迁移，再升级 Kael，最后更新 Lina。
