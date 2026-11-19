@@ -1,4 +1,4 @@
-FROM golang:1.26.3-trixie
+FROM golang:1.26.10-trixie
 ARG TARGETARCH
 
 WORKDIR /opt/kael

@@ -377,28 +377,6 @@ func (t *memoryTx) ListConversations(principal domain.Principal, kind string, of
 	return page(values, offset, limit), int64(len(values)), nil
 }
 
-func (t *memoryTx) ListQuestionedConversationsByOrganization(organizationID string, offset, limit int) ([]domain.Conversation, int64, error) {
-	questioned := make(map[string]struct{})
-	for _, message := range t.state.messages {
-		if message.OrganizationID == organizationID && message.Role == "user" {
-			questioned[message.ConversationID] = struct{}{}
-		}
-	}
-	values := make([]domain.Conversation, 0)
-	for _, value := range t.state.conversations {
-		if _, hasQuestion := questioned[value.ID]; value.OrganizationID == organizationID && hasQuestion {
-			values = append(values, value)
-		}
-	}
-	sort.Slice(values, func(i, j int) bool {
-		if values[i].UpdatedAt.Equal(values[j].UpdatedAt) {
-			return values[i].ID > values[j].ID
-		}
-		return values[i].UpdatedAt.After(values[j].UpdatedAt)
-	})
-	return page(values, offset, limit), int64(len(values)), nil
-}
-
 func (t *memoryTx) ConversationByOrganization(id, organizationID string) (*domain.Conversation, error) {
 	value, err := one(t.state.conversations, id)
 	if err != nil || value.OrganizationID != organizationID {

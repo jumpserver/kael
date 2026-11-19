@@ -110,6 +110,7 @@ type runtimeStoreAppendRequest struct {
 }
 
 type runtimeStoreAppendResponse struct {
+	AuditVersion    int    `json:"audit_version"`
 	Revision        uint64 `json:"revision"`
 	CurrentRevision uint64 `json:"current_revision"`
 	Code            string `json:"code"`
@@ -424,15 +425,12 @@ func (c *Client) AppendRuntimeStore(commitID string, expectedRevision uint64, sn
 		return 0, fmt.Errorf("%w: %w", ErrRuntimeStoreCommitUncertain, err)
 	}
 	defer response.Body.Close()
-	var value runtimeStoreAppendResponse
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 64*1024))
-	err = decoder.Decode(&value)
-	if err == nil {
-		var extra any
-		if decoder.Decode(&extra) != io.EOF {
-			err = fmt.Errorf("response must contain one JSON value")
-		}
+	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, 64*1024+1))
+	if readErr != nil || len(responseBody) > 64*1024 {
+		return 0, fmt.Errorf("%w: unable to read bounded Core commit response", ErrRuntimeStoreCommitUncertain)
 	}
+	var value runtimeStoreAppendResponse
+	err = json.Unmarshal(responseBody, &value)
 	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
 		if err != nil {
 			return 0, fmt.Errorf("%w: decode Core response: %v", ErrRuntimeStoreCommitUncertain, err)
@@ -451,7 +449,13 @@ func (c *Client) AppendRuntimeStore(commitID string, expectedRevision uint64, sn
 		if !validRuntimeStoreHMAC(c.accessKeySecret, canonical, value.Receipt) {
 			return 0, fmt.Errorf("%w: Core receipt is invalid", ErrRuntimeStoreCommitUncertain)
 		}
+		if value.AuditVersion != 1 {
+			return 0, fmt.Errorf("%w: Core does not support conversation audit ingestion; upgrade Core first", ErrRuntimeStoreCommitUncertain)
+		}
 		return value.Revision, nil
+	}
+	if response.StatusCode == http.StatusBadRequest {
+		return 0, fmt.Errorf("append Kael runtime store: Core returned HTTP 400: %s", runtimeStoreValidationError(responseBody))
 	}
 	if response.StatusCode == http.StatusConflict {
 		return 0, fmt.Errorf("%w: expected %d, current %d, code %q", ErrRuntimeStoreRevisionConflict, expectedRevision, value.CurrentRevision, value.Code)
@@ -463,6 +467,30 @@ func (c *Client) AppendRuntimeStore(commitID string, expectedRevision uint64, sn
 		return 0, responseError("append Kael runtime store", response, err)
 	}
 	return 0, responseError("append Kael runtime store", response, fmt.Errorf("Core returned HTTP %d", response.StatusCode))
+}
+
+// Only include the known validation-error fields, never response headers or
+// the submitted journal. Non-JSON (for example Django debug HTML) is omitted.
+func runtimeStoreValidationError(body []byte) string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil {
+		return "invalid request (non-JSON response)"
+	}
+	for key := range fields {
+		switch key {
+		case "detail", "record", "commit_id", "expected_revision", "snapshot", "integrity", "non_field_errors":
+		default:
+			delete(fields, key)
+		}
+	}
+	detail, err := json.Marshal(fields)
+	if err != nil || len(fields) == 0 {
+		return "invalid request"
+	}
+	if len(detail) > 2048 {
+		return string(detail[:2048]) + "..."
+	}
+	return string(detail)
 }
 
 func runtimeStoreIntegrity(secret, commitID string, expectedRevision uint64, snapshot bool, record string) string {

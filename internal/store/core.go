@@ -75,14 +75,21 @@ func NewCore(client *component.Client, runtimeRoot string, options ...RetentionO
 		}
 	}
 
+	if err = core.BackfillAudit(mergeMemoryStates(coreState, terminalState)); err != nil {
+		return nil, fmt.Errorf("backfill Core audit history: %w", err)
+	}
 	now := time.Now().UTC()
 	coreState, err = recoverPersistence(core, coreState, now)
 	if err != nil {
 		return nil, fmt.Errorf("recover Core runtime state: %w", err)
 	}
+	previousTerminal := terminalState
 	terminalState, err = recoverPersistence(terminal, terminalState, now)
 	if err != nil {
 		return nil, fmt.Errorf("recover Terminal AI runtime state: %w", err)
+	}
+	if err = core.commitWithAudit(coreState, coreState, auditChanges(previousTerminal, terminalState)); err != nil {
+		return nil, fmt.Errorf("audit recovered Terminal AI state: %w", err)
 	}
 	closeTerminal = false
 	return &Memory{
@@ -172,6 +179,10 @@ func decodeCoreRecord(line string) (journalPayload, error) {
 }
 
 func (p *corePersistence) Commit(previous, next *memoryState) error {
+	return p.commitWithAudit(previous, next, auditChanges(previous, next))
+}
+
+func (p *corePersistence) commitWithAudit(previous, next *memoryState, audit *auditProjection) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.poisoned != nil {
@@ -180,10 +191,10 @@ func (p *corePersistence) Commit(previous, next *memoryState) error {
 	previous = corePersistableState(previous)
 	next = corePersistableState(next)
 	delta := diffPersistentState(previous, next)
-	if delta.empty() {
+	if delta.empty() && audit == nil {
 		return nil
 	}
-	line, err := encodeJournalRecord(journalPayload{Delta: &delta})
+	line, err := encodeCoreJournalRecord(journalPayload{Delta: &delta}, audit)
 	if err != nil {
 		return err
 	}

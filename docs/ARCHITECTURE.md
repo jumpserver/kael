@@ -87,7 +87,7 @@ Core TerminalConfig 的 `CHAT_AI_*` 是模型配置与凭据来源。每次 Run 
 
 同一用户、组织、Conversation、Panel，模型配置、Profile 指令、工具注册未变且历史仍为追加关系时，复用进程内 Codex thread，只提交新增历史和本轮 Context。历史变化、能力变更、模型配置变化或上次执行失败会使缓存失效；新线程从 Kael 的业务历史构建输入。
 
-Context 是不可信数据，不构成权限或指令。`response_language` 只接受 `zh`、`zh_hant`、`en`、`ja`、`pt_br`、`es`、`ru`、`ko`、`vi`，映射为固定语言名称后附于本轮输入。用户明确指定语言时优先遵循；字段缺失或无效时跟随最新问题，无法判断时使用英语。语言偏好覆盖工具调用前说明、进度、工具参数中的展示文案、提问及最终回答，API 描述与工具输出不改变该偏好。语言变化不改变 thread 复用签名，当前 Run 仍使用已冻结快照。
+Context 是不可信数据，不构成权限或指令。`response_language` 只接受 `zh`、`zh_hant`、`en`、`fr`、`ja`、`pt_br`、`es`、`ru`、`ko`、`vi`，映射为固定语言名称后附于本轮输入。用户明确指定语言时优先遵循；字段缺失或无效时跟随最新问题，无法判断时使用英语。语言偏好覆盖工具调用前说明、进度、工具参数中的展示文案、提问及最终回答，API 描述与工具输出不改变该偏好。语言变化不改变 thread 复用签名，当前 Run 仍使用已冻结快照。
 
 输入上限为 4 MiB，超限明确报错，不按固定历史条数静默裁剪；上下文压缩由 Codex 负责。同一 turn 最多处理 128 个动态工具请求。最多缓存 16 个 Panel 进程，空闲超过 5 分钟回收；容量满时优先回收空闲进程。
 
@@ -169,7 +169,7 @@ Service 写操作必须经过独立 Approval，不受 Panel 的 never 模式豁�
 | GET | `/approvals/{id}` | 审批详情 |
 | POST | `/approvals/{id}/decisions` | 批准或拒绝 |
 | POST | `/admin/platform-registry/refresh` | 刷新 Registry |
-| GET | `/admin/stats`、`/admin/audit/conversations`、`/admin/audit/conversations/{id}` | 管理统计和脱敏会话审计 |
+| GET | `/admin/stats` | 管理统计 |
 | POST | `/transcriptions` | 服务端语音转写的禁用占位，返回 unavailable |
 
 HTTP 命令与事件订阅分离，创建 Message/Run 不直接建立响应流。JSON 请求拒绝未知字段、多个 JSON 值和超限内容。错误返回安全 code/detail 与 retryable，不把内部堆栈交给客户端。
@@ -262,3 +262,11 @@ Kael 不直接连接业务数据库。首次通过 BootstrapToken 注册 `kael` 
 运维端点为 `/kael/health/live`、`/kael/health/startup`、`/kael/health/ready`、`/kael/internal/metrics` 和 `/kael/openapi.json`。ready 在 2 秒内检查 Store、签名 Core head 与本地 Terminal Journal，不探测模型端点或 worker 工作情况。
 
 metrics 包含 `kael_runtime_store_snapshot_disabled`、`kael_runtime_store_revision`、`kael_runtime_store_records_since_snapshot`。运维端点不经过业务用户认证，部署通过代理或网络访问控制限制暴露。统计与运行审计受上述持久化范围约束，不能作为跨重启完整运行轨迹。
+
+### Core 会话审计
+
+会话审计由 Core 的 `/api/v1/chat-ai/audit/conversations/` 提供列表、搜索和详情。
+Kael 在 Runtime Store 的签名 journal envelope 中附带 version=1 的 audit JSON 数据，
+Core 将它与 journal 在同一事务提交。普通会话和终端 AI 的问题及最终回复均被审计；
+运行时清理不删除 Core 审计历史。启动时按稳定 ID 分批补录仍保留的历史。
+部署先升级 Core 并执行审计表迁移，再升级 Kael，最后更新 Lina。

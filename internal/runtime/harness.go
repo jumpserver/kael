@@ -320,8 +320,24 @@ func (h *Harness) acquire(ctx context.Context, key, signature string, config mod
 		env = append(env, "HTTPS_PROXY="+config.Proxy, "HTTP_PROXY="+config.Proxy, "ALL_PROXY="+config.Proxy)
 	}
 	// Install only a private runtime policy; provider credentials stay in child env.
-	policy := `web_search = "disabled"
+	baseURL, err := json.Marshal(strings.TrimRight(config.BaseURL, "/"))
+	if err != nil {
+		return nil, false, err
+	}
+	// Codex checks the process default provider when starting a turn, even
+	// when thread/start explicitly selects the same provider.
+	policy := fmt.Sprintf(`web_search = "disabled"
 project_doc_max_bytes = 0
+model_provider = "kael"
+[model_providers.kael]
+name = "Kael"
+base_url = %s
+env_key = "KAEL_MODEL_API_KEY"
+wire_api = "responses"
+supports_websockets = false
+request_max_retries = 0
+stream_max_retries = 0
+stream_idle_timeout_ms = %d
 [features]
 shell_tool = false
 unified_exec = false
@@ -340,7 +356,7 @@ multi_agent = false
 [memories]
 generate_memories = false
 use_memories = false
-`
+`, baseURL, modelIdleTimeout(config).Milliseconds())
 	if err = os.WriteFile(filepath.Join(home, "config.toml"), []byte(policy), 0600); err != nil {
 		return nil, false, err
 	}
@@ -526,7 +542,7 @@ func userInput(input Input) ([]map[string]any, error) {
 	language := map[string]string{
 		"zh": "Simplified Chinese", "zh_hant": "Traditional Chinese", "en": "English",
 		"ja": "Japanese", "pt_br": "Brazilian Portuguese", "es": "Spanish",
-		"ru": "Russian", "ko": "Korean", "vi": "Vietnamese",
+		"ru": "Russian", "ko": "Korean", "vi": "Vietnamese", "fr": "French",
 	}[preferences.ResponseLanguage]
 	if language == "" {
 		language = "the user's latest request language (English if unclear)"

@@ -112,8 +112,6 @@ func (s *Server) routes() {
 
 	api.POST("/admin/platform-registry/refresh", s.refreshPlatformRegistry)
 	api.GET("/admin/stats", s.adminStats)
-	api.GET("/admin/audit/conversations", s.adminAudit)
-	api.GET("/admin/audit/conversations/:id", s.adminAuditDetail)
 }
 
 func (s *Server) requestID() gin.HandlerFunc {
@@ -710,25 +708,6 @@ func (s *Server) adminStats(c *gin.Context) {
 
 func (s *Server) refreshPlatformRegistry(c *gin.Context) {
 	value, err := s.service.RefreshPlatformRegistry(c, principal(c))
-	if err != nil {
-		s.writeError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, value)
-}
-
-func (s *Server) adminAudit(c *gin.Context) {
-	offset, limit := pagination(c)
-	value, err := s.service.AdminAuditConversations(c, principal(c), offset, limit)
-	if err != nil {
-		s.writeError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, value)
-}
-
-func (s *Server) adminAuditDetail(c *gin.Context) {
-	value, err := s.service.AdminAuditConversation(c, principal(c), c.Param("id"))
 	if err != nil {
 		s.writeError(c, err)
 		return

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -134,6 +135,14 @@ func (p *jsonlPersistence) prune(previous, next *memoryState, now time.Time, pre
 	for _, run := range next.runs {
 		if activeRun(run.State) {
 			protected[run.ConversationID] = true
+		}
+	}
+	// Do not evict history changed in this transaction before Core has
+	// acknowledged the corresponding audit projection.
+	for id, message := range next.messages {
+		prior, exists := previous.messages[id]
+		if !exists || !reflect.DeepEqual(prior, message) {
+			protected[message.ConversationID] = true
 		}
 	}
 	latest := make(map[string]time.Time)

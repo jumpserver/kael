@@ -14,6 +14,7 @@ type splitPersistence struct {
 }
 
 func (p *splitPersistence) Commit(previous, next *memoryState) error {
+	audit := auditChanges(previous, next)
 	previousTerminal := terminalPersistableState(previous)
 	nextTerminal := terminalPersistableState(next)
 	if err := p.terminal.Commit(previousTerminal, nextTerminal); err != nil {
@@ -26,7 +27,7 @@ func (p *splitPersistence) Commit(previous, next *memoryState) error {
 		}
 	}
 	removeConversationSubgraphs(next, removed)
-	if err := p.core.Commit(previous, next); err != nil {
+	if err := p.core.commitWithAudit(previous, next, audit); err != nil {
 		return fmt.Errorf("persist Core runtime state: %w", err)
 	}
 	return nil
