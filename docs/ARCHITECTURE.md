@@ -230,6 +230,8 @@ Terminal 本地历史默认保留 7 天、容量上限 1 GiB、磁盘最低余�
 
 ### 身份和部署入口
 
+Kael 镜像只交付静态二进制 `/opt/kael/kael`。部署时由运行环境提供 Codex CLI，通过 `CODEX_BINARY` 指定其路径。
+
 业务请求要求 `X-JMS-ORG`。Kael 使用请求 Cookie/Bearer 向 Core 的 profile 与 permissions 接口验证用户，每次请求重新取得权限；除 superuser 外要求 `chat_ai.use_chatai`。带 Authorization 时仅使用该头认证，不回退到 Cookie；鉴权请求不跟随重定向。会话及关联资源按用户、组织校验所有权，管理接口另行校验管理员权限。
 
 Origin 校验默认关闭；只有 `ALLOWED_ORIGINS` 包含非空值时启用，允许精确列表或当前同源 Origin，不发送 CORS 响应头。Cookie 写请求另行校验 CSRF。网关终止 HTTPS 时可配置外部 Origin；`TRUST_FORWARDED_HEADERS` 默认关闭，仅在可信网关覆盖 forwarded headers 且 Kael 端口不直接暴露时使用。
