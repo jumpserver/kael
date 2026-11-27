@@ -11,4 +11,6 @@
 
 ## 许可证
 
-本项目采用 GNU General Public License version 3（GPLv3），与 [JumpServer 主库](https://github.com/jumpserver/jumpserver)保持一致。完整许可条款见 [LICENSE](../LICENSE)。
+Copyright (c) 2014-2026 FIT2CLOUD, All rights reserved.
+
+本项目基于 GNU General Public License version 3（GPLv3）许可，与 [JumpServer 主仓库](https://github.com/jumpserver/jumpserver)一致。完整许可文本请参阅 [LICENSE](../LICENSE)。
